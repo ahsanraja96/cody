@@ -1,0 +1,9 @@
+node_modules
+.output
+.wxt
+dist
+*.log
+.DS_Store
+coverage
+e2e/.profile*
+e2e/screenshots

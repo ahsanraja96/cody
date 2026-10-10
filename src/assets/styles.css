@@ -1,0 +1,269 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens from the Tabfold design canvas. Every colour is a CSS variable so light, dark and
+ * system themes switch live. Tailwind utilities map onto the variables (bg-surface, text-text-2, ...).
+ */
+
+:root {
+  color-scheme: light;
+  --tf-bg: #ffffff;
+  --tf-bg-subtle: #f7f7f8;
+  --tf-surface: #ffffff;
+  --tf-hover: #f2f2f4;
+  --tf-border: #e6e6ea;
+  --tf-border-strong: #d4d4da;
+  --tf-text: #17171a;
+  --tf-text-2: #4c4c55;
+  --tf-text-3: #6b6b75;
+  --tf-overlay: rgba(23, 23, 26, 0.32);
+  --tf-shadow: 0 1px 2px rgba(16, 16, 20, 0.04), 0 8px 24px rgba(16, 16, 20, 0.08);
+  --tf-skeleton: #ededf0;
+  --tf-green: #147a3a;
+  --tf-green-soft: #eaf6ee;
+  --tf-green-line: #bfe3cb;
+  --tf-amber: #9a5a06;
+  --tf-amber-soft: #fdf4e3;
+  --tf-amber-line: #f0d7a4;
+  --tf-red: #c42f2a;
+  --tf-red-soft: #fdedec;
+  --tf-red-line: #f4c5c2;
+  --tf-red-solid: #c42f2a;
+  --tf-inverse: #1e1e22;
+  --tf-on-inverse: #f4f4f5;
+  --tf-accent: #4f5bd5;
+  --tf-accent-hover: #4350c4;
+  --tf-accent-soft: #eef0fd;
+  --tf-accent-line: #c9cdf6;
+  --tf-accent-text: #3f4bc2;
+  --tf-on-accent: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --tf-bg: #111113;
+    --tf-bg-subtle: #17171a;
+    --tf-surface: #1a1a1e;
+    --tf-hover: #222227;
+    --tf-border: #28282e;
+    --tf-border-strong: #3a3a42;
+    --tf-text: #ededf0;
+    --tf-text-2: #b3b3bc;
+    --tf-text-3: #8e8e98;
+    --tf-overlay: rgba(0, 0, 0, 0.55);
+    --tf-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.4);
+    --tf-skeleton: #26262b;
+    --tf-green: #5ccb86;
+    --tf-green-soft: rgba(46, 180, 99, 0.12);
+    --tf-green-line: rgba(46, 180, 99, 0.32);
+    --tf-amber: #edb45c;
+    --tf-amber-soft: rgba(237, 180, 92, 0.1);
+    --tf-amber-line: rgba(237, 180, 92, 0.3);
+    --tf-red: #f27a75;
+    --tf-red-soft: rgba(242, 122, 117, 0.1);
+    --tf-red-line: rgba(242, 122, 117, 0.32);
+    --tf-red-solid: #cc3b35;
+    --tf-inverse: #ededf0;
+    --tf-on-inverse: #17171a;
+    --tf-accent: #5964da;
+    --tf-accent-hover: #6670e0;
+    --tf-accent-soft: rgba(110, 120, 240, 0.14);
+    --tf-accent-line: rgba(110, 120, 240, 0.42);
+    --tf-accent-text: #a3aaf7;
+    --tf-on-accent: #ffffff;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --tf-bg: #111113;
+  --tf-bg-subtle: #17171a;
+  --tf-surface: #1a1a1e;
+  --tf-hover: #222227;
+  --tf-border: #28282e;
+  --tf-border-strong: #3a3a42;
+  --tf-text: #ededf0;
+  --tf-text-2: #b3b3bc;
+  --tf-text-3: #8e8e98;
+  --tf-overlay: rgba(0, 0, 0, 0.55);
+  --tf-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.4);
+  --tf-skeleton: #26262b;
+  --tf-green: #5ccb86;
+  --tf-green-soft: rgba(46, 180, 99, 0.12);
+  --tf-green-line: rgba(46, 180, 99, 0.32);
+  --tf-amber: #edb45c;
+  --tf-amber-soft: rgba(237, 180, 92, 0.1);
+  --tf-amber-line: rgba(237, 180, 92, 0.3);
+  --tf-red: #f27a75;
+  --tf-red-soft: rgba(242, 122, 117, 0.1);
+  --tf-red-line: rgba(242, 122, 117, 0.32);
+  --tf-red-solid: #cc3b35;
+  --tf-inverse: #ededf0;
+  --tf-on-inverse: #17171a;
+  --tf-accent: #5964da;
+  --tf-accent-hover: #6670e0;
+  --tf-accent-soft: rgba(110, 120, 240, 0.14);
+  --tf-accent-line: rgba(110, 120, 240, 0.42);
+  --tf-accent-text: #a3aaf7;
+  --tf-on-accent: #ffffff;
+}
+
+@theme inline {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-bg: var(--tf-bg);
+  --color-bg-subtle: var(--tf-bg-subtle);
+  --color-surface: var(--tf-surface);
+  --color-hover: var(--tf-hover);
+  --color-border: var(--tf-border);
+  --color-border-strong: var(--tf-border-strong);
+  --color-text: var(--tf-text);
+  --color-text-2: var(--tf-text-2);
+  --color-text-3: var(--tf-text-3);
+  --color-overlay: var(--tf-overlay);
+  --color-skeleton: var(--tf-skeleton);
+  --color-green: var(--tf-green);
+  --color-green-soft: var(--tf-green-soft);
+  --color-green-line: var(--tf-green-line);
+  --color-amber: var(--tf-amber);
+  --color-amber-soft: var(--tf-amber-soft);
+  --color-amber-line: var(--tf-amber-line);
+  --color-red: var(--tf-red);
+  --color-red-soft: var(--tf-red-soft);
+  --color-red-line: var(--tf-red-line);
+  --color-red-solid: var(--tf-red-solid);
+  --color-inverse: var(--tf-inverse);
+  --color-on-inverse: var(--tf-on-inverse);
+  --color-accent: var(--tf-accent);
+  --color-accent-hover: var(--tf-accent-hover);
+  --color-accent-soft: var(--tf-accent-soft);
+  --color-accent-line: var(--tf-accent-line);
+  --color-accent-text: var(--tf-accent-text);
+  --color-on-accent: var(--tf-on-accent);
+
+  --shadow-pop: var(--tf-shadow);
+
+  --text-meta: 11px;
+  --text-meta--line-height: 1.45;
+  --text-small: 12px;
+  --text-small--line-height: 1.45;
+  --text-body: 13px;
+  --text-body--line-height: 1.45;
+  --text-section: 15px;
+  --text-section--line-height: 1.4;
+  --text-page: 18px;
+  --text-page--line-height: 1.3;
+  --text-hero: 24px;
+  --text-hero--line-height: 1.25;
+
+  --radius-card: 10px;
+  --radius-control: 8px;
+
+  --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/*
+ * Unlayered on purpose: Chrome injects a stylesheet into extension pages (body { font-size: 75% })
+ * that would beat anything inside a cascade layer, shrinking all text to 9.75px.
+ */
+html,
+body {
+  background: var(--tf-bg);
+  color: var(--tf-text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer base {
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--tf-text-3);
+  }
+  :focus-visible {
+    outline: 2px solid var(--tf-accent);
+    outline-offset: 2px;
+  }
+  mark {
+    background: var(--tf-accent-soft);
+    color: var(--tf-accent-text);
+    border-radius: 3px;
+    padding: 0 1px;
+    font-weight: 600;
+  }
+  a {
+    color: var(--tf-accent-text);
+  }
+  kbd {
+    font-family: inherit;
+  }
+  dialog::backdrop {
+    background: var(--tf-overlay);
+  }
+}
+
+@layer utilities {
+  .label-caps {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--tf-text-3);
+  }
+  .scroll-thin {
+    scrollbar-width: thin;
+  }
+  .anim-in {
+    animation: tf-fade-in 160ms var(--ease-out-soft);
+  }
+}
+
+@keyframes tf-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tf-fold-in {
+  from {
+    transform: translateX(-24px);
+    opacity: 0;
+  }
+}
+
+.tf-fold {
+  animation: tf-fold-in 420ms var(--ease-out-soft) both;
+}
+
+@keyframes tf-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

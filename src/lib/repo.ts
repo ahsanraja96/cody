@@ -1,0 +1,555 @@
+import Dexie from 'dexie';
+import { aggregates, buildDraft, type DraftMeta } from './capture';
+import { bumpSearchVersion, db, type TabfoldDB } from './db';
+import { cleanKeywords } from './keywords';
+import { CURRENT_PLAN, sessionLimitReached, tagsAllowed, UNSORTED_NAME, type Plan } from './limits';
+import { newId } from './format';
+import { dedupeKey, displayHost } from './urls';
+import type {
+  CapturedWindow,
+  SessionDraft,
+  SessionGraph,
+  SessionRecord,
+  SnapshotReason,
+  SnapshotRecord,
+  TabRecord,
+  WindowRecord,
+} from './types';
+
+export class LimitError extends Error {
+  constructor(
+    message: string,
+    readonly limit: 'sessions' | 'tags',
+  ) {
+    super(message);
+    this.name = 'LimitError';
+  }
+}
+
+const TRASH_DAYS = 30;
+export const TRASH_RETENTION_MS = TRASH_DAYS * 24 * 60 * 60 * 1000;
+
+function liveRange(collection: TabfoldDB['sessions']) {
+  return collection.where('[deletedAt+updatedAt]').between([0, Dexie.minKey], [0, Dexie.maxKey]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reads
+
+export async function listLiveSessions(database: TabfoldDB = db): Promise<SessionRecord[]> {
+  return liveRange(database.sessions).reverse().toArray();
+}
+
+export async function listRecentSessions(limit: number, database: TabfoldDB = db): Promise<SessionRecord[]> {
+  return liveRange(database.sessions).reverse().limit(limit).toArray();
+}
+
+export async function listTrash(database: TabfoldDB = db): Promise<SessionRecord[]> {
+  const rows = await database.sessions.where('deletedAt').above(0).toArray();
+  return rows.sort((a, b) => b.deletedAt - a.deletedAt);
+}
+
+export async function countNamedSessions(database: TabfoldDB = db): Promise<number> {
+  const live = await liveRange(database.sessions).toArray();
+  return live.filter((s) => s.kind !== 'unsorted').length;
+}
+
+/** Distinct tags on live sessions, with how many sessions use each. */
+export async function tagCounts(database: TabfoldDB = db): Promise<Array<{ tag: string; count: number }>> {
+  const counts = new Map<string, number>();
+  for (const session of await liveRange(database.sessions).toArray()) {
+    for (const tag of session.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([tag, count]) => ({ tag, count })).sort((a, b) => a.tag.localeCompare(b.tag));
+}
+
+export async function getSessionGraph(id: string, database: TabfoldDB = db): Promise<SessionGraph | null> {
+  const session = await database.sessions.get(id);
+  if (!session) return null;
+  const [windows, tabs] = await Promise.all([
+    database.windows.where('sessionId').equals(id).toArray(),
+    database.tabs.where('sessionId').equals(id).toArray(),
+  ]);
+  const byWindow = new Map<string, TabRecord[]>();
+  for (const tab of tabs) {
+    const list = byWindow.get(tab.windowId) ?? [];
+    list.push(tab);
+    byWindow.set(tab.windowId, list);
+  }
+  return {
+    session,
+    windows: windows
+      .sort((a, b) => a.order - b.order)
+      .map((window) => ({ ...window, tabs: (byWindow.get(window.id) ?? []).sort((a, b) => a.order - b.order) }))
+      .filter((window) => window.tabs.length > 0),
+  };
+}
+
+/** Keywords already in use, most used first. Feeds the "Your keywords" chips. */
+export async function keywordVocabulary(
+  limit = 12,
+  database: TabfoldDB = db,
+): Promise<Array<{ keyword: string; count: number }>> {
+  const keys = (await database.tabs.orderBy('keywords').keys()) as string[];
+  const counts = new Map<string, number>();
+  for (const key of keys) counts.set(key, (counts.get(key) ?? 0) + 1);
+  return [...counts.entries()]
+    .map(([keyword, count]) => ({ keyword, count }))
+    .sort((a, b) => b.count - a.count || a.keyword.localeCompare(b.keyword))
+    .slice(0, limit);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Saving
+
+export interface SaveOptions {
+  /** Add to this session instead of creating a new one. */
+  targetSessionId?: string | null;
+  dedupe: boolean;
+  plan?: Plan;
+}
+
+export interface SaveResult {
+  sessionId: string;
+  sessionName: string;
+  createdSession: boolean;
+  intoUnsorted: boolean;
+  savedTabIds: string[];
+  skippedDuplicates: number;
+  /** Browser tab id -> saved tab id, for tabs that were written. */
+  tabIdMap: Map<number, string>;
+  /** Saved window id -> browser window id it came from. */
+  windowSources: Map<string, number>;
+}
+
+async function recomputeSession(sessionId: string, database: TabfoldDB, now: number): Promise<SessionRecord | null> {
+  const session = await database.sessions.get(sessionId);
+  if (!session) return null;
+  const [windows, tabs] = await Promise.all([
+    database.windows.where('sessionId').equals(sessionId).toArray(),
+    database.tabs.where('sessionId').equals(sessionId).toArray(),
+  ]);
+  const used = new Set(tabs.map((t) => t.windowId));
+  const emptyWindows = windows.filter((w) => !used.has(w.id));
+  if (emptyWindows.length) await database.windows.bulkDelete(emptyWindows.map((w) => w.id));
+  const next: SessionRecord = {
+    ...session,
+    ...aggregates(windows.filter((w) => used.has(w.id)), tabs),
+    updatedAt: now,
+    version: session.version + 1,
+  };
+  await database.sessions.put(next);
+  return next;
+}
+
+async function findOrCreateUnsorted(database: TabfoldDB, deviceId: string, now: number): Promise<SessionRecord> {
+  const existing = (await liveRange(database.sessions).toArray()).find((s) => s.kind === 'unsorted');
+  if (existing) return existing;
+  const session: SessionRecord = {
+    id: newId(),
+    name: UNSORTED_NAME,
+    tags: [],
+    pinned: 0,
+    color: null,
+    kind: 'unsorted',
+    source: 'manual',
+    createdAt: now,
+    updatedAt: now,
+    deletedAt: 0,
+    deviceId,
+    version: 1,
+    tabCount: 0,
+    windowCount: 0,
+    preview: [],
+  };
+  await database.sessions.add(session);
+  return session;
+}
+
+/**
+ * Write captured windows as a new session, or into an existing one. Resolves only after the
+ * IndexedDB transaction commits; callers close tabs only after this resolves.
+ */
+export async function saveCapture(
+  windows: CapturedWindow[],
+  meta: Omit<DraftMeta, 'existingUrls' | 'kind' | 'dedupe'>,
+  options: SaveOptions,
+  database: TabfoldDB = db,
+): Promise<SaveResult> {
+  return database.transaction('rw', [database.sessions, database.windows, database.tabs, database.meta], async () => {
+    let target: SessionRecord | null = null;
+    let intoUnsorted = false;
+    if (options.targetSessionId) {
+      const found = await database.sessions.get(options.targetSessionId);
+      if (found && !found.deletedAt) target = found;
+    }
+    if (!target) {
+      const named = (await liveRange(database.sessions).toArray()).filter((s) => s.kind !== 'unsorted').length;
+      if (sessionLimitReached(named, options.plan ?? CURRENT_PLAN)) {
+        target = await findOrCreateUnsorted(database, meta.deviceId, meta.now);
+        intoUnsorted = true;
+      }
+    }
+
+    // Tabs restored lazily and never opened have no title yet; reuse the title saved for that address.
+    for (const tab of windows.flatMap((w) => w.tabs)) {
+      if (tab.title !== displayHost(tab.url) && tab.title !== tab.url) continue;
+      const known = await database.tabs.where('url').equals(tab.url).first();
+      if (known && known.title !== tab.title && known.title !== displayHost(known.url)) tab.title = known.title;
+    }
+    const existingTabs = target ? await database.tabs.where('sessionId').equals(target.id).toArray() : [];
+    if (options.dedupe && existingTabs.length) {
+      // A duplicate is skipped, but keywords picked for it still land on the tab already saved.
+      const byUrl = new Map(existingTabs.map((t) => [dedupeKey(t.url), t]));
+      const updated = new Map<string, TabRecord>();
+      for (const tab of windows.flatMap((w) => w.tabs)) {
+        const existing = byUrl.get(dedupeKey(tab.url));
+        if (!existing || tab.keywords.length === 0) continue;
+        const merged = cleanKeywords([...existing.keywords, ...tab.keywords]);
+        if (merged.length !== existing.keywords.length) {
+          existing.keywords = merged;
+          updated.set(existing.id, existing);
+        }
+      }
+      if (updated.size) await database.tabs.bulkPut([...updated.values()]);
+    }
+    const { draft, skippedDuplicates, tabIdMap, windowIdMap } = buildDraft(windows, {
+      ...meta,
+      dedupe: options.dedupe,
+      existingUrls: existingTabs.map((t) => t.url),
+    });
+    const windowSources = new Map<string, number>([...windowIdMap.entries()].map(([source, id]) => [id, source]));
+
+    if (!target) {
+      await database.sessions.add(draft.session);
+      await database.windows.bulkAdd(draft.windows);
+      await database.tabs.bulkAdd(draft.tabs);
+      await bumpSearchVersion(database);
+      return {
+        sessionId: draft.session.id,
+        sessionName: draft.session.name,
+        createdSession: true,
+        intoUnsorted: false,
+        savedTabIds: draft.tabs.map((t) => t.id),
+        skippedDuplicates,
+        tabIdMap,
+        windowSources,
+      };
+    }
+
+    const targetWindows = await database.windows.where('sessionId').equals(target.id).sortBy('order');
+    const tabs: TabRecord[] = [];
+    let newWindows: WindowRecord[] = [];
+    if (meta.source === 'save-tabs' && targetWindows.length > 0) {
+      // Single tabs join the session's first window, after its last tab.
+      const first = targetWindows[0]!;
+      let order = existingTabs.filter((t) => t.windowId === first.id).reduce((max, t) => Math.max(max, t.order + 1), 0);
+      for (const tab of draft.tabs) tabs.push({ ...tab, sessionId: target.id, windowId: first.id, order: order++ });
+      for (const [source, draftWindowId] of windowIdMap) {
+        windowSources.delete(draftWindowId);
+        windowSources.set(first.id, source);
+      }
+    } else {
+      let order = targetWindows.reduce((max, w) => Math.max(max, w.order + 1), 0);
+      newWindows = draft.windows.map((w) => ({ ...w, sessionId: target!.id, order: order++ }));
+      for (const tab of draft.tabs) tabs.push({ ...tab, sessionId: target.id });
+    }
+    if (newWindows.length) await database.windows.bulkAdd(newWindows);
+    if (tabs.length) await database.tabs.bulkAdd(tabs);
+    const updated = await recomputeSession(target.id, database, meta.now);
+    await bumpSearchVersion(database);
+    return {
+      sessionId: target.id,
+      sessionName: updated?.name ?? target.name,
+      createdSession: false,
+      intoUnsorted,
+      savedTabIds: tabs.map((t) => t.id),
+      skippedDuplicates,
+      tabIdMap,
+      windowSources,
+    };
+  });
+}
+
+/** Add whole sessions (imports, snapshot conversions, duplicates) in one transaction. */
+export async function addDrafts(drafts: SessionDraft[], database: TabfoldDB = db): Promise<void> {
+  if (drafts.length === 0) return;
+  await database.transaction('rw', [database.sessions, database.windows, database.tabs, database.meta], async () => {
+    await database.sessions.bulkAdd(drafts.map((d) => d.session));
+    await database.windows.bulkAdd(drafts.flatMap((d) => d.windows));
+    await database.tabs.bulkAdd(drafts.flatMap((d) => d.tabs));
+    await bumpSearchVersion(database);
+  });
+}
+
+/**
+ * Import whole sessions. Each becomes its own session while the plan allows; past the Free limit
+ * the rest land in Unsorted, so an import never fails for being too big.
+ */
+export async function importSessions(
+  sessions: Array<{ name: string; createdAt: number | null; windows: CapturedWindow[] }>,
+  deviceId: string,
+  database: TabfoldDB = db,
+): Promise<{ sessions: number; tabs: number; intoUnsorted: number }> {
+  let created = 0;
+  let tabs = 0;
+  let intoUnsorted = 0;
+  for (const session of sessions) {
+    const result = await saveCapture(
+      session.windows,
+      { name: session.name, source: 'import', deviceId, now: session.createdAt ?? Date.now() },
+      { dedupe: false },
+      database,
+    );
+    tabs += result.savedTabIds.length;
+    if (result.intoUnsorted) intoUnsorted += 1;
+    else created += 1;
+  }
+  return { sessions: created, tabs, intoUnsorted };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Editing sessions
+
+async function patchSession(id: string, patch: Partial<SessionRecord>, database: TabfoldDB, bump = false) {
+  await database.transaction('rw', [database.sessions, database.meta], async () => {
+    const session = await database.sessions.get(id);
+    if (!session) return;
+    await database.sessions.put({ ...session, ...patch, updatedAt: Date.now(), version: session.version + 1 });
+    if (bump) await bumpSearchVersion(database);
+  });
+}
+
+export async function renameSession(id: string, name: string, database: TabfoldDB = db): Promise<void> {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  await patchSession(id, { name: trimmed.slice(0, 200) }, database, true);
+}
+
+export async function setSessionPinned(id: string, pinned: boolean, database: TabfoldDB = db): Promise<void> {
+  await patchSession(id, { pinned: pinned ? 1 : 0 }, database);
+}
+
+export async function setSessionTags(id: string, tags: string[], database: TabfoldDB = db): Promise<void> {
+  const clean = cleanKeywords(tags).slice(0, 10);
+  const others = (await liveRange(database.sessions).toArray()).filter((s) => s.id !== id).flatMap((s) => s.tags);
+  if (!tagsAllowed(others, clean)) {
+    throw new LimitError('Free includes up to 5 tags. Remove one, or reuse a tag you already have.', 'tags');
+  }
+  await patchSession(id, { tags: clean }, database);
+}
+
+export async function duplicateSession(id: string, database: TabfoldDB = db): Promise<string | null> {
+  const graph = await getSessionGraph(id, database);
+  if (!graph) return null;
+  const now = Date.now();
+  const { draft } = buildDraft(
+    graph.windows.map((w) => ({
+      name: w.name,
+      focused: w.wasFocused,
+      bounds: w.bounds,
+      state: w.state,
+      tabs: w.tabs.map((t) => ({ ...t })),
+    })),
+    {
+      name: `${graph.session.name} (copy)`,
+      source: 'duplicate',
+      deviceId: graph.session.deviceId,
+      now,
+      tags: graph.session.tags,
+      dedupe: false,
+    },
+  );
+  const named = await countNamedSessions(database);
+  if (sessionLimitReached(named)) {
+    throw new LimitError('Free includes up to 50 sessions. Delete or merge one to make a copy.', 'sessions');
+  }
+  await addDrafts([draft], database);
+  return draft.session.id;
+}
+
+export async function trashSessions(ids: string[], database: TabfoldDB = db, now = Date.now()): Promise<void> {
+  await database.transaction('rw', [database.sessions, database.meta], async () => {
+    const rows = (await database.sessions.bulkGet(ids)).filter((s): s is SessionRecord => !!s);
+    await database.sessions.bulkPut(rows.map((s) => ({ ...s, deletedAt: now, version: s.version + 1 })));
+    await bumpSearchVersion(database);
+  });
+}
+
+export async function restoreFromTrash(ids: string[], database: TabfoldDB = db): Promise<void> {
+  const now = Date.now();
+  await database.transaction('rw', [database.sessions, database.meta], async () => {
+    const rows = (await database.sessions.bulkGet(ids)).filter((s): s is SessionRecord => !!s);
+    await database.sessions.bulkPut(rows.map((s) => ({ ...s, deletedAt: 0, updatedAt: now, version: s.version + 1 })));
+    await bumpSearchVersion(database);
+  });
+}
+
+export async function deleteSessionsForever(ids: string[], database: TabfoldDB = db): Promise<void> {
+  if (ids.length === 0) return;
+  await database.transaction('rw', [database.sessions, database.windows, database.tabs, database.meta], async () => {
+    await database.tabs.where('sessionId').anyOf(ids).delete();
+    await database.windows.where('sessionId').anyOf(ids).delete();
+    await database.sessions.bulkDelete(ids);
+    await bumpSearchVersion(database);
+  });
+}
+
+/** Hard-delete sessions that have been in Trash longer than 30 days. */
+export async function purgeTrash(now = Date.now(), database: TabfoldDB = db): Promise<number> {
+  const old = await database.sessions.where('deletedAt').between(1, now - TRASH_RETENTION_MS, true, true).primaryKeys();
+  await deleteSessionsForever(old as string[], database);
+  return old.length;
+}
+
+export async function renameWindow(windowId: string, name: string, database: TabfoldDB = db): Promise<void> {
+  await database.windows.update(windowId, { name: name.trim().slice(0, 120) });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Editing tabs
+
+export async function setTabKeywords(tabId: string, keywords: string[], database: TabfoldDB = db): Promise<string[]> {
+  const clean = cleanKeywords(keywords);
+  await database.transaction('rw', [database.tabs, database.meta], async () => {
+    await database.tabs.update(tabId, { keywords: clean });
+    await bumpSearchVersion(database);
+  });
+  return clean;
+}
+
+/** Remove tabs from their sessions. A session left empty goes to Trash, so nothing disappears silently. */
+export async function removeTabs(tabIds: string[], database: TabfoldDB = db): Promise<void> {
+  const now = Date.now();
+  await database.transaction('rw', [database.sessions, database.windows, database.tabs, database.meta], async () => {
+    const rows = (await database.tabs.bulkGet(tabIds)).filter((t): t is TabRecord => !!t);
+    await database.tabs.bulkDelete(rows.map((t) => t.id));
+    for (const sessionId of new Set(rows.map((t) => t.sessionId))) {
+      const updated = await recomputeSession(sessionId, database, now);
+      if (updated && updated.tabCount === 0 && updated.kind !== 'unsorted') {
+        await database.sessions.put({ ...updated, deletedAt: now });
+      }
+    }
+    await bumpSearchVersion(database);
+  });
+}
+
+/**
+ * Move a saved tab to another window (in the same or another session). `beforeTabId` places it in
+ * front of that tab; otherwise it goes last. Moving to a session without a window id uses that
+ * session's first window.
+ */
+export async function moveTab(
+  tabId: string,
+  destination: { windowId?: string; sessionId?: string; beforeTabId?: string | null },
+  database: TabfoldDB = db,
+): Promise<void> {
+  const now = Date.now();
+  await database.transaction('rw', [database.sessions, database.windows, database.tabs, database.meta], async () => {
+    const tab = await database.tabs.get(tabId);
+    if (!tab) return;
+    let windowId = destination.windowId;
+    let sessionId = destination.sessionId;
+    if (windowId) {
+      const window = await database.windows.get(windowId);
+      if (!window) return;
+      sessionId = window.sessionId;
+    } else if (sessionId) {
+      const first = (await database.windows.where('sessionId').equals(sessionId).sortBy('order'))[0];
+      if (first) {
+        windowId = first.id;
+      } else {
+        windowId = newId();
+        await database.windows.add({ id: windowId, sessionId, name: '', order: 0, wasFocused: false, bounds: null, state: null });
+      }
+    }
+    if (!windowId || !sessionId) return;
+    const siblings = (await database.tabs.where('windowId').equals(windowId).sortBy('order')).filter((t) => t.id !== tabId);
+    const insertAt = destination.beforeTabId ? siblings.findIndex((t) => t.id === destination.beforeTabId) : -1;
+    siblings.splice(insertAt === -1 ? siblings.length : insertAt, 0, { ...tab, windowId, sessionId });
+    await database.tabs.bulkPut(siblings.map((t, index) => ({ ...t, order: index })));
+    const sessions = new Set([tab.sessionId, sessionId]);
+    for (const id of sessions) await recomputeSession(id, database, now);
+    await bumpSearchVersion(database);
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Snapshots
+
+export interface SnapshotPolicy {
+  /** Crash-recovery snapshots kept (Free: 1). */
+  shutdown: number;
+  /** Safety snapshots taken before bulk closes, restores and imports. */
+  safety: number;
+  safetyMaxAgeMs: number;
+}
+
+export const DEFAULT_SNAPSHOT_POLICY: SnapshotPolicy = {
+  shutdown: 1,
+  safety: 5,
+  safetyMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
+};
+
+export async function addSnapshot(snapshot: Omit<SnapshotRecord, 'id'>, database: TabfoldDB = db): Promise<number> {
+  return (await database.snapshots.add(snapshot as SnapshotRecord)) as number;
+}
+
+export async function latestSnapshot(reason: SnapshotReason, database: TabfoldDB = db): Promise<SnapshotRecord | undefined> {
+  const rows = await database.snapshots.where('reason').equals(reason).sortBy('createdAt');
+  return rows.at(-1);
+}
+
+export async function listSnapshots(database: TabfoldDB = db): Promise<SnapshotRecord[]> {
+  return (await database.snapshots.orderBy('createdAt').reverse().toArray()).filter((s) => s.reason !== 'timer');
+}
+
+export async function pruneSnapshots(
+  policy: SnapshotPolicy = DEFAULT_SNAPSHOT_POLICY,
+  now = Date.now(),
+  database: TabfoldDB = db,
+): Promise<void> {
+  const all = await database.snapshots.orderBy('createdAt').reverse().toArray();
+  const remove: number[] = [];
+  let timer = 0;
+  let shutdown = 0;
+  let safety = 0;
+  for (const snap of all) {
+    if (snap.id === undefined) continue;
+    if (snap.reason === 'timer') {
+      if (++timer > 1) remove.push(snap.id);
+    } else if (snap.reason === 'shutdown') {
+      if (++shutdown > policy.shutdown) remove.push(snap.id);
+    } else if (snap.reason !== 'manual') {
+      if (++safety > policy.safety || now - snap.createdAt > policy.safetyMaxAgeMs) remove.push(snap.id);
+    }
+  }
+  if (remove.length) await database.snapshots.bulkDelete(remove);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Everything
+
+export async function exportGraphs(sessionIds?: string[], database: TabfoldDB = db): Promise<SessionGraph[]> {
+  const sessions = sessionIds
+    ? ((await database.sessions.bulkGet(sessionIds)).filter(Boolean) as SessionRecord[])
+    : await listLiveSessions(database);
+  const graphs: SessionGraph[] = [];
+  for (const session of sessions) {
+    const graph = await getSessionGraph(session.id, database);
+    if (graph) graphs.push(graph);
+  }
+  return graphs;
+}
+
+export async function clearAllData(database: TabfoldDB = db): Promise<void> {
+  await database.transaction('rw', [database.sessions, database.windows, database.tabs, database.snapshots, database.meta], async () => {
+    await Promise.all([
+      database.sessions.clear(),
+      database.windows.clear(),
+      database.tabs.clear(),
+      database.snapshots.clear(),
+    ]);
+    await bumpSearchVersion(database);
+  });
+}

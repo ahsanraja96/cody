@@ -1,0 +1,59 @@
+import { browser, type Browser } from 'wxt/browser';
+import type { GroupLike } from '../capture';
+
+export function ownOrigin(): string {
+  return browser.runtime.getURL('/');
+}
+
+/** Every normal window with its tabs. Incognito windows are filtered later by the capture rules. */
+export async function getNormalWindows(): Promise<Browser.windows.Window[]> {
+  return browser.windows.getAll({ populate: true, windowTypes: ['normal'] });
+}
+
+export async function getGroups(): Promise<Map<number, GroupLike>> {
+  try {
+    const groups = await browser.tabGroups.query({});
+    return new Map(groups.map((g) => [g.id, { id: g.id, title: g.title, color: g.color, collapsed: g.collapsed }]));
+  } catch {
+    // Enterprise policy or older browsers without tab groups.
+    return new Map();
+  }
+}
+
+/** The window the user is working in (popups and devtools windows don't count). */
+export async function currentNormalWindowId(): Promise<number | undefined> {
+  try {
+    const window = await browser.windows.getLastFocused({ windowTypes: ['normal'] });
+    if (window.id !== undefined && !window.incognito) return window.id;
+  } catch {
+    // No window focused yet.
+  }
+  const all = await browser.windows.getAll({ windowTypes: ['normal'] });
+  return all.find((w) => !w.incognito)?.id;
+}
+
+export async function windowExists(windowId: number | undefined): Promise<boolean> {
+  if (windowId === undefined) return false;
+  try {
+    const window = await browser.windows.get(windowId);
+    return window.type === 'normal' && !window.incognito;
+  } catch {
+    return false;
+  }
+}
+
+export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Tell open extension pages about progress. No page listening is fine. */
+export function broadcast(event: unknown): void {
+  browser.runtime.sendMessage({ __tabfoldEvent: true, event }).catch(() => undefined);
+}
+
+export async function setAttentionBadge(on: boolean): Promise<void> {
+  try {
+    await browser.action.setBadgeText({ text: on ? '1' : '' });
+    if (on) await browser.action.setBadgeBackgroundColor({ color: '#9A5A06' });
+  } catch {
+    // Badge is cosmetic.
+  }
+}
