@@ -1,9 +1,10 @@
 import { cleanKeywords } from '../keywords';
-import { classifyUrl, dedupeKey } from '../urls';
+import { classifyUrl, dedupeKey, MAX_URL_LENGTH } from '../urls';
 
 /**
- * Chrome sync of folded tabs: the compact format kept in chrome.storage.sync, and how it is packed
- * into keys within Chrome's quota. Everything here is pure, so it can be tested without a browser.
+ * Sync of folded tabs: the compact format kept in chrome.storage.sync (and, for Pro, on the Tabfold
+ * server in the same format), and how it is packed into keys within a quota. Everything here is
+ * pure, so it can be tested without a browser.
  *
  * Keys (all start with "tf."): `tf.m` a small meta record, `tf.c0`, `tf.c1`… chunks of tab
  * records, `tf.t0`, `tf.t1`… chunks of tombstones (tabs removed on some computer).
@@ -14,7 +15,28 @@ export const META_KEY = 'tf.m';
 export const recordKey = (index: number) => `tf.c${index}`;
 export const tombstoneKey = (index: number) => `tf.t${index}`;
 
-/** chrome.storage.sync limits, and how much of them Tabfold uses. */
+/** Where the shared copy lives sets how much fits: Chrome sync's quota, or the Tabfold server's. */
+export interface SyncLimits {
+  /** Total: JSON of every value plus every key. */
+  quotaBytes: number;
+  /** One key plus its JSON value. */
+  quotaBytesPerItem: number;
+  maxItems: number;
+  /** Each chunk (key plus JSON value) stays under this, well inside the per-item quota. */
+  chunkBytes: number;
+  /** Kept free under the total quota, for the meta record and the store's own accounting. */
+  reserveBytes: number;
+  /** The newest folded tabs shared, at most. */
+  maxRecords: number;
+  /** Longer addresses stay on this computer. */
+  maxUrlLength: number;
+  /** Titles are shortened to this many characters. */
+  maxTitleLength: number;
+  maxTombstones: number;
+  tombstoneMaxAgeMs: number;
+}
+
+/** chrome.storage.sync limits, and how much of them Tabfold uses. The default everywhere. */
 export const SYNC_LIMITS = {
   /** QUOTA_BYTES: JSON of every value plus every key, in total. */
   quotaBytes: 102_400,
@@ -34,7 +56,24 @@ export const SYNC_LIMITS = {
   maxTitleLength: 120,
   maxTombstones: 300,
   tombstoneMaxAgeMs: 30 * 24 * 60 * 60 * 1000,
-} as const;
+} as const satisfies SyncLimits;
+
+/**
+ * Sync with the Tabfold account (Pro): the server keeps up to 8 MB per account (server/API.md), so
+ * every folded tab fits in practice, with titles up to 200 characters.
+ */
+export const CLOUD_LIMITS = {
+  quotaBytes: 8_000_000,
+  quotaBytesPerItem: 262_144,
+  maxItems: 5_000,
+  chunkBytes: 60_000,
+  reserveBytes: 16_384,
+  maxRecords: 20_000,
+  maxUrlLength: MAX_URL_LENGTH,
+  maxTitleLength: 200,
+  maxTombstones: 5_000,
+  tombstoneMaxAgeMs: 30 * 24 * 60 * 60 * 1000,
+} as const satisfies SyncLimits;
 
 /** One folded tab as shared through Chrome sync. Times are whole seconds (in milliseconds). */
 export interface SyncRecord {
@@ -126,16 +165,16 @@ export function byteLength(text: string): number {
   return encoder.encode(text).length;
 }
 
-/** At most 120 characters, never cutting a character in half. */
-export function capTitle(title: string): string {
+/** At most 120 characters (Chrome sync; 200 for the Tabfold account), never cutting a character in half. */
+export function capTitle(title: string, limits: SyncLimits = SYNC_LIMITS): string {
   const clean = title.trim();
-  if (clean.length <= SYNC_LIMITS.maxTitleLength) return clean;
-  return Array.from(clean).slice(0, SYNC_LIMITS.maxTitleLength).join('').trimEnd();
+  if (clean.length <= limits.maxTitleLength) return clean;
+  return Array.from(clean).slice(0, limits.maxTitleLength).join('').trimEnd();
 }
 
 /** Short enough to share, and a real address (not data:, blob: or javascript:). */
-export function isSyncable(url: string): boolean {
-  return !!url && url.length <= SYNC_LIMITS.maxUrlLength && classifyUrl(url) !== 'data';
+export function isSyncable(url: string, limits: SyncLimits = SYNC_LIMITS): boolean {
+  return !!url && url.length <= limits.maxUrlLength && classifyUrl(url) !== 'data';
 }
 
 /** Keywords in one canonical order, so the same set compares equal everywhere. */
@@ -160,15 +199,15 @@ function encodeRecord(record: SyncRecord): PackedRecord {
   return packed;
 }
 
-export function decodeRecord(raw: unknown): SyncRecord | null {
+export function decodeRecord(raw: unknown, limits: SyncLimits = SYNC_LIMITS): SyncRecord | null {
   if (!Array.isArray(raw) || raw.length < 4) return null;
   const [id, url, title, seconds, keywords] = raw as unknown[];
   if (typeof id !== 'string' || !SHORT_ID.test(id)) return null;
-  if (typeof url !== 'string' || !isSyncable(url)) return null;
+  if (typeof url !== 'string' || !isSyncable(url, limits)) return null;
   if (typeof title !== 'string') return null;
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return null;
   const words = Array.isArray(keywords) ? keywords.filter((k): k is string => typeof k === 'string') : [];
-  return { id, url, title: capTitle(title), savedAt: Math.floor(seconds) * 1000, keywords: canonicalKeywords(words) };
+  return { id, url, title: capTitle(title, limits), savedAt: Math.floor(seconds) * 1000, keywords: canonicalKeywords(words) };
 }
 
 function encodeTombstone(tombstone: Tombstone): PackedTombstone {
@@ -189,17 +228,17 @@ export function itemBytes(key: string, value: unknown): number {
   return key.length + byteLength(JSON.stringify(value));
 }
 
-/** Tombstones younger than 30 days, one per id (the latest), newest first, at most 300. */
-export function pruneTombstones(tombstones: Tombstone[], now: number): Tombstone[] {
+/** Tombstones younger than 30 days, one per id (the latest), newest first, at most 300 (Chrome sync). */
+export function pruneTombstones(tombstones: Tombstone[], now: number, limits: SyncLimits = SYNC_LIMITS): Tombstone[] {
   const byId = new Map<string, Tombstone>();
   for (const tombstone of tombstones) {
-    if (tombstone.at < now - SYNC_LIMITS.tombstoneMaxAgeMs) continue;
+    if (tombstone.at < now - limits.tombstoneMaxAgeMs) continue;
     const current = byId.get(tombstone.id);
     if (!current || tombstone.at > current.at) byId.set(tombstone.id, tombstone);
   }
   return [...byId.values()]
     .sort((a, b) => b.at - a.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    .slice(0, SYNC_LIMITS.maxTombstones);
+    .slice(0, limits.maxTombstones);
 }
 
 export interface PackOptions {
@@ -207,6 +246,8 @@ export interface PackOptions {
   floor: number;
   /** Below 1 after Chrome refused a write as too big: use less of the quota. */
   budgetFactor?: number;
+  /** Chrome sync's limits unless given. */
+  limits?: SyncLimits;
 }
 
 export interface PackResult {
@@ -222,13 +263,13 @@ export interface PackResult {
 }
 
 /** Split encoded entries into chunks under the chunk size. */
-function chunkEntries(entries: string[], keyFor: (index: number) => string): string[][] {
+function chunkEntries(entries: string[], keyFor: (index: number) => string, chunkBytes: number): string[][] {
   const chunks: string[][] = [];
   let size = 0;
   for (const entry of entries) {
     const current = chunks.at(-1);
     const entryBytes = byteLength(entry);
-    if (current && size + 1 + entryBytes <= SYNC_LIMITS.chunkBytes) {
+    if (current && size + 1 + entryBytes <= chunkBytes) {
       current.push(entry);
       size += 1 + entryBytes;
     } else {
@@ -241,22 +282,25 @@ function chunkEntries(entries: string[], keyFor: (index: number) => string): str
 
 /**
  * Pack the shared records (already deduplicated, any order) and tombstones into chrome.storage.sync
- * items. Records go newest first while they fit, up to 500: one that doesn't fit is skipped and
- * smaller later ones may still go in. The same input always gives the same items, on every computer.
+ * items (or the Tabfold server's, with its limits). Records go newest first while they fit, up to
+ * 500 for Chrome sync: one that doesn't fit is skipped and smaller later ones may still go in. The
+ * same input always gives the same items, on every computer.
  */
 export function pack(candidates: SyncRecord[], tombstoneList: Tombstone[], options: PackOptions): PackResult {
+  const limits = options.limits ?? SYNC_LIMITS;
   const factor = Math.min(1, Math.max(0.3, options.budgetFactor ?? 1));
   const tombstones = [...tombstoneList];
   const tombstoneChunks = chunkEntries(
     tombstones.map((t) => JSON.stringify(encodeTombstone(t))),
     tombstoneKey,
+    limits.chunkBytes,
   );
   let tombstoneBytes = 0;
   tombstoneChunks.forEach((chunk, i) => (tombstoneBytes += tombstoneKey(i).length + 2 + byteLength(chunk.join(','))));
 
   const metaReserve = 160;
-  const budget = Math.floor((SYNC_LIMITS.quotaBytes - SYNC_LIMITS.reserveBytes) * factor) - metaReserve - tombstoneBytes;
-  const maxChunks = SYNC_LIMITS.maxItems - 1 - tombstoneChunks.length;
+  const budget = Math.floor((limits.quotaBytes - limits.reserveBytes) * factor) - metaReserve - tombstoneBytes;
+  const maxChunks = limits.maxItems - 1 - tombstoneChunks.length;
 
   const sorted = [...candidates].sort(compareRecords);
   const recordChunks: string[][] = [];
@@ -264,11 +308,11 @@ export function pack(candidates: SyncRecord[], tombstoneList: Tombstone[], optio
   let used = 0;
   let chunkSize = 0;
   for (const record of sorted) {
-    if (included.length >= SYNC_LIMITS.maxRecords) break;
+    if (included.length >= limits.maxRecords) break;
     const entry = JSON.stringify(encodeRecord(record));
     const entryBytes = byteLength(entry);
     const current = recordChunks.at(-1);
-    if (current && chunkSize + 1 + entryBytes <= SYNC_LIMITS.chunkBytes && used + 1 + entryBytes <= budget) {
+    if (current && chunkSize + 1 + entryBytes <= limits.chunkBytes && used + 1 + entryBytes <= budget) {
       current.push(entry);
       chunkSize += 1 + entryBytes;
       used += 1 + entryBytes;
@@ -276,7 +320,7 @@ export function pack(candidates: SyncRecord[], tombstoneList: Tombstone[], optio
       continue;
     }
     const opening = recordKey(recordChunks.length).length + 2 + entryBytes;
-    if (opening <= SYNC_LIMITS.chunkBytes && used + opening <= budget && recordChunks.length < maxChunks) {
+    if (opening <= limits.chunkBytes && used + opening <= budget && recordChunks.length < maxChunks) {
       recordChunks.push([entry]);
       chunkSize = opening;
       used += opening;
@@ -332,9 +376,10 @@ function chunkIndexes(items: Record<string, unknown>, prefix: string): number[] 
 /**
  * Read what chrome.storage.sync holds. Anything malformed is skipped. Chunks beyond what the meta
  * record names (left over from a longer list) are ignored. A copy that arrived only in part (Chrome
- * sync delivers keys one by one) is read as far as it goes and marked incomplete.
+ * sync delivers keys one by one) is read as far as it goes and marked incomplete. `limits` decide
+ * which addresses and how much of each title are read (Chrome sync's unless given).
  */
-export function unpack(items: Record<string, unknown>): RemoteState {
+export function unpack(items: Record<string, unknown>, limits: SyncLimits = SYNC_LIMITS): RemoteState {
   const meta = isMeta(items[META_KEY]) ? (items[META_KEY] as SyncMeta) : null;
   const recordIdx = chunkIndexes(items, 'tf.c').filter((i) => !meta || i < meta.n);
   const tombIdx = chunkIndexes(items, 'tf.t').filter((i) => !meta || i < meta.t);
@@ -347,7 +392,7 @@ export function unpack(items: Record<string, unknown>): RemoteState {
     if (!Array.isArray(chunk)) continue;
     recordTexts[index] = chunk.map((entry) => JSON.stringify(entry)).join(',');
     for (const entry of chunk) {
-      const record = decodeRecord(entry);
+      const record = decodeRecord(entry, limits);
       if (!record || seen.has(record.id)) continue;
       seen.add(record.id);
       records.push(record);

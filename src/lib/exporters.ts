@@ -1,5 +1,17 @@
 import { formatDateTime } from './format';
 import type { SessionGraph } from './types';
+import { displayHost } from './urls';
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "10 Oct 2026" (or "10 Oct"), the same in every language setting. Local time unless `utc`. */
+export function formatDay(timestamp: number, options: { year?: boolean; utc?: boolean } = {}): string {
+  const d = new Date(timestamp);
+  const day = options.utc ? d.getUTCDate() : d.getDate();
+  const month = MONTHS[options.utc ? d.getUTCMonth() : d.getMonth()]!;
+  const year = options.utc ? d.getUTCFullYear() : d.getFullYear();
+  return options.year === false ? `${day} ${month}` : `${day} ${month} ${year}`;
+}
 
 function escapeHtml(text: string): string {
   return text
@@ -76,29 +88,127 @@ ${sessions}
 `;
 }
 
-export function exportFileName(exportedAt = Date.now()): string {
-  return `tabfold-export-${new Date(exportedAt).toISOString().slice(0, 10)}.html`;
+/** `tabfold-export-2026-10-10.html` (or `.md`, `.csv`, `.json` with `ext`). */
+export function exportFileName(exportedAt = Date.now(), ext = 'html'): string {
+  return `tabfold-export-${new Date(exportedAt).toISOString().slice(0, 10)}.${ext.replace(/^\./, '')}`;
 }
 
 // ---- Pro export formats (Pro-Plans: "Export to Markdown, CSV and JSON") ----
-// Placeholders until the Pro build lands.
 
-/** Every fold as Markdown: a heading per fold, a link per tab. */
+/** A fold's name as the list shows it: the AI's name when it has one. */
+function foldName(graph: SessionGraph): string {
+  return (graph.session.smartName || graph.session.name).replace(/\s+/g, ' ').trim() || 'Fold';
+}
+
+function windowName(window: SessionGraph['windows'][number], index: number): string {
+  return window.name.replace(/\s+/g, ' ').trim() || `Window ${index + 1}`;
+}
+
+/** Text inside a Markdown heading or link: brackets and backslashes escaped, on one line. */
+function markdownText(text: string): string {
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Spaces and parentheses would end a Markdown link early. */
+function markdownUrl(url: string): string {
+  return url.replace(/ /g, '%20').replace(/\(/g, '%28').replace(/\)/g, '%29');
+}
+
+/** `- [Title](url)`, the title falling back to the site. */
+export function markdownLink(tab: { title: string; url: string }): string {
+  const title = markdownText(tab.title) || displayHost(tab.url) || tab.url;
+  return `- [${title}](${markdownUrl(tab.url)})`;
+}
+
+const count = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
+
+/**
+ * Every fold as Markdown: a heading per fold with its date, a link per tab (`- [title](url)`). A
+ * fold of several windows has a smaller heading per window.
+ */
 export function exportMarkdown(graphs: SessionGraph[], exportedAt = Date.now()): string {
-  void graphs;
-  void exportedAt;
-  throw new Error('Not built yet');
+  const tabs = graphs.reduce((n, g) => n + g.windows.reduce((m, w) => m + w.tabs.length, 0), 0);
+  const lines = ['# Tabfold export', '', `${count(graphs.length, 'fold')} · ${count(tabs, 'tab')} · exported ${formatDay(exportedAt)}`];
+  for (const graph of graphs) {
+    lines.push('', `## ${markdownText(foldName(graph))} · ${formatDay(graph.session.createdAt)}`);
+    const several = graph.windows.length > 1;
+    graph.windows.forEach((window, index) => {
+      if (several) lines.push('', `### ${markdownText(windowName(window, index))}`);
+      lines.push('');
+      for (const tab of window.tabs) lines.push(markdownLink(tab));
+    });
+  }
+  return `${lines.join('\n')}\n`;
 }
 
-/** One row per tab: fold, window, title, address, saved at, keywords. */
+/**
+ * A CSV field (RFC 4180): quoted when it holds a comma, a quote or a line break, with quotes
+ * doubled. A field a spreadsheet would run as a formula (starting =, +, -, @) gets an apostrophe.
+ */
+function csvField(value: string): string {
+  const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+}
+
+/** One row per tab: fold, window, title, address, saved at (ISO 8601), keywords (space separated). CRLF lines. */
 export function exportCsv(graphs: SessionGraph[]): string {
-  void graphs;
-  throw new Error('Not built yet');
+  const rows: string[][] = [['fold', 'window', 'title', 'url', 'saved_at', 'keywords']];
+  for (const graph of graphs) {
+    graph.windows.forEach((window, index) => {
+      for (const tab of window.tabs) {
+        rows.push([
+          foldName(graph),
+          windowName(window, index),
+          tab.title,
+          tab.url,
+          new Date(tab.savedAt).toISOString(),
+          tab.keywords.join(' '),
+        ]);
+      }
+    });
+  }
+  return `${rows.map((row) => row.map(csvField).join(',')).join('\r\n')}\r\n`;
 }
 
-/** Folds, windows and tabs as JSON (Tabfold's own format, importable later). */
+/** Tabfold's own JSON format, version 1. */
+export interface TabfoldJsonExport {
+  format: 'tabfold';
+  version: 1;
+  exportedAt: string;
+  folds: Array<{
+    name: string;
+    /** The AI's name for the fold, when it has one. */
+    smartName?: string;
+    createdAt: string;
+    windows: Array<{ name: string; tabs: Array<{ url: string; title: string; savedAt: string; keywords: string[] }> }>;
+  }>;
+}
+
+/** Folds, windows and tabs as JSON (Tabfold's own format, importable later). Times are ISO 8601. */
 export function exportJson(graphs: SessionGraph[], exportedAt = Date.now()): string {
-  void graphs;
-  void exportedAt;
-  throw new Error('Not built yet');
+  const data: TabfoldJsonExport = {
+    format: 'tabfold',
+    version: 1,
+    exportedAt: new Date(exportedAt).toISOString(),
+    folds: graphs.map((graph) => ({
+      name: graph.session.name,
+      ...(graph.session.smartName ? { smartName: graph.session.smartName } : {}),
+      createdAt: new Date(graph.session.createdAt).toISOString(),
+      windows: graph.windows.map((window) => ({
+        name: window.name,
+        tabs: window.tabs.map((tab) => ({
+          url: tab.url,
+          title: tab.title,
+          savedAt: new Date(tab.savedAt).toISOString(),
+          keywords: [...tab.keywords],
+        })),
+      })),
+    })),
+  };
+  return `${JSON.stringify(data, null, 2)}\n`;
 }

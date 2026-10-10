@@ -5,8 +5,9 @@ import { bumpSearchVersion, db, type TabfoldDB } from './db';
 import { cleanKeywords } from './keywords';
 import { CURRENT_PLAN, sessionLimitReached, tagsAllowed, UNSORTED_NAME, type Plan } from './limits';
 import { newId } from './format';
-import { snapshotMirror } from './state';
+import { getDeviceId, snapshotMirror } from './state';
 import { clearSyncedData } from './sync/clear';
+import { clearCloudSyncedData } from './sync/cloud';
 import { dedupeKey, displayHost } from './urls';
 import type {
   CapturedTab,
@@ -912,6 +913,110 @@ export async function clearAllData(database: TabfoldDB = db): Promise<void> {
   });
   // The user asked for this: nothing to recover from, and no copy of the last snapshot kept.
   await Promise.all([resetDataGuard(database), snapshotMirror.set(null)]).catch(() => undefined);
-  // Gone from Chrome sync too ("Removes all folded tabs here and from Chrome sync").
+  // Gone from Chrome sync too ("Removes all folded tabs here and from Chrome sync"), and from the
+  // Tabfold account for Pro.
   await clearSyncedData();
+  await clearCloudSyncedData();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pro: backups, projects, smart names
+
+/** A tab as kept in a backup (the sync format). */
+export interface BackupTab {
+  url: string;
+  title: string;
+  keywords: string[];
+  savedAt?: number;
+}
+
+/**
+ * Bring back tabs from a daily backup: one new fold (`name`, e.g. "Restored · 8 Oct") with every
+ * tab whose address isn't already in a live fold. Nothing is deleted or changed. The tabs count as
+ * folded now, so a removal recorded on another computer since the backup doesn't take them away
+ * again. No fold is made when nothing is missing.
+ */
+export async function restoreRecords(
+  records: BackupTab[],
+  name: string,
+  options: { deviceId?: string; now?: number } = {},
+  database: TabfoldDB = db,
+): Promise<{ restored: number; sessionId: string | null }> {
+  const now = options.now ?? Date.now();
+  const newestFirst = [...records].sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0));
+  const window: CapturedWindow = {
+    name: '',
+    focused: false,
+    bounds: null,
+    state: null,
+    tabs: newestFirst
+      .filter((r) => typeof r.url === 'string' && r.url)
+      .map((r) => ({
+        url: r.url,
+        title: r.title || r.url,
+        favIconUrl: '',
+        pinned: false,
+        groupName: null,
+        groupColor: null,
+        groupCollapsed: false,
+        keywords: cleanKeywords(r.keywords ?? []),
+        urlTruncated: false,
+      })),
+  };
+  // Folded from normal windows only: a backup never holds Incognito tabs, and an Incognito copy isn't the same tab.
+  const existing = (await listFoldedTabs(database)).filter((t) => !t.incognito).map((t) => t.url);
+  const { draft } = buildDraft([window], {
+    name,
+    source: 'import',
+    deviceId: options.deviceId ?? (await getDeviceId()),
+    now,
+    dedupe: true,
+    existingUrls: existing,
+  });
+  if (draft.tabs.length === 0) return { restored: 0, sessionId: null };
+  await addDrafts([draft], database);
+  await refreshDataGuard(database).catch(() => undefined);
+  return { restored: draft.tabs.length, sessionId: draft.session.id };
+}
+
+/**
+ * Put folded tabs into the projects the person kept (Organise with AI): every tab's project is
+ * cleared, then set for the tabs in `groups` (a tab listed twice stays in the first). Returns how
+ * many tabs got a project, and the projects that got any (in the order given).
+ */
+export async function setProjects(
+  groups: Array<{ name: string; tabIds: string[] }>,
+  database: TabfoldDB = db,
+): Promise<{ applied: number; projects: string[] }> {
+  const projectOf = new Map<string, string>();
+  for (const group of groups) {
+    const name = group.name.trim();
+    if (!name) continue;
+    for (const id of group.tabIds) if (!projectOf.has(id)) projectOf.set(id, name);
+  }
+  return database.transaction('rw', [database.tabs], async () => {
+    await database.tabs
+      .filter((t) => t.project !== undefined)
+      .modify((t) => {
+        delete t.project;
+      });
+    const rows = (await database.tabs.bulkGet([...projectOf.keys()])).filter((t): t is TabRecord => !!t);
+    if (rows.length) await database.tabs.bulkPut(rows.map((t) => ({ ...t, project: projectOf.get(t.id)! })));
+    const used = new Set(rows.map((t) => projectOf.get(t.id)!));
+    const projects = [...new Set(groups.map((g) => g.name.trim()))].filter((name) => used.has(name));
+    return { applied: rows.length, projects };
+  });
+}
+
+/** The AI's name for a fold (Pro AI), shown instead of its time. Doesn't move the fold in the list. */
+export async function setSmartName(sessionId: string, smartName: string, database: TabfoldDB = db): Promise<boolean> {
+  const clean = Array.from(smartName.replace(/\s+/g, ' ').trim()).slice(0, 40).join('').trim();
+  if (!clean) return false;
+  return database.transaction('rw', [database.sessions, database.meta], async () => {
+    const session = await database.sessions.get(sessionId);
+    if (!session || session.deletedAt) return false;
+    await database.sessions.put({ ...session, smartName: clean, version: session.version + 1 });
+    await bumpSearchVersion(database);
+    return true;
+  });
 }

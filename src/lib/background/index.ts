@@ -6,9 +6,11 @@ import { countNamedSessions, pruneSnapshots, purgeTrash } from '../repo';
 import { getSettings } from '../settings';
 import { activeRestore, backup, getDeviceId, windowNames } from '../state';
 import type { Command, CommandResponse } from '../messages';
+import { onPageClosed, onPlanAlarm, PLAN_ALARM, PLAN_ALARM_MINUTES, setupPlan } from '../pro/plan';
 import { setupSync, syncTick } from '../sync/engine';
 import { forgetUnfinishedFold } from './fold';
 import { createMenus, onCommand, onMenuClicked } from './menus';
+import { ensureMilestoneStart } from './pro';
 import { route } from './router';
 import { checkRecovery, promoteShutdownSnapshot, scheduleSnapshot, takeSnapshot } from './snapshots';
 import { autoSuspendTick } from './suspend';
@@ -27,6 +29,8 @@ const ALARMS = {
   daily: { name: 'tabfold-daily', periodInMinutes: 24 * 60 },
   /** Catches folded-tab changes made while the worker slept; cheap when nothing changed. */
   sync: { name: 'tabfold-sync', periodInMinutes: 1 },
+  /** Reads the plan from ExtensionPay (a cancelled or failed payment shows up here). */
+  plan: { name: PLAN_ALARM, periodInMinutes: PLAN_ALARM_MINUTES },
 } as const;
 
 const INSTALLED_AT = 'installedAt';
@@ -139,6 +143,7 @@ export function setupBackground(): void {
     else if (alarm.name === ALARMS.autoSuspend.name) safely('auto-suspend', () => autoSuspendTick());
     else if (alarm.name === ALARMS.daily.name) safely('daily', dailyMaintenance);
     else if (alarm.name === ALARMS.sync.name) safely('sync', syncTick);
+    else onPlanAlarm(alarm.name);
   });
 
   // Snapshots follow tab changes, debounced. Events fired while a window is closing are ignored so a
@@ -147,6 +152,8 @@ export function setupBackground(): void {
   browser.tabs.onRemoved.addListener((id, info) => {
     if (!info.isWindowClosing) scheduleSnapshot();
     safely('pending title', () => forgetPendingTitle(id));
+    // An ExtensionPay page Tabfold opened has closed: read the plan once more.
+    safely('plan page', () => onPageClosed('tab', id));
   });
   browser.tabs.onUpdated.addListener((id, change, tab) => {
     if (change.url || change.pinned !== undefined || change.groupId !== undefined) scheduleSnapshot();
@@ -160,6 +167,7 @@ export function setupBackground(): void {
       const names = await windowNames.get();
       if (names[windowId]) await windowNames.set(windowId, '');
     });
+    safely('plan page', () => onPageClosed('window', windowId));
   });
 
   safely('startup', ensureStartup);
@@ -167,6 +175,10 @@ export function setupBackground(): void {
   // A restore or a fold runs inside one worker life; a fresh worker means any recorded one is over.
   safely('restore state', () => activeRestore.set(null));
   safely('fold state', forgetUnfinishedFold);
-  // Chrome sync of folded tabs: listeners now, and a first run shortly after start.
+  // Chrome sync of folded tabs (or the Tabfold account for Pro): listeners now, and a first run shortly after start.
   setupSync();
+  // The plan from ExtensionPay: read at start (at most hourly), and an ExtensionPay page being watched picks up again.
+  setupPlan();
+  // When Tabfold first ran, for the memory milestone (never in its first 3 days).
+  safely('milestone', () => ensureMilestoneStart());
 }
