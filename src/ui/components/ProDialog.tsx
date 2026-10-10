@@ -42,7 +42,7 @@ export function ProInfoHost() {
       title="What Pro adds"
       width={440}
       footer={
-        <Button variant="primary" onClick={hide} autoFocus>
+        <Button variant="primary" onClick={hide} data-autofocus>
           Got it
         </Button>
       }

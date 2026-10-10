@@ -138,11 +138,11 @@ check('a safety snapshot was taken before closing', counts.snapshots >= 1, `${co
 const lastAction = await api.storage('session', 'lastAction');
 check('undo is offered for about 10 seconds', lastAction?.id === saved.actionId && lastAction.expiresAt - Date.now() > 5000);
 
-// Popup right after a save shows the green "freed" banner with Undo
+// A popup opened after a save made elsewhere (here: a message, like a shortcut) offers Undo with the seconds left
 const popupSaved = await open(ext('popup.html'), { width: 400, height: 580 });
 await popupSaved.waitForText('Undo');
 await popupSaved.screenshot(path.join(SHOTS, 'popup-after-save.png'));
-check('popup shows "Freed … · Undo" after a save', await popupSaved.evaluate(() => /Freed ~.*tabs saved/s.test(document.body.innerText)));
+check('popup offers Undo with the seconds left after a save', await popupSaved.evaluate(() => /Saved \d+ tabs\s*·\s*\d+s left/.test(document.body.innerText)));
 await popupSaved.close();
 
 // Undo brings the tabs back and removes the session

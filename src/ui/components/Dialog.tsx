@@ -22,7 +22,11 @@ export function Dialog({
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
+    if (open && !dialog.open) {
+      dialog.showModal();
+      // showModal() focuses the first focusable element; honour the button marked to take focus.
+      dialog.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+    }
     if (!open && dialog.open) dialog.close();
   }, [open]);
   return (
@@ -78,7 +82,12 @@ export function ConfirmHost() {
       footer={
         <>
           <Button onClick={() => finish(false)}>Cancel</Button>
-          <Button variant={request?.danger ? 'danger' : 'primary'} onClick={() => finish(true)} autoFocus>
+          {/* Destructive confirms leave focus on Cancel, so Enter never deletes anything by accident. */}
+          <Button
+            variant={request?.danger ? 'danger' : 'primary'}
+            onClick={() => finish(true)}
+            {...(request?.danger ? {} : { 'data-autofocus': true })}
+          >
             {request?.confirmLabel}
           </Button>
         </>
