@@ -498,10 +498,28 @@ export function setupSync(): void {
   Dexie.on('storagemutated', (parts) => {
     if (touchesFolds(parts as Record<string, unknown>)) scheduleSync(LOCAL_DEBOUNCE_MS);
   });
-  scheduleSync(STARTUP_DELAY_MS);
+  chromeSync.schedule(STARTUP_DELAY_MS);
+  void cloudPullIfDue(STARTUP_DELAY_MS);
+}
+
+/**
+ * Changes here reach the Tabfold account at once (scheduleSync); pulling what other computers
+ * changed is a server request, so the worker's restarts and its 1-minute alarm do it at most this
+ * often per browser session.
+ */
+const CLOUD_PULL_EVERY_MS = 10 * 60_000;
+const CLOUD_PULLED_AT = 'cloudPulledAt';
+
+async function cloudPullIfDue(delayMs = 0): Promise<void> {
+  const now = Date.now();
+  const stored = await browser.storage.session.get(CLOUD_PULLED_AT).catch(() => ({}) as Record<string, unknown>);
+  const last = typeof stored[CLOUD_PULLED_AT] === 'number' ? (stored[CLOUD_PULLED_AT] as number) : 0;
+  if (now - last < CLOUD_PULL_EVERY_MS) return;
+  await browser.storage.session.set({ [CLOUD_PULLED_AT]: now }).catch(() => undefined);
+  cloudSync.schedule(delayMs);
 }
 
 /** From the worker's 1-minute alarm: catches changes made while the worker was asleep. Cheap when nothing changed. */
 export function syncTick(): Promise<unknown> {
-  return Promise.all([chromeSync.run(), cloudSync.run()]);
+  return Promise.all([chromeSync.run(), cloudPullIfDue()]);
 }
