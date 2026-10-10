@@ -1,15 +1,17 @@
 import { browser } from 'wxt/browser';
 import { create } from 'zustand';
 import { resetDataGuard } from '@/lib/dataGuard';
-import { exportFileName, exportHtml } from '@/lib/exporters';
+import { exportCsv, exportFileName, exportHtml, exportJson, exportMarkdown } from '@/lib/exporters';
 import { send } from '@/lib/messages';
-import type { Category } from '@/lib/categories';
 import { clearAllData, exportGraphs, putBackTabs, removeTabsWithSnapshot, type RemovedTabs } from '@/lib/repo';
 import { DEFAULT_SETTINGS } from '@/lib/settings';
 import { lastAction, recoveryOffer, snapshotMirror, UNDO_WINDOW_MS } from '@/lib/state';
-import type { SessionRecord, TabRecord } from '@/lib/types';
+import type { SessionGraph, SessionRecord, TabGroupColor, TabRecord } from '@/lib/types';
 import { dismissToast, toast } from '@/ui/components/Toast';
+import { copyText } from '@/ui/hooks';
+import { errorCode, proErrorText } from '@/ui/pro';
 import { count, foldTime } from './format';
+import { goToPlans } from './router';
 import { dropUndo, registerUndo } from './undo';
 
 export function errorText(error: unknown): string {
@@ -31,7 +33,7 @@ export async function openFolded(tab: TabRecord, active: boolean): Promise<void>
 }
 
 /** "Open all" on a group: the tabs open as one Chrome tab group in this window and stay in the list. */
-export async function openGroup(tabs: TabRecord[], category: Category): Promise<void> {
+export async function openGroup(tabs: TabRecord[], category: { name: string; color: TabGroupColor }): Promise<void> {
   try {
     const current = await browser.windows.getCurrent().catch(() => undefined);
     const { opened, reason } = await send({
@@ -164,19 +166,47 @@ export function downloadText(fileName: string, text: string, type = 'text/html;c
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-/** Export… in Settings: every folded tab as a standalone HTML page (opens anywhere, imports as bookmarks). */
-export async function exportAll(): Promise<void> {
+export type ExportFormat = 'html' | 'markdown' | 'csv' | 'json';
+
+const EXPORTS: Record<ExportFormat, { extension: string; type: string; make: (graphs: SessionGraph[]) => string }> = {
+  html: { extension: 'html', type: 'text/html;charset=utf-8', make: (graphs) => exportHtml(graphs) },
+  markdown: { extension: 'md', type: 'text/markdown;charset=utf-8', make: (graphs) => exportMarkdown(graphs) },
+  csv: { extension: 'csv', type: 'text/csv;charset=utf-8', make: (graphs) => exportCsv(graphs) },
+  json: { extension: 'json', type: 'application/json;charset=utf-8', make: (graphs) => exportJson(graphs) },
+};
+
+/**
+ * Export… in Settings: every folded tab as a standalone HTML page (opens anywhere, imports as
+ * bookmarks), or on Pro as Markdown, CSV or JSON. Returns how many tabs went into the file.
+ */
+export async function exportAll(format: ExportFormat = 'html'): Promise<number> {
   try {
     const graphs = await exportGraphs();
     const tabs = graphs.reduce((n, g) => n + g.windows.reduce((m, w) => m + w.tabs.length, 0), 0);
     if (tabs === 0) {
       toast('Nothing to export yet.');
-      return;
+      return 0;
     }
-    downloadText(exportFileName(), exportHtml(graphs));
+    const { extension, type, make } = EXPORTS[format];
+    downloadText(exportFileName().replace(/\.html$/, `.${extension}`), make(graphs), type);
     toast(`Exported ${count(tabs, 'tab')}.`);
+    return tabs;
   } catch (error) {
     toast(errorText(error), { tone: 'error' });
+    return 0;
+  }
+}
+
+/** "Copy as context for AI" on a group (Pro AI): Markdown with a short summary, onto the clipboard. */
+export async function copyAsContext(tabs: TabRecord[], name: string): Promise<void> {
+  try {
+    const { markdown } = await send({ type: 'ai-context', tabRecordIds: tabs.map((t) => t.id), name });
+    const ok = await copyText(markdown);
+    if (ok) toast(`Copied ${count(tabs.length, 'tab')} as context`, { tone: 'success' });
+    else toast('Couldn’t copy to the clipboard. Click the page, then try again.', { tone: 'error' });
+  } catch (error) {
+    if (errorCode(error) === 'needs-pro-ai') goToPlans();
+    else toast(proErrorText(error), { tone: 'error' });
   }
 }
 

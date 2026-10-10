@@ -1,28 +1,72 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronDown, ChevronRight, Ellipsis, ExternalLink, RotateCcw, Trash, X } from 'lucide-react';
-import { groupByCategory, type CategoryGroup, type CategoryId } from '@/lib/categories';
-import type { TabRecord } from '@/lib/types';
+import { ChevronDown, ChevronRight, ClipboardCopy, Ellipsis, ExternalLink, RotateCcw, Trash, X } from 'lucide-react';
+import { groupByCategory } from '@/lib/categories';
+import type { Project } from '@/lib/pro/types';
+import type { TabGroupColor, TabRecord } from '@/lib/types';
 import { displayHost } from '@/lib/urls';
 import { Favicon } from '@/ui/components/Favicon';
 import { IncognitoMark } from '@/ui/components/IncognitoMark';
+import { ProTag } from '@/ui/components/ProBits';
 import { cx } from '@/ui/cx';
 import { modKey, useNow } from '@/ui/hooks';
-import { openFolded, openGroup, removeGroup, removeOne, undoRemoval, useRemovals, type Removal } from './actions';
+import { copyAsContext, openFolded, openGroup, removeGroup, removeOne, undoRemoval, useRemovals, type Removal } from './actions';
 import { ago, count } from './format';
+import { goToPlans } from './router';
 
 /** Rows a group shows before "Show N more". */
 const FIRST_ROWS = 6;
-/** The newest groups start open; the rest start collapsed. */
-const OPEN_GROUPS = 2;
+/** The newest groups start open (by site); by project only the first one does. */
+const OPEN_GROUPS = { site: 2, project: 1 } as const;
+
+export type GroupBy = 'site' | 'project';
+
+/** A group in the list: a kind of site, or (Pro AI, By project) a project or "Everything else". */
+export interface ListGroup {
+  id: string;
+  name: string;
+  color: TabGroupColor;
+  /** Newest first. */
+  items: TabRecord[];
+}
+
+export const EVERYTHING_ELSE = 'Everything else';
+
+/**
+ * Group folded tabs by kind of site (groups ordered by their newest tab), or by project in the
+ * projects' order with a grey "Everything else" last for tabs in no project.
+ */
+export function groupTabs(tabs: TabRecord[], by: GroupBy, projects: Project[]): ListGroup[] {
+  if (by === 'site' || projects.length === 0) {
+    return groupByCategory(tabs, (t) => t.url, (t) => t.savedAt).map((g) => ({
+      id: `site:${g.category.id}`,
+      name: g.category.name,
+      color: g.category.color,
+      items: g.items,
+    }));
+  }
+  const byName = new Map<string, TabRecord[]>(projects.map((p) => [p.name, []]));
+  const rest: TabRecord[] = [];
+  for (const tab of tabs) {
+    const list = tab.project !== undefined ? byName.get(tab.project) : undefined;
+    (list ?? rest).push(tab);
+  }
+  const newestFirst = (a: TabRecord, b: TabRecord) => b.savedAt - a.savedAt;
+  const groups: ListGroup[] = projects
+    .map((p) => ({ id: `project:${p.name}`, name: p.name, color: p.color, items: byName.get(p.name)!.sort(newestFirst) }))
+    .filter((g) => g.items.length > 0);
+  if (rest.length) groups.push({ id: 'project:*', name: EVERYTHING_ELSE, color: 'grey', items: rest.sort(newestFirst) });
+  return groups;
+}
 
 const SIZE = { head: 48, row: 34, more: 32, end: 8 } as const;
+const NO_PROJECTS: Project[] = [];
 
 type Item =
-  | { type: 'head'; key: string; group: CategoryGroup<TabRecord>; live: TabRecord[]; first: boolean; expanded: boolean }
+  | { type: 'head'; key: string; group: ListGroup; live: TabRecord[]; first: boolean; expanded: boolean }
   | { type: 'row'; key: string; tab: TabRecord }
   | { type: 'removed'; key: string; removal: Removal }
-  | { type: 'more'; key: string; id: CategoryId; hidden: number }
+  | { type: 'more'; key: string; id: string; hidden: number }
   | { type: 'end'; key: string };
 
 function sizeOf(item: Item): number {
@@ -44,14 +88,29 @@ export const SECONDARY_SM =
 
 /**
  * Every folded tab, grouped by kind of site (Min-List): groups ordered by their newest tab, newest
- * first inside a group, the two newest groups open. A slim index on the left jumps to a group. The
- * list is virtualised (only the rows on screen exist), so 10,000+ tabs scroll smoothly.
+ * first inside a group, the two newest groups open. By project (Pro-List-Projects), the projects
+ * come in their own order with "Everything else" last. A slim index on the left jumps to a group.
+ * The list is virtualised (only the rows on screen exist), so 10,000+ tabs scroll smoothly.
  */
-export function GroupedList({ tabs, scrollRef }: { tabs: TabRecord[]; scrollRef: RefObject<HTMLElement | null> }) {
+export function GroupedList({
+  tabs,
+  scrollRef,
+  groupBy = 'site',
+  projects = NO_PROJECTS,
+  canCopyContext = false,
+}: {
+  tabs: TabRecord[];
+  scrollRef: RefObject<HTMLElement | null>;
+  groupBy?: GroupBy;
+  projects?: Project[];
+  /** Pro AI: "Copy as context for AI" in a group's menu (others see a Pro AI tag that opens the plans). */
+  canCopyContext?: boolean;
+}) {
   const removals = useRemovals((s) => s.removals);
-  const [expanded, setExpanded] = useState<Partial<Record<CategoryId, boolean>>>({});
-  const [showAll, setShowAll] = useState<Partial<Record<CategoryId, boolean>>>({});
-  const [menuFor, setMenuFor] = useState<CategoryId | null>(null);
+  const [expanded, setExpanded] = useState<Partial<Record<string, boolean>>>({});
+  const [showAll, setShowAll] = useState<Partial<Record<string, boolean>>>({});
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const by: GroupBy = groupBy === 'project' && projects.length > 0 ? 'project' : 'site';
   // Times ("2 min ago") refresh every minute.
   const now = useNow(true, 60_000);
 
@@ -59,16 +118,16 @@ export function GroupedList({ tabs, scrollRef }: { tabs: TabRecord[]; scrollRef:
   const { groups, liveIds } = useMemo(() => {
     const live = new Set(tabs.map((t) => t.id));
     const ghosts = [...removals.values()].filter((r) => !live.has(r.tab.id)).map((r) => r.tab);
-    return { groups: groupByCategory([...tabs, ...ghosts], (t) => t.url, (t) => t.savedAt), liveIds: live };
-  }, [tabs, removals]);
+    return { groups: groupTabs([...tabs, ...ghosts], by, projects), liveIds: live };
+  }, [tabs, removals, by, projects]);
 
   const { items, heads } = useMemo(() => {
     const out: Item[] = [];
-    const headIndex = new Map<CategoryId, number>();
+    const headIndex = new Map<string, number>();
     groups.forEach((group, index) => {
-      const id = group.category.id;
+      const id = group.id;
       const live = group.items.filter((t) => liveIds.has(t.id));
-      const isOpen = expanded[id] ?? index < OPEN_GROUPS;
+      const isOpen = expanded[id] ?? index < OPEN_GROUPS[by];
       headIndex.set(id, out.length);
       out.push({ type: 'head', key: `h:${id}`, group, live, first: index === 0, expanded: isOpen });
       if (!isOpen) return;
@@ -82,7 +141,7 @@ export function GroupedList({ tabs, scrollRef }: { tabs: TabRecord[]; scrollRef:
       out.push({ type: 'end', key: `e:${id}` });
     });
     return { items: out, heads: headIndex };
-  }, [groups, liveIds, expanded, showAll, removals]);
+  }, [groups, liveIds, expanded, showAll, removals, by]);
 
   const listRef = useRef<HTMLDivElement>(null);
   const [listTop, setListTop] = useState(0);
@@ -105,14 +164,14 @@ export function GroupedList({ tabs, scrollRef }: { tabs: TabRecord[]; scrollRef:
   const scroller = scrollRef.current;
   const atEnd = !!scroller && scroller.scrollTop > 0 && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
   const offset = (virtualizer.scrollOffset ?? 0) - listTop + (atEnd ? (scroller?.clientHeight ?? 0) - 48 : 32);
-  let current: CategoryId | undefined = groups[0]?.category.id;
+  let current: string | undefined = groups[0]?.id;
   for (const group of groups) {
-    const index = heads.get(group.category.id) ?? 0;
+    const index = heads.get(group.id) ?? 0;
     const start = virtualizer.measurementsCache[index]?.start;
-    if (start !== undefined && start - listTop <= offset) current = group.category.id;
+    if (start !== undefined && start - listTop <= offset) current = group.id;
   }
 
-  const jump = (id: CategoryId) => {
+  const jump = (id: string) => {
     setExpanded((e) => ({ ...e, [id]: true }));
     const index = heads.get(id);
     if (index !== undefined) requestAnimationFrame(() => virtualizer.scrollToIndex(index, { align: 'start' }));
@@ -136,9 +195,12 @@ export function GroupedList({ tabs, scrollRef }: { tabs: TabRecord[]; scrollRef:
 
   return (
     <>
-      <nav aria-label="Jump to a group" className="sticky top-6 col-start-1 row-start-2 mt-[9px] flex w-44 flex-col gap-0.5 self-start max-[1319px]:hidden">
+      <nav
+        aria-label={by === 'project' ? 'Jump to a project' : 'Jump to a group'}
+        className="sticky top-6 col-start-1 row-start-2 mt-[9px] flex w-44 flex-col gap-0.5 self-start max-[1319px]:hidden"
+      >
         {groups.map((group) => {
-          const id = group.category.id;
+          const id = group.id;
           const head = items[heads.get(id) ?? -1];
           const n = head?.type === 'head' ? head.live.length : 0;
           const active = id === current;
@@ -156,8 +218,10 @@ export function GroupedList({ tabs, scrollRef }: { tabs: TabRecord[]; scrollRef:
                 active ? 'bg-hover font-semibold text-text' : 'text-text-2',
               )}
             >
-              <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ background: `var(--cg-${group.category.color})` }} />
-              <span className="min-w-0 flex-1 truncate">{group.category.name}</span>
+              <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ background: `var(--cg-${group.color})` }} />
+              <span dir="auto" className="min-w-0 flex-1 truncate">
+                {group.name}
+              </span>
               <span className="text-small font-normal text-text-3">{n.toLocaleString()}</span>
             </a>
           );
@@ -167,7 +231,7 @@ export function GroupedList({ tabs, scrollRef }: { tabs: TabRecord[]; scrollRef:
       <div ref={listRef} className="relative col-start-2 row-start-2" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map((v) => {
           const item = items[v.index]!;
-          const menuOpen = item.type === 'head' && menuFor === item.group.category.id;
+          const menuOpen = item.type === 'head' && menuFor === item.group.id;
           return (
             <div
               key={v.key}
@@ -178,8 +242,9 @@ export function GroupedList({ tabs, scrollRef }: { tabs: TabRecord[]; scrollRef:
                 <GroupHead
                   item={item}
                   menuOpen={menuOpen}
-                  onToggle={() => setExpanded((e) => ({ ...e, [item.group.category.id]: !item.expanded }))}
-                  onMenu={(open) => setMenuFor(open ? item.group.category.id : null)}
+                  canCopyContext={canCopyContext}
+                  onToggle={() => setExpanded((e) => ({ ...e, [item.group.id]: !item.expanded }))}
+                  onMenu={(open) => setMenuFor(open ? item.group.id : null)}
                 />
               ) : item.type === 'row' ? (
                 <Row tab={item.tab} now={now} />
@@ -205,16 +270,18 @@ export function GroupedList({ tabs, scrollRef }: { tabs: TabRecord[]; scrollRef:
 function GroupHead({
   item,
   menuOpen,
+  canCopyContext,
   onToggle,
   onMenu,
 }: {
   item: Extract<Item, { type: 'head' }>;
   menuOpen: boolean;
+  canCopyContext: boolean;
   onToggle: () => void;
   onMenu: (open: boolean) => void;
 }) {
   const { group, live, expanded, first } = item;
-  const name = group.category.name;
+  const name = group.name;
   const trigger = useRef<HTMLButtonElement>(null);
   const wasOpen = useRef(false);
   // Closing the menu with Escape (or after its action) puts focus back on ⋯.
@@ -246,8 +313,10 @@ function GroupHead({
           ) : (
             <ChevronRight size={16} strokeWidth={2} aria-hidden className="shrink-0 text-text-3" />
           )}
-          <span aria-hidden className="size-2.5 shrink-0 rounded-full" style={{ background: `var(--cg-${group.category.color})` }} />
-          <span className="truncate">{name}</span>
+          <span aria-hidden className="size-2.5 shrink-0 rounded-full" style={{ background: `var(--cg-${group.color})` }} />
+          <span dir="auto" className="truncate">
+            {name}
+          </span>
           <span className="shrink-0 font-normal text-text-3">{count(n, 'tab')}</span>
         </button>
       </h2>
@@ -257,7 +326,7 @@ function GroupHead({
             type="button"
             title={`Opens all ${count(n, 'tab')} in this window. They stay in the list.`}
             disabled={n === 0}
-            onClick={() => void openGroup(live, group.category)}
+            onClick={() => void openGroup(live, group)}
             className={SECONDARY_SM}
           >
             Open all
@@ -279,11 +348,40 @@ function GroupHead({
               <Ellipsis size={16} strokeWidth={1.75} aria-hidden />
             </button>
             {menuOpen && (
-              <div role="menu" aria-label={`More for ${name}`} className="anim-in absolute top-[34px] right-0 z-30 w-[232px] rounded-card border border-border bg-surface p-1 shadow-pop">
+              <div
+                role="menu"
+                aria-label={`More for ${name}`}
+                onKeyDown={(e) => {
+                  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+                  e.preventDefault();
+                  const items = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[role=menuitem]:not(:disabled)')];
+                  const at = items.indexOf(document.activeElement as HTMLButtonElement);
+                  items[(at + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+                }}
+                className="anim-in absolute top-[34px] right-0 z-30 w-[290px] rounded-card border border-border bg-surface p-1 shadow-pop"
+              >
                 <button
                   type="button"
                   role="menuitem"
                   autoFocus
+                  disabled={n === 0}
+                  onClick={() => {
+                    onMenu(false);
+                    if (canCopyContext) void copyAsContext(live, name);
+                    else goToPlans();
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left hover:bg-hover focus-visible:bg-hover focus-visible:outline-none disabled:opacity-50"
+                >
+                  <ClipboardCopy size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-accent-text" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-semibold">Copy as context for AI</span>
+                    <span className="block text-meta text-text-3">Titles and links, ready for Claude, ChatGPT or Cursor</span>
+                  </span>
+                  {!canCopyContext && <ProTag label="Pro AI" />}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
                   disabled={n === 0}
                   onClick={() => {
                     onMenu(false);

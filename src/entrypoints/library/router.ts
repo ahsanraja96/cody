@@ -3,13 +3,13 @@ import { useEffect, useState } from 'react';
 /**
  * The full list's hash routes, shared with the popup's links: #/ the list, #/settings opens
  * Settings over it, #/how is "How Tabfold frees memory", #/import opens Import from OneTab over the
- * list. Anything unknown is the list.
+ * list, #/pro is the plans page (Pro-Plans). Anything unknown is the list.
  */
-export type Route = 'list' | 'settings' | 'how' | 'import';
+export type Route = 'list' | 'settings' | 'how' | 'import' | 'pro';
 
 export function parseHash(hash: string): Route {
   const path = hash.replace(/^#\/?/, '').split(/[?/]/)[0];
-  return path === 'settings' || path === 'how' || path === 'import' ? path : 'list';
+  return path === 'settings' || path === 'how' || path === 'import' || path === 'pro' ? path : 'list';
 }
 
 export function hashOf(route: Route): string {
@@ -34,4 +34,9 @@ export function useRoute(): [Route, (route: Route, options?: { replace?: boolean
     setRoute(next);
   };
   return [route, navigate];
+}
+
+/** Go to the plans page from anywhere in the full list (Settings, menus, notices). */
+export function goToPlans(): void {
+  if (parseHash(location.hash) !== 'pro') location.hash = hashOf('pro');
 }
