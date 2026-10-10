@@ -1,4 +1,6 @@
 import { browser } from 'wxt/browser';
+import type { ActiveFold } from './state';
+import type { TabGroupColor } from './types';
 
 /**
  * Commands the popup and library send to the service worker. The worker owns every tab and window
@@ -75,7 +77,18 @@ export type Command =
   | { type: 'take-snapshot'; reason?: 'manual' | 'before-import' }
   | { type: 'dismiss-recovery' }
   /** After the database was wiped: turn the copy of the last snapshot kept in chrome.storage into a session. */
-  | { type: 'recover-from-mirror' };
+  | { type: 'recover-from-mirror' }
+  /**
+   * Fold: save every tab in every normal window, then close them. Pinned tabs (per the setting)
+   * and tabs playing sound stay open; tabs already folded are not saved twice. Progress is kept
+   * in `activeFold` (state.ts) and broadcast as `fold-progress`, so a popup that closes and
+   * reopens mid-fold picks it up.
+   */
+  | { type: 'fold' }
+  /** Open folded tabs ("Open all" on a group). With `asGroup`, they open as one Chrome tab group. */
+  | { type: 'open-tabs'; tabRecordIds: string[]; asGroup?: { name: string; color: TabGroupColor }; windowId?: number }
+  /** Push folded tabs to Chrome sync now (normally it runs a few seconds after each change). */
+  | { type: 'sync-now' };
 
 export interface DuplicateTab extends TabRef {
   sessionId: string;
@@ -150,6 +163,22 @@ export interface SuspendOutcome {
   keptAwake: Array<TabRef & { reason: KeptAwakeReason }>;
 }
 
+/** The computer's memory, read with chrome.system.memory. Null when the reading isn't available. */
+export interface MemoryReading {
+  /** Bytes free before the fold. */
+  freeBefore: number | null;
+  /** Bytes free about 2 seconds after the tabs closed. */
+  freeAfter: number | null;
+  capacity: number | null;
+}
+
+export interface FoldOutcome extends SaveOutcome {
+  foldId: string;
+  /** Tabs that stayed open on purpose. */
+  stayedOpen: { pinned: number; audible: number };
+  memory: MemoryReading;
+}
+
 export interface CommandResults {
   'preflight-save': PreflightResult;
   save: SaveOutcome;
@@ -164,6 +193,9 @@ export interface CommandResults {
   'take-snapshot': { snapshotId: number | null };
   'dismiss-recovery': { ok: true };
   'recover-from-mirror': { sessionId: string | null };
+  fold: FoldOutcome;
+  'open-tabs': { opened: number };
+  'sync-now': { ok: boolean };
 }
 
 export type CommandResponse<T> = { ok: true; data: T } | { ok: false; error: string; code?: string };
@@ -199,7 +231,8 @@ export type WorkerEvent =
       windowCount: number;
       sessionId: string | null;
     }
-  | { type: 'restore-done'; restoreId: string; outcome: RestoreOutcome };
+  | { type: 'restore-done'; restoreId: string; outcome: RestoreOutcome }
+  | { type: 'fold-progress'; fold: ActiveFold };
 
 export function isWorkerEvent(message: unknown): message is { __tabfoldEvent: true; event: WorkerEvent } {
   return !!message && typeof message === 'object' && (message as { __tabfoldEvent?: boolean }).__tabfoldEvent === true;

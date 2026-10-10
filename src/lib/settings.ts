@@ -29,6 +29,8 @@ export interface Settings {
   suggestKeywords: boolean;
   askKeywordsOnSingleSave: boolean;
   backupReminder: boolean;
+  /** Share the newest folded tabs through Chrome sync (no account; works when signed in to Chrome). */
+  syncWithChrome: boolean;
 }
 
 /** Calls and meeting sites are never suspended; tabs using a camera or mic can't be detected without reading pages. */
@@ -59,6 +61,7 @@ export const DEFAULT_SETTINGS: Settings = {
   suggestKeywords: true,
   askKeywordsOnSingleSave: true,
   backupReminder: true,
+  syncWithChrome: true,
 };
 
 export const AUTO_SUSPEND_CHOICES = [5, 10, 15, 30, 60, 120, 240];

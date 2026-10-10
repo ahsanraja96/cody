@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser';
+import type { FoldOutcome, TabRef } from './messages';
 import type { CapturedWindow } from './types';
 
 /**
@@ -52,6 +53,37 @@ export interface ActiveRestore {
   startedAt: number;
 }
 
+/**
+ * A fold in progress or just finished. Phases: saving (writing to the list), closing (tabs closing,
+ * `closed` of `total`), waiting (some tabs are showing Chrome's "Leave site?" dialog, listed in
+ * `waiting`), done (with the outcome). Kept in session storage so a reopened popup shows it.
+ */
+export interface ActiveFold {
+  foldId: string;
+  phase: 'saving' | 'closing' | 'waiting' | 'done' | 'failed';
+  /** Tabs being folded (saved and to close). */
+  total: number;
+  closed: number;
+  waiting: TabRef[];
+  startedAt: number;
+  finishedAt?: number;
+  outcome?: FoldOutcome;
+  error?: string;
+}
+
+/**
+ * Chrome sync of folded tabs. `syncedTabs` are in Chrome sync (the newest ones, up to the limit);
+ * `localOnly` stay on this computer because sync is full. Chrome doesn't tell extensions whether
+ * the person is signed in, so "synced" means written to Chrome's sync storage.
+ */
+export interface SyncStatus {
+  state: 'off' | 'syncing' | 'synced' | 'error';
+  syncedTabs: number;
+  localOnly: number;
+  at: number;
+  error?: string;
+}
+
 /** Chrome downloaded a new version; it installs when the pages reload (see runtime.onUpdateAvailable). */
 export interface UpdateReady {
   version: string;
@@ -103,6 +135,8 @@ const DATA_GUARD = 'dataGuard';
 const SNAPSHOT_MIRROR = 'snapshotMirror';
 const GROUPS_UNAVAILABLE = 'groupsUnavailable';
 const PENDING_TITLES = 'pendingTitles';
+const ACTIVE_FOLD = 'activeFold';
+const SYNC_STATUS = 'syncStatus';
 
 async function getKey<T>(area: 'local' | 'session', key: string): Promise<T | undefined> {
   const result = await browser.storage[area].get(key);
@@ -209,4 +243,17 @@ export const groupsUnavailable = {
 export const pendingTitles = {
   get: async () => (await getKey<Record<string, string>>('session', PENDING_TITLES)) ?? {},
   set: (value: Record<string, string>) => browser.storage.session.set({ [PENDING_TITLES]: value }),
+};
+
+export const activeFold = {
+  get: () => getKey<ActiveFold>('session', ACTIVE_FOLD),
+  set: (value: ActiveFold | null) =>
+    value ? browser.storage.session.set({ [ACTIVE_FOLD]: value }) : browser.storage.session.remove(ACTIVE_FOLD),
+  watch: (callback: (value: ActiveFold | undefined) => void) => watchKey('session', ACTIVE_FOLD, callback),
+};
+
+export const syncStatus = {
+  get: () => getKey<SyncStatus>('local', SYNC_STATUS),
+  set: (value: SyncStatus) => browser.storage.local.set({ [SYNC_STATUS]: value }),
+  watch: (callback: (value: SyncStatus | undefined) => void) => watchKey('local', SYNC_STATUS, callback),
 };

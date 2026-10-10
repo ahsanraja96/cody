@@ -576,6 +576,38 @@ export async function removeTabs(tabIds: string[], database: TabfoldDB = db): Pr
   });
 }
 
+/** What `removeTabsWithSnapshot` took away, so Undo can put it back exactly. */
+export interface RemovedTabs {
+  tabs: TabRecord[];
+  windows: WindowRecord[];
+}
+
+/** Remove folded tabs (the × on a row, "Remove all" on a group) and return what Undo needs. */
+export async function removeTabsWithSnapshot(tabIds: string[], database: TabfoldDB = db): Promise<RemovedTabs> {
+  const tabs = (await database.tabs.bulkGet(tabIds)).filter((t): t is TabRecord => !!t);
+  const windowIds = [...new Set(tabs.map((t) => t.windowId))];
+  const windows = (await database.windows.bulkGet(windowIds)).filter((w): w is WindowRecord => !!w);
+  await removeTabs(tabIds, database);
+  return { tabs, windows };
+}
+
+/** Undo a removal: bring the tabs (and any window or session emptied by it) back. */
+export async function putBackTabs(removed: RemovedTabs, database: TabfoldDB = db): Promise<void> {
+  const now = Date.now();
+  await database.transaction('rw', [database.sessions, database.windows, database.tabs, database.meta], async () => {
+    const existing = new Set((await database.windows.bulkGet(removed.windows.map((w) => w.id))).filter(Boolean).map((w) => w!.id));
+    const missing = removed.windows.filter((w) => !existing.has(w.id));
+    if (missing.length) await database.windows.bulkPut(missing);
+    await database.tabs.bulkPut(removed.tabs);
+    for (const sessionId of new Set(removed.tabs.map((t) => t.sessionId))) {
+      const session = await database.sessions.get(sessionId);
+      if (session?.deletedAt) await database.sessions.put({ ...session, deletedAt: 0 });
+      await recomputeSession(sessionId, database, now);
+    }
+    await bumpSearchVersion(database);
+  });
+}
+
 /**
  * Move a saved tab to another window (in the same or another session). `beforeTabId` places it in
  * front of that tab; otherwise it goes last. Moving to a session without a window id uses that

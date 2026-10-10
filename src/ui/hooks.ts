@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { browser, type Browser } from 'wxt/browser';
 import { getSettings, updateSettings, watchSettings, DEFAULT_SETTINGS, type Settings } from '@/lib/settings';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '@/lib/db';
+import { listLiveSessions } from '@/lib/repo';
+import type { SessionRecord, TabRecord } from '@/lib/types';
 import {
+  activeFold,
+  syncStatus,
+  type ActiveFold,
+  type SyncStatus,
   activeRestore,
   groupsUnavailable,
   lastAction,
@@ -62,6 +70,42 @@ export function useActiveRestore(): ActiveRestore | undefined {
     return activeRestore.watch(setValue);
   }, []);
   return value;
+}
+
+/** The fold in progress or just finished (from any page), or undefined. */
+export function useActiveFold(): ActiveFold | undefined {
+  const [value, setValue] = useState<ActiveFold>();
+  useEffect(() => {
+    activeFold.get().then(setValue);
+    return activeFold.watch(setValue);
+  }, []);
+  return value;
+}
+
+/** Chrome sync of folded tabs, or undefined before the first sync. */
+export function useSyncStatus(): SyncStatus | undefined {
+  const [value, setValue] = useState<SyncStatus>();
+  useEffect(() => {
+    syncStatus.get().then(setValue);
+    return syncStatus.watch(setValue);
+  }, []);
+  return value;
+}
+
+export interface FoldedTabs {
+  tabs: TabRecord[];
+  /** Live folds (sessions), newest first: the "Recent folds" strip reads the first few. */
+  folds: SessionRecord[];
+}
+
+/** Every folded tab in a live fold, kept fresh. Undefined while loading. */
+export function useFoldedTabs(): FoldedTabs | undefined {
+  return useLiveQuery(async () => {
+    const folds = [...(await listLiveSessions())].sort((a, b) => b.updatedAt - a.updatedAt);
+    const live = new Set(folds.map((f) => f.id));
+    const tabs = (await db.tabs.toArray()).filter((t) => live.has(t.sessionId));
+    return { tabs, folds };
+  }, []);
 }
 
 /** A downloaded update waiting for the pages to reload (`browser.runtime.reload()` applies it). */

@@ -249,3 +249,19 @@ describe('snapshots', () => {
     expect((await listSnapshots()).map((s) => s.reason)).toEqual(['timer', 'manual', 'shutdown']);
   });
 });
+
+describe('remove with undo', () => {
+  it('puts removed tabs back, including the window and the session they emptied', async () => {
+    const { removeTabsWithSnapshot, putBackTabs } = await import('@/lib/repo');
+    const { sessionId } = await save([['https://a.com', 'https://b.com'], ['https://c.com']]);
+    const all = await db.tabs.where('sessionId').equals(sessionId).toArray();
+    const removed = await removeTabsWithSnapshot(all.map((t) => t.id));
+    expect((await db.sessions.get(sessionId))!.deletedAt).toBeGreaterThan(0);
+    expect(await db.windows.where('sessionId').equals(sessionId).count()).toBe(0);
+    await putBackTabs(removed);
+    const graph = await getSessionGraph(sessionId);
+    expect(graph!.session.deletedAt).toBe(0);
+    expect(graph!.windows.map((w) => w.tabs.map((t) => t.url))).toEqual([['https://a.com', 'https://b.com'], ['https://c.com']]);
+    expect(graph!.session.tabCount).toBe(3);
+  });
+});
