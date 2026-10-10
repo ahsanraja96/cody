@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Check, Plus, Sparkles, X } from 'lucide-react';
+import { Check, Lock, Plus, Sparkles, X } from 'lucide-react';
 import { planLabel, type Plan } from '@/lib/limits';
 import { cx } from '../cx';
 
@@ -126,6 +126,21 @@ export function Badge({ children, tone = 'accent' }: { children: ReactNode; tone
       )}
     >
       {children}
+    </span>
+  );
+}
+
+/** Marks a Pro-only control on Free: a small lock and "Pro". Clicking the control explains, never blocks. */
+export function ProLock({ className }: { className?: string }) {
+  return (
+    <span
+      className={cx(
+        'inline-flex h-4 shrink-0 items-center gap-0.5 rounded bg-accent-soft px-1 text-[10px] font-semibold text-accent-text',
+        className,
+      )}
+    >
+      <Lock size={9} strokeWidth={2.25} aria-hidden />
+      Pro
     </span>
   );
 }
