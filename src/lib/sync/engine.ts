@@ -17,6 +17,9 @@ import { diffItems, META_KEY, SYNC_LIMITS, SYNC_PREFIX, unpack, type SyncLimits 
  * comes in when Chrome delivers it (storage.onChanged) and at startup. Chrome doesn't tell
  * extensions whether the person is signed in, so "synced" means written to chrome.storage.sync.
  * Sync never deletes anything here except tabs the person removed on another computer.
+ *
+ * The same engine syncs with the Tabfold account for Pro (./cloud.ts: every folded tab, on the
+ * Tabfold server). Two runners share the worker; while the account syncs, Chrome sync is off.
  */
 
 /** Why a read or write failed, and what to do about it. */

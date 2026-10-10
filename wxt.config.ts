@@ -9,7 +9,9 @@ import tailwindcss from '@tailwindcss/vite';
  */
 function connectSources(): string {
   const sources = ["'self'", 'https://extensionpay.com'];
-  const api = process.env.WXT_TABFOLD_API?.trim();
+  // WXT has loaded .env files into process.env by the time the manifest is built.
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
+  const api = env.WXT_TABFOLD_API?.trim();
   if (api) {
     try {
       sources.push(new URL(api).origin);

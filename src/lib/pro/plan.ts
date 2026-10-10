@@ -25,11 +25,14 @@ const UNREACHABLE = 'Couldn’t reach ExtensionPay, which handles payments for T
 
 let inFlight: Promise<PlanState> | null = null;
 let lastReadAt = 0;
+let pollTimer: ReturnType<typeof setTimeout> | undefined;
 
-/** For tests: forget the in-memory throttle. */
-export function resetPlanThrottle(): void {
+/** For tests: forget the in-memory throttle and stop polling. */
+export function resetPlanRuntime(): void {
   lastReadAt = 0;
   inFlight = null;
+  clearTimeout(pollTimer);
+  pollTimer = undefined;
 }
 
 /**
@@ -106,8 +109,6 @@ export interface PageWatch {
 const WATCH_KEY = 'planPageWatch';
 export const WATCH_POLL_MS = 5_000;
 export const WATCH_MAX_MS = 15 * 60_000;
-
-let pollTimer: ReturnType<typeof setTimeout> | undefined;
 
 export async function getPageWatch(): Promise<PageWatch | undefined> {
   return (await browser.storage.session.get(WATCH_KEY))[WATCH_KEY] as PageWatch | undefined;
