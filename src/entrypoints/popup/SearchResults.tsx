@@ -20,6 +20,12 @@ export interface SearchNav {
 
 const POPUP_SAVED_LIMIT = 30;
 
+/** The word to show in the "#keyword" hint: the first word typed, when it could be a keyword. */
+function hashWord(query: string): string {
+  const word = query.trim().replace(/^#/, '').split(/\s+/)[0]?.toLowerCase() ?? '';
+  return /^[\p{L}\p{N}][\p{L}\p{N}_-]{0,30}$/u.test(word) ? word : 'keyword';
+}
+
 export function SearchResults({
   query,
   windows,
@@ -191,7 +197,8 @@ export function SearchResults({
         </button>
       )}
       <p className="mx-2 mt-2 text-meta text-text-3">
-        Keyword matches rank first. Type <span className="font-semibold text-text-2">#keyword</span> to match keywords only.
+        Keyword matches rank first. Type <span className="font-semibold text-text-2">#{hashWord(query)}</span> to match keywords
+        only.
       </p>
     </div>
   );

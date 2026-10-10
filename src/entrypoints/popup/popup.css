@@ -1,10 +1,23 @@
-/* Chrome caps popups at 800 x 600. The design is 400 x 580. */
+/*
+ * Chrome caps popups at 800 x 600. The design is 400 x 580: html and body ask for that size, and
+ * the app fills whatever viewport Chrome actually gives (smaller at 125%+ zoom or on short
+ * screens), so the header, actions and footer stay put and only the list scrolls.
+ */
 html,
 body {
   width: 400px;
   height: 580px;
   margin: 0;
   overflow: hidden;
+}
+
+/*
+ * Tailwind's spacing scale is in rem. The shared stylesheet sets html to 13px (the body text size),
+ * which would shrink every gap and height to 13/16 of the design's 4px grid; keep rem at 16px and
+ * the 13px text on body.
+ */
+html {
+  font-size: 16px;
 }
 
 html[data-mode='window'],
@@ -14,5 +27,34 @@ html[data-mode='window'] body {
 }
 
 #root {
-  height: 100%;
+  position: fixed;
+  inset: 0;
+}
+
+/* Bottom sheets (native <dialog>) slide up from the popup's bottom edge. */
+.tf-sheet {
+  animation: tf-sheet-in 180ms var(--ease-out-soft);
+}
+
+@keyframes tf-sheet-in {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+}
+
+/* A window closed in Chrome while the popup is open fades out instead of vanishing. */
+.tf-fade-out {
+  animation: tf-fade-out 160ms var(--ease-out-soft) forwards;
+  pointer-events: none;
+}
+
+@keyframes tf-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+.tf-progress {
+  transition: width 160ms var(--ease-out-soft);
 }
