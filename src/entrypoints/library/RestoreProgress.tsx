@@ -52,7 +52,7 @@ export function RestoreProgressBlock({ progress, onCancel }: { progress: Restore
         </Button>
       </div>
       <ProgressBar done={progress.done} total={progress.total} label="Tabs restored" className="h-1.5 bg-border" />
-      <p className="text-meta text-text-3">Tabs open unloaded and load when you click them.</p>
+      <p className="text-meta text-text-3">Background tabs load once, then sleep until you click them.</p>
     </div>
   );
 }
@@ -74,7 +74,7 @@ export function RestoreProgressFloating({ progress, onCancel }: { progress: Rest
       </div>
       <ProgressBar done={progress.done} total={progress.total} label="Tabs opened" className="mt-2.5 h-1 bg-hover" />
       <p className="mt-2 text-meta text-text-3">
-        {progress.done.toLocaleString()} of {progress.total.toLocaleString()} · tabs load when you click them
+        {progress.done.toLocaleString()} of {progress.total.toLocaleString()} · background tabs sleep until you click them
       </p>
     </div>
   );

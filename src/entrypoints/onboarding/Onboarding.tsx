@@ -171,8 +171,8 @@ export function Onboarding() {
             <WindowsIllustration />
             <h1 className="text-hero font-semibold">Your windows stay separate</h1>
             <p className="text-text-2">
-              Each window is saved as its own named group, with tab groups and pinned tabs. Restore brings back the same windows, and tabs
-              only load when you click them.
+              Each window is saved as its own named group, with tab groups and pinned tabs. Restore brings back the same windows, and background
+              tabs sleep until you click them.
             </p>
             <span className="flex-1" />
             <div className="flex justify-between">

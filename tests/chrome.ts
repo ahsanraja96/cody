@@ -50,6 +50,10 @@ export class FakeChrome {
   tabs: FakeTab[] = [];
   /** Tabs that refuse to close ("Leave site?"). */
   refuseClose = new Set<number>();
+  /** Tabs that stay "loading" (a slow or stuck page). */
+  stuckLoading = new Set<number>();
+  mutedLog: Array<{ id: number; muted: boolean; status: string; discarded: boolean }> = [];
+  discardLog: Array<{ id: number; status: string }> = [];
   fileAccess = false;
   groupsBlocked = false;
   groups: Array<{ id: number; title: string; color: string; collapsed: boolean; windowId: number }> = [];
@@ -184,6 +188,18 @@ export class FakeChrome {
     vi.spyOn(b.tabs, 'get').mockImplementation((async (id: number) => {
       const tab = this.tab(id);
       if (!tab) throw new Error(`No tab with id: ${id}.`);
+      // Pages finish loading by the time anyone looks, unless a test holds them back.
+      if (tab.status === 'loading' && !this.stuckLoading.has(id)) tab.status = 'complete';
+      return this.tabView(tab);
+    }) as never);
+    vi.spyOn(b.tabs, 'update').mockImplementation((async (id: number, info: Browser.tabs.UpdateProperties) => {
+      const tab = this.tab(id);
+      if (!tab) throw new Error(`No tab with id: ${id}.`);
+      if (info.muted !== undefined) this.mutedLog.push({ id, muted: info.muted, status: tab.status, discarded: !!tab.discarded });
+      if (info.active) {
+        for (const t of this.tabs) if (t.windowId === tab.windowId) t.active = false;
+        tab.active = true;
+      }
       return this.tabView(tab);
     }) as never);
     vi.spyOn(b.tabs, 'create').mockImplementation((async (data: Browser.tabs.CreateProperties) => {
@@ -206,6 +222,7 @@ export class FakeChrome {
     vi.spyOn(b.tabs, 'discard').mockImplementation((async (id?: number) => {
       const tab = id !== undefined ? this.tab(id) : undefined;
       if (!tab || tab.active) throw new Error('Cannot discard');
+      this.discardLog.push({ id: tab.id, status: tab.status });
       tab.discarded = true;
       return this.tabView(tab);
     }) as never);

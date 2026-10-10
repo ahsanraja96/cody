@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { fakeBrowser } from 'wxt/testing/fake-browser';
 import { resetGroupsFlagCache } from '@/lib/background/browserState';
 import { onCommand } from '@/lib/background/menus';
-import { cancelRestore, handleRestore, handleRestoreSnapshot } from '@/lib/background/restore';
+import { cancelRestore, handleRestore, handleRestoreSnapshot, sleepWhenLoaded } from '@/lib/background/restore';
 import { describeOpenCopy } from '@/lib/background/restorePlan';
 import { route } from '@/lib/background/router';
 import { handleSave, handleUndo, preflightSave } from '@/lib/background/save';
@@ -361,6 +361,37 @@ describe('suspend inactive: tabs kept awake', () => {
 });
 
 describe('restore', () => {
+  it('lets background tabs load once, muted, before putting them to sleep, so they keep their address', async () => {
+    const { sessionId } = await seed('Lazy', ['https://one.com', 'https://two.com', 'https://three.com']);
+    const outcome = await handleRestore({ type: 'restore', sessionId, mode: 'original' });
+    expect(outcome.opened).toBe(3);
+    const restored = chrome.tabs.filter((t) => ['https://two.com', 'https://three.com'].includes(t.url));
+    expect(restored.map((t) => t.discarded)).toEqual([true, true]);
+    // Discarded only once loaded, never while the page was still on its way.
+    for (const entry of chrome.discardLog) expect(entry.status).toBe('complete');
+    // Muted while loading, unmuted again once asleep.
+    for (const tab of restored) {
+      const log = chrome.mutedLog.filter((m) => m.id === tab.id).map((m) => m.muted);
+      expect(log).toEqual([true, false]);
+    }
+    // The first tab of the window is the one you see: loaded, never muted or discarded.
+    const first = chrome.tabs.find((t) => t.url === 'https://one.com')!;
+    expect(first.discarded).toBeFalsy();
+    expect(chrome.mutedLog.some((m) => m.id === first.id)).toBe(false);
+  });
+
+  it('never puts a tab to sleep before its page exists, and puts slow pages to sleep after the timeout', async () => {
+    const { windowId } = chrome.openWindow(['https://here.com'], { focused: true });
+    const blank = chrome.addTab(windowId, { url: 'about:blank', status: 'loading' });
+    const slow = chrome.addTab(windowId, { url: 'https://slow.com', status: 'loading' });
+    chrome.stuckLoading.add(blank.id);
+    chrome.stuckLoading.add(slow.id);
+    await sleepWhenLoaded(blank.id, 300);
+    await sleepWhenLoaded(slow.id, 300);
+    expect(chrome.tab(blank.id)!.discarded).toBeFalsy();
+    expect(chrome.tab(slow.id)!.discarded).toBe(true);
+  });
+
   it('gives each failure a reason and counts local files that need file access', async () => {
     const { sessionId } = await seed('Mixed', [
       'https://ok.com',

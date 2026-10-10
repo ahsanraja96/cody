@@ -23,7 +23,7 @@ Too many tabs? Tabfold folds them into saved sessions and gives Chrome its memor
 
 **Restore exactly what you had**
 - Bring back the same windows with their tab groups and pinned tabs.
-- Lazy restore: tabs load only when you click them, so restoring 200 tabs won't slow your computer down.
+- Lazy restore: background tabs load a few at a time, then sleep until you click them, so restoring 200 tabs won't slow your computer down.
 
 **Free memory without closing anything**
 - Suspend inactive tabs with Chrome's own tab discarding, by hand or automatically after a set time.

@@ -344,7 +344,7 @@ export function SettingsView({ section, onBack }: { section?: string; onBack?: (
                   <Row
                     tight
                     title="Lazy restore"
-                    hint="Tabs open unloaded and load when you click them, so restoring 200 tabs won't spike memory."
+                    hint="Background tabs load 10 at a time, then sleep until you click them, so restoring 200 tabs won't slow your computer down."
                     control={<Switch label="Lazy restore" checked={settings.lazyRestore} onChange={(v) => update({ lazyRestore: v })} />}
                   />
                 </div>

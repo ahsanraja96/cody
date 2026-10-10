@@ -260,7 +260,7 @@ function SnapshotPreview({ snap, onDelete }: { snap: SnapshotRecord; onDelete: (
             Save as session
           </Button>
           <span className="ml-2 text-small text-text-3">
-            Opens {plural(windows.length, 'window')}.{settings.lazyRestore ? ' Tabs load when you click them.' : ''}
+            Opens {plural(windows.length, 'window')}.{settings.lazyRestore ? ' Background tabs sleep until you click them.' : ''}
           </span>
         </div>
       </div>

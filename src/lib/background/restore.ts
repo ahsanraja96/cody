@@ -39,7 +39,6 @@ export function cancelRestore(restoreId: string): boolean {
   return true;
 }
 
-/** Turn a freshly created background tab into a discarded one so it loads only when clicked. */
 async function discardQuietly(tabId: number): Promise<number> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -50,6 +49,33 @@ async function discardQuietly(tabId: number): Promise<number> {
     }
   }
   return tabId;
+}
+
+/** How long a background tab may take to load before it is put to sleep anyway (if its page exists). */
+const LOAD_TIMEOUT_MS = 12_000;
+
+/**
+ * Lazy restore: let a background tab load once, muted, so it has its real address, title and icon,
+ * then put it to sleep. A tab discarded before its page commits has no address and no title: it
+ * looks like a blank tab in the tab strip and can wake up to an empty page. Tabs open in batches of
+ * 10, so at most 10 load at a time.
+ */
+export async function sleepWhenLoaded(tabId: number, timeoutMs = LOAD_TIMEOUT_MS): Promise<number> {
+  const end = Date.now() + timeoutMs;
+  let tab = await browser.tabs.get(tabId).catch(() => undefined);
+  while (tab && tab.status !== 'complete' && Date.now() < end) {
+    await sleep(200);
+    tab = await browser.tabs.get(tabId).catch(() => undefined);
+  }
+  let id = tabId;
+  // Closed, or the user switched to it meanwhile: leave it as it is.
+  if (tab && !tab.active && !tab.discarded) {
+    const committed = !!tab.url && tab.url !== 'about:blank';
+    // Never put a tab to sleep before its page exists: it would wake up blank.
+    if (committed) id = await discardQuietly(tabId);
+  }
+  await browser.tabs.update(id, { muted: false }).catch(() => undefined);
+  return id;
 }
 
 interface RestoreOptions {
@@ -185,7 +211,11 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
           try {
             const created = await browser.tabs.create({ windowId, url: tab.url, active, pinned: tab.pinned });
             let id = created.id;
-            if (id !== undefined && options.lazy && !active) id = await discardQuietly(id);
+            if (id !== undefined && options.lazy && !active) {
+              // Muted while it loads once in the background, so restoring never blasts audio.
+              await browser.tabs.update(id, { muted: true }).catch(() => undefined);
+              id = await sleepWhenLoaded(id);
+            }
             return { tab, id };
           } catch {
             failed.push({ url: tab.url, title: tab.title, reason: 'error' });

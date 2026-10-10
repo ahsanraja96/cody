@@ -90,7 +90,7 @@ function RestoringCard({
       >
         <div className="tf-progress h-full rounded-sm bg-accent" style={{ width: `${Math.round((done / total) * 100)}%` }} />
       </div>
-      {lazy && <p className="text-meta text-text-2">Tabs open unloaded and load when you click them.</p>}
+      {lazy && <p className="text-meta text-text-2">Background tabs load once, then sleep until you click them.</p>}
     </div>
   );
 }
