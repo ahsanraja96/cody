@@ -32,6 +32,8 @@ export interface LastAction {
    * elsewhere). Undo reopens these too.
    */
   reopenOnly?: Array<{ url: string; title: string; pinned: boolean; sourceWindowId?: number }>;
+  /** The save came from an Incognito window: undo reopens the tabs in Incognito, never in a normal window. */
+  incognito?: boolean;
   /** Saved tabs whose browser tab refused to close ("Leave site?"). Undo removes them but doesn't reopen them. */
   notClosedTabIds?: string[];
 }

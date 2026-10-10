@@ -205,6 +205,22 @@ describe('save: Incognito, long addresses and what changes while saving', () => 
     expect(urls).not.toContain('https://private2.com');
   });
 
+  it('undoes an Incognito save back into Incognito, never into a normal window', async () => {
+    chrome.openWindow(['https://normal.com'], { focused: true });
+    const { windowId } = chrome.openWindow(['https://private.com', 'https://private2.com'], { incognito: true });
+    const outcome = await save({ scope: 'window', windowId, includeIncognito: true });
+    expect(outcome.closedTabs).toBe(2);
+    expect(await handleUndo(outcome.actionId!)).toEqual({ undone: true });
+    const reopened = chrome.tabs.filter((t) => t.url.startsWith('https://private'));
+    const viaNewWindow = chrome.createdWindows.find((d) => d?.incognito);
+    if (reopened.length) {
+      for (const tab of reopened) expect(chrome.windows.find((w) => w.id === tab.windowId)?.incognito).toBe(true);
+    } else {
+      expect(viaNewWindow?.url).toEqual(['https://private.com', 'https://private2.com']);
+    }
+    expect(chrome.createdWindows.filter((d) => !d?.incognito)).toHaveLength(0);
+  });
+
   it('keeps Chrome open when saving its only (Incognito) window', async () => {
     const { windowId } = chrome.openWindow(['https://private.com'], { incognito: true, focused: true });
     await save({ scope: 'window', windowId, includeIncognito: true });

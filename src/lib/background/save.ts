@@ -201,6 +201,8 @@ export function handleSave(command: SaveCommand): Promise<SaveOutcome> {
       newTabsLeftOpen: 0,
     };
     if (plan.windows.length === 0) return empty;
+    const incognitoIds = new Set(windows.filter((w) => w.incognito).map((w) => w.id));
+    const savedFromIncognito = !!command.includeIncognito && plan.windows.some((w) => incognitoIds.has(w.sourceWindowId));
 
     if (command.close && command.scope !== 'tabs') {
       await takeSnapshot('before-bulk-close').catch((error) => console.warn('[tabfold] safety snapshot failed', error));
@@ -293,6 +295,7 @@ export function handleSave(command: SaveCommand): Promise<SaveOutcome> {
         closed: command.close,
         ...(reopenOnly.length ? { reopenOnly } : {}),
         ...(notClosedTabIds.length ? { notClosedTabIds } : {}),
+        ...(savedFromIncognito ? { incognito: true } : {}),
       };
       await lastAction.set(action);
     }
@@ -327,7 +330,9 @@ export async function handleUndo(actionId: string): Promise<{ undone: boolean; r
   if (Date.now() > action.expiresAt + 2000) return { undone: false, reason: 'Undo is no longer available.' };
   await lastAction.set({ ...action, undone: true });
 
-  if (action.closed) {
+  if (action.closed && action.incognito) {
+    await reopenInIncognito(action);
+  } else if (action.closed) {
     // Tabs that refused to close are still open: don't open a second copy.
     const stillOpen = new Set(action.notClosedTabIds ?? []);
     const rows = (await db.tabs.bulkGet(action.savedTabIds)).filter((t): t is TabRecord => !!t && !stillOpen.has(t.id));
@@ -365,4 +370,29 @@ export async function handleUndo(actionId: string): Promise<{ undone: boolean; r
   if (action.createdSession) await deleteSessionsForever([action.sessionId]);
   else if (action.savedTabIds.length) await removeTabs(action.savedTabIds);
   return { undone: true };
+}
+
+/**
+ * Undo of an Incognito save: put the tabs back in their Incognito window (or a new Incognito
+ * window), never in a normal one, so they stay out of normal history.
+ */
+async function reopenInIncognito(action: LastAction): Promise<void> {
+  const stillOpen = new Set(action.notClosedTabIds ?? []);
+  const rows = (await db.tabs.bulkGet(action.savedTabIds)).filter((t): t is TabRecord => !!t && !stillOpen.has(t.id));
+  const byWindow = new Map<string, TabRecord[]>();
+  for (const row of rows) byWindow.set(row.windowId, [...(byWindow.get(row.windowId) ?? []), row]);
+  for (const [windowId, tabs] of byWindow) {
+    const urls = tabs.sort((a, b) => a.order - b.order).map((t) => t.url);
+    const source = action.windowSources[windowId];
+    const target = source !== undefined ? await browser.windows.get(source).catch(() => undefined) : undefined;
+    try {
+      if (target?.incognito && target.id !== undefined) {
+        for (const url of urls) await browser.tabs.create({ windowId: target.id, url, active: false });
+      } else {
+        await browser.windows.create({ incognito: true, url: urls });
+      }
+    } catch (error) {
+      console.warn('[tabfold] could not reopen Incognito tabs', error);
+    }
+  }
 }
