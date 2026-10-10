@@ -29,15 +29,23 @@ export function sessionLimitReached(namedSessionCount: number, plan: Plan = CURR
   return namedSessionCount >= limitsFor(plan).namedSessions;
 }
 
-/** Can this set of tags be applied, given the tags already in use across all sessions? */
+/**
+ * Can this session's tags become `nextTags`? Allowed when the total in use stays within the plan,
+ * and always allowed when every tag is one already in use (a downgraded user with more tags than
+ * Free allows can still reuse and remove them; only new tags need Pro).
+ */
 export function tagsAllowed(
-  existingTags: Iterable<string>,
+  otherTags: Iterable<string>,
   nextTags: Iterable<string>,
   plan: Plan = CURRENT_PLAN,
+  currentTags: Iterable<string> = [],
 ): boolean {
-  const all = new Set(existingTags);
-  for (const tag of nextTags) all.add(tag);
-  return all.size <= limitsFor(plan).tags;
+  const others = [...otherTags];
+  const next = [...nextTags];
+  const after = new Set([...others, ...next]);
+  if (after.size <= limitsFor(plan).tags) return true;
+  const known = new Set([...others, ...currentTags]);
+  return next.every((tag) => known.has(tag));
 }
 
 export function planLabel(plan: Plan = CURRENT_PLAN): string {

@@ -30,7 +30,7 @@ export function suspendDecision(
 }
 
 function emptyOutcome(): SuspendOutcome {
-  return { suspended: 0, skipped: { active: 0, pinned: 0, audible: 0, protectedSite: 0, already: 0, failed: 0 }, freedBytes: 0 };
+  return { suspended: 0, skipped: { active: 0, pinned: 0, audible: 0, protectedSite: 0, already: 0, failed: 0 }, freedBytes: 0, keptAwake: [] };
 }
 
 async function discardTabs(tabs: TabLike[], idleBefore?: number): Promise<SuspendOutcome> {

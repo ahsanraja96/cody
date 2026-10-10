@@ -9,8 +9,17 @@ export interface Settings {
   /** "Save all" covers every window; off means only the current window. */
   includeAllWindows: boolean;
   skipBlankPages: boolean;
-  duplicates: 'skip' | 'keep';
+  /**
+   * Tabs already saved in any session: skip them (they still close, and stay saved where they are),
+   * save them again, or ask in the popup. Saves without a page to ask in (shortcuts, menus) treat
+   * "ask" as "keep" so nothing is ever dropped silently.
+   */
+  duplicates: 'skip' | 'keep' | 'ask';
+  /** Before closing tabs that are playing audio, ask whether to keep them open. */
+  warnAudioBeforeClose: boolean;
   afterRestore: 'keep' | 'trash';
+  /** The last choice in the restore options dialog. */
+  lastRestoreMode: 'original' | 'current' | 'new-window';
   lazyRestore: boolean;
   autoSuspend: boolean;
   autoSuspendMinutes: number;
@@ -37,8 +46,10 @@ export const DEFAULT_SETTINGS: Settings = {
   keepPinnedOpen: true,
   includeAllWindows: true,
   skipBlankPages: true,
-  duplicates: 'skip',
+  duplicates: 'ask',
+  warnAudioBeforeClose: true,
   afterRestore: 'keep',
+  lastRestoreMode: 'original',
   lazyRestore: true,
   autoSuspend: true,
   autoSuspendMinutes: 30,

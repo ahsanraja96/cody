@@ -16,6 +16,8 @@ import {
   restoreFromTrash,
   saveCapture,
   setSessionTags,
+  renameTag,
+  deleteTag,
   setTabKeywords,
   trashSessions,
   TRASH_RETENTION_MS,
@@ -114,6 +116,43 @@ describe('editing', () => {
     await setSessionTags(a.sessionId, ['one', 'two', 'three', 'four', 'five']);
     await setSessionTags(b.sessionId, ['one', 'five']);
     await expect(setSessionTags(b.sessionId, ['six'])).rejects.toBeInstanceOf(LimitError);
+  });
+
+  it('lets a session over the tag limit (after a downgrade) reuse and remove tags, but not add new ones', async () => {
+    const a = await save([['https://a.com']]);
+    const b = await save([['https://b.com']]);
+    // Written directly, as a downgraded Pro user's data would be.
+    await db.sessions.update(a.sessionId, { tags: ['t1', 't2', 't3', 't4', 't5', 't6', 't7'] });
+    await setSessionTags(b.sessionId, ['t1', 't6']);
+    expect((await db.sessions.get(b.sessionId))!.tags).toEqual(['t1', 't6']);
+    await expect(setSessionTags(b.sessionId, ['t1', 'brand-new'])).rejects.toBeInstanceOf(LimitError);
+    await setSessionTags(a.sessionId, ['t1', 't2']);
+    expect((await db.sessions.get(a.sessionId))!.tags).toEqual(['t1', 't2']);
+    // Back under the limit: new tags are fine again.
+    await setSessionTags(b.sessionId, ['t1', 'brand-new']);
+  });
+
+  it('swaps a tag only this session uses for a new one without hitting the limit', async () => {
+    const a = await save([['https://a.com']]);
+    const b = await save([['https://b.com']]);
+    await setSessionTags(a.sessionId, ['one', 'two', 'three', 'four']);
+    await setSessionTags(b.sessionId, ['five']);
+    await setSessionTags(b.sessionId, ['six']);
+    expect((await db.sessions.get(b.sessionId))!.tags).toEqual(['six']);
+  });
+
+  it('renames a tag everywhere (merging duplicates) and deletes a tag from every session', async () => {
+    const a = await save([['https://a.com']]);
+    const b = await save([['https://b.com']]);
+    await setSessionTags(a.sessionId, ['client', 'react']);
+    await setSessionTags(b.sessionId, ['client']);
+    expect(await renameTag('client', 'react')).toBe(2);
+    expect((await db.sessions.get(a.sessionId))!.tags).toEqual(['react']);
+    expect((await db.sessions.get(b.sessionId))!.tags).toEqual(['react']);
+    await trashSessions([b.sessionId]);
+    expect(await deleteTag('react')).toBe(2);
+    expect((await db.sessions.get(a.sessionId))!.tags).toEqual([]);
+    expect((await db.sessions.get(b.sessionId))!.tags).toEqual([]);
   });
 });
 

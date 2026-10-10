@@ -32,6 +32,9 @@ async function dispatch(command: Command): Promise<CommandResults[Command['type'
     case 'dismiss-recovery':
       await dismissRecovery();
       return { ok: true };
+    case 'recover-from-mirror':
+      // Contract stub: implemented by the background work.
+      return { sessionId: null };
   }
 }
 

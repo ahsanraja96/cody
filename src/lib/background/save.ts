@@ -51,11 +51,18 @@ export async function preflightSave(command: PreflightCommand): Promise<Prefligh
   const plan = await buildPlan(windows, { ...command, audible: 'close' });
   const saving = new Set(plan.windows.flatMap((w) => w.tabs.map((t) => t.sourceTabId)));
   const audible = windows.flatMap((w) => w.tabs ?? []).filter((t) => t.audible && saving.has(t.id)).length;
+  // Contract stub: richer details (long addresses, duplicates) are filled in by the background work.
   return {
     tabs: saving.size,
     windows: plan.windows.length,
     audible,
     pinnedKept: plan.kept.pinned,
+    closeTabs: plan.closeTabIds.length,
+    freedBytes: 0,
+    audibleTabs: [],
+    longUrls: [],
+    duplicates: [],
+    nothingToSave: plan.windows.length === 0,
   };
 }
 
@@ -116,6 +123,8 @@ export function handleSave(command: SaveCommand): Promise<SaveOutcome> {
       freedBytes: 0,
       intoUnsorted: false,
       actionId: null,
+      truncatedTabs: 0,
+      newTabsLeftOpen: 0,
     };
     if (plan.windows.length === 0) return empty;
 
@@ -149,7 +158,12 @@ export function handleSave(command: SaveCommand): Promise<SaveOutcome> {
       closedTabs = outcome.closed;
       const failedIds = new Set(outcome.failed.map((t) => t.id));
       freedBytes = estimateBytes(plan.closeTabIds.filter((id) => loaded.has(id) && !failedIds.has(id)).length);
-      failedToClose = outcome.failed.map((t) => ({ title: t.title ?? '', url: t.url || t.pendingUrl || '' }));
+      failedToClose = outcome.failed.map((t) => ({
+        tabId: t.id ?? -1,
+        windowId: t.windowId ?? -1,
+        title: t.title ?? '',
+        url: t.url || t.pendingUrl || '',
+      }));
     }
 
     let actionId: string | null = null;
@@ -186,6 +200,8 @@ export function handleSave(command: SaveCommand): Promise<SaveOutcome> {
       freedBytes,
       intoUnsorted: result.intoUnsorted,
       actionId,
+      truncatedTabs: plan.windows.flatMap((w) => w.tabs).filter((t) => t.urlTruncated).length,
+      newTabsLeftOpen: 0,
     };
   });
 }

@@ -188,14 +188,14 @@ type RestoreCommand = Extract<Command, { type: 'restore' }>;
 export async function handleRestore(command: RestoreCommand): Promise<RestoreOutcome> {
   const restoreId = crypto.randomUUID();
   const graph = await getSessionGraph(command.sessionId);
-  if (!graph) return { restoreId, opened: 0, failed: [], cancelled: false, trashed: false };
+  if (!graph) return { restoreId, opened: 0, failed: [], cancelled: false, needsFileAccess: 0, trashed: false };
   const windows = command.windowRecordId ? graph.windows.filter((w) => w.id === command.windowRecordId) : graph.windows;
 
   if (!command.force && command.mode === 'original') {
     const urls = windows.flatMap((w) => w.tabs.map((t) => t.url));
     const openCopy = findOpenCopy(urls, await getNormalWindows());
     if (openCopy !== undefined) {
-      return { restoreId, opened: 0, failed: [], cancelled: false, alreadyOpenWindowId: openCopy, trashed: false };
+      return { restoreId, opened: 0, failed: [], cancelled: false, alreadyOpenWindowId: openCopy, needsFileAccess: 0, trashed: false };
     }
   }
 
@@ -218,7 +218,7 @@ export async function handleRestore(command: RestoreCommand): Promise<RestoreOut
     await trashSessions([graph.session.id]);
     trashed = true;
   }
-  return { restoreId, ...result, trashed };
+  return { restoreId, ...result, needsFileAccess: result.failed.filter((f) => f.reason === 'file-access').length, trashed };
 }
 
 type SnapshotRestoreCommand = Extract<Command, { type: 'restore-snapshot' }>;
@@ -226,7 +226,7 @@ type SnapshotRestoreCommand = Extract<Command, { type: 'restore-snapshot' }>;
 export async function handleRestoreSnapshot(command: SnapshotRestoreCommand): Promise<RestoreOutcome> {
   const restoreId = crypto.randomUUID();
   const snapshot = await db.snapshots.get(command.snapshotId);
-  if (!snapshot) return { restoreId, opened: 0, failed: [], cancelled: false, trashed: false };
+  if (!snapshot) return { restoreId, opened: 0, failed: [], cancelled: false, needsFileAccess: 0, trashed: false };
   const settings = await getSettings();
   const result = await restoreWindows(fromCaptured(snapshot.windows), {
     mode: command.mode,
@@ -240,7 +240,7 @@ export async function handleRestoreSnapshot(command: SnapshotRestoreCommand): Pr
     await recoveryOffer.set(null);
     await setAttentionBadge(false);
   }
-  return { restoreId, ...result, trashed: false };
+  return { restoreId, ...result, needsFileAccess: result.failed.filter((f) => f.reason === 'file-access').length, trashed: false };
 }
 
 export async function handleSnapshotToSession(snapshotId: number): Promise<{ sessionId: string | null }> {

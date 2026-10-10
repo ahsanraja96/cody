@@ -15,8 +15,24 @@ export interface ScreenArea {
   height: number;
 }
 
+/** An open browser tab, as reported back to a page (for "Show tab" and per-tab lists). */
+export interface TabRef {
+  tabId: number;
+  windowId: number;
+  title: string;
+  url: string;
+}
+
 export type Command =
-  | { type: 'preflight-save'; scope: SaveScope; windowId?: number; tabIds?: number[] }
+  | {
+      type: 'preflight-save';
+      scope: SaveScope;
+      windowId?: number;
+      tabIds?: number[];
+      targetSessionId?: string | null;
+      /** Only with scope 'window' or 'tabs': the user chose to save an Incognito window. */
+      includeIncognito?: boolean;
+    }
   | {
       type: 'save';
       scope: SaveScope;
@@ -27,6 +43,13 @@ export type Command =
       keywordsByTabId?: Record<number, string[]>;
       targetSessionId?: string | null;
       name?: string;
+      /**
+       * Tabs already saved elsewhere: the answer from the popup's "Ask" sheet. Without it the
+       * setting decides, and a setting of "ask" saves them again.
+       */
+      duplicates?: 'skip' | 'keep';
+      /** Only with scope 'window' or 'tabs': the user confirmed saving an Incognito window. */
+      includeIncognito?: boolean;
     }
   | { type: 'undo'; actionId: string }
   | {
@@ -37,6 +60,11 @@ export type Command =
       currentWindowId?: number;
       screen?: ScreenArea;
       force?: boolean;
+      /**
+       * Open new windows without focusing them and focus the first one at the end, so the popup
+       * (which closes when it loses focus) can show progress.
+       */
+      background?: boolean;
     }
   | { type: 'restore-snapshot'; snapshotId: number; mode: RestoreMode; currentWindowId?: number; screen?: ScreenArea }
   | { type: 'snapshot-to-session'; snapshotId: number }
@@ -45,13 +73,32 @@ export type Command =
   | { type: 'suspend-inactive'; windowId?: number }
   | { type: 'suspend-tab'; tabId: number }
   | { type: 'take-snapshot'; reason?: 'manual' | 'before-import' }
-  | { type: 'dismiss-recovery' };
+  | { type: 'dismiss-recovery' }
+  /** After the database was wiped: turn the copy of the last snapshot kept in chrome.storage into a session. */
+  | { type: 'recover-from-mirror' };
+
+export interface DuplicateTab extends TabRef {
+  sessionId: string;
+  sessionName: string;
+}
 
 export interface PreflightResult {
+  /** Tabs that would be saved. */
   tabs: number;
   windows: number;
   audible: number;
   pinnedKept: number;
+  /** Tabs that would close (saved tabs plus skipped new tab pages). */
+  closeTabs: number;
+  /** Estimated memory freed by closing the loaded ones. */
+  freedBytes: number;
+  audibleTabs: TabRef[];
+  /** Addresses longer than Tabfold stores in full (8,192 characters); `length` is the full length. */
+  longUrls: Array<TabRef & { length: number }>;
+  /** Tabs already saved in a live session (the target session or any other). */
+  duplicates: DuplicateTab[];
+  /** Only pinned (kept open), blank or Tabfold pages: Save would do nothing. */
+  nothingToSave: boolean;
 }
 
 export interface SaveOutcome {
@@ -61,15 +108,22 @@ export interface SaveOutcome {
   closedTabs: number;
   skippedDuplicates: number;
   keptOpen: { pinned: number; audible: number };
-  failedToClose: Array<{ title: string; url: string }>;
+  /** Tabs that refused to close (for example a "Leave site?" prompt). They are saved. */
+  failedToClose: TabRef[];
   freedBytes: number;
   intoUnsorted: boolean;
   actionId: string | null;
+  /** Tabs whose address was too long and was saved in part. */
+  truncatedTabs: number;
+  /** Tabs opened in the saved windows while the save ran; they were left open. */
+  newTabsLeftOpen: number;
 }
 
 export interface RestoreFailure {
   url: string;
   title: string;
+  /** 'file-access': a file:// page and "Allow access to file URLs" is off. 'blocked': Chrome never lets extensions open it. */
+  reason?: 'file-access' | 'blocked' | 'error';
 }
 
 export interface RestoreOutcome {
@@ -79,13 +133,21 @@ export interface RestoreOutcome {
   cancelled: boolean;
   /** Set instead of restoring when the same window is already open. */
   alreadyOpenWindowId?: number;
+  /** Details for the "already open" prompt: the windows holding the open copy. */
+  alreadyOpen?: { windowIds: number[]; openTabs: number; totalTabs: number };
+  /** Local files that couldn't open because file access is off (also listed in `failed`). */
+  needsFileAccess: number;
   trashed: boolean;
 }
+
+export type KeptAwakeReason = 'active' | 'pinned' | 'audible' | 'protectedSite' | 'failed';
 
 export interface SuspendOutcome {
   suspended: number;
   skipped: { active: number; pinned: number; audible: number; protectedSite: number; already: number; failed: number };
   freedBytes: number;
+  /** Each tab that was eligible by idleness but kept loaded, with why (active tabs included). */
+  keptAwake: Array<TabRef & { reason: KeptAwakeReason }>;
 }
 
 export interface CommandResults {
@@ -101,6 +163,7 @@ export interface CommandResults {
   'suspend-tab': SuspendOutcome;
   'take-snapshot': { snapshotId: number | null };
   'dismiss-recovery': { ok: true };
+  'recover-from-mirror': { sessionId: string | null };
 }
 
 export type CommandResponse<T> = { ok: true; data: T } | { ok: false; error: string; code?: string };
@@ -125,7 +188,18 @@ export async function send<C extends Command>(command: C): Promise<CommandResult
 }
 
 /** Events the worker broadcasts to open extension pages. */
-export type WorkerEvent = { type: 'restore-progress'; restoreId: string; done: number; total: number };
+export type WorkerEvent =
+  | {
+      type: 'restore-progress';
+      restoreId: string;
+      done: number;
+      total: number;
+      /** 0-based window being opened, out of windowCount. */
+      windowIndex: number;
+      windowCount: number;
+      sessionId: string | null;
+    }
+  | { type: 'restore-done'; restoreId: string; outcome: RestoreOutcome };
 
 export function isWorkerEvent(message: unknown): message is { __tabfoldEvent: true; event: WorkerEvent } {
   return !!message && typeof message === 'object' && (message as { __tabfoldEvent?: boolean }).__tabfoldEvent === true;

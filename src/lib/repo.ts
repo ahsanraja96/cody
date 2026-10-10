@@ -332,11 +332,42 @@ export async function setSessionPinned(id: string, pinned: boolean, database: Ta
 
 export async function setSessionTags(id: string, tags: string[], database: TabfoldDB = db): Promise<void> {
   const clean = cleanKeywords(tags).slice(0, 10);
-  const others = (await liveRange(database.sessions).toArray()).filter((s) => s.id !== id).flatMap((s) => s.tags);
-  if (!tagsAllowed(others, clean)) {
-    throw new LimitError('Free includes up to 5 tags. Remove one, or reuse a tag you already have.', 'tags');
+  const live = await liveRange(database.sessions).toArray();
+  const others = live.filter((s) => s.id !== id).flatMap((s) => s.tags);
+  const current = live.find((s) => s.id === id)?.tags ?? [];
+  if (!tagsAllowed(others, clean, CURRENT_PLAN, current)) {
+    throw new LimitError('Free includes up to 5 tags. Pick a tag you already use, or remove one first.', 'tags');
   }
   await patchSession(id, { tags: clean }, database);
+}
+
+/** Rename a tag on every session (merging into the new name if it already exists). Never adds a tag. */
+export async function renameTag(from: string, to: string, database: TabfoldDB = db): Promise<number> {
+  const [next] = cleanKeywords([to]);
+  if (!next || next === from) return 0;
+  return database.transaction('rw', [database.sessions, database.meta], async () => {
+    const rows = await database.sessions.where('tags').equals(from).toArray();
+    const now = Date.now();
+    for (const row of rows) {
+      const tags = cleanKeywords(row.tags.map((t) => (t === from ? next : t)));
+      await database.sessions.put({ ...row, tags, updatedAt: now, version: row.version + 1 });
+    }
+    if (rows.length) await bumpSearchVersion(database);
+    return rows.length;
+  });
+}
+
+/** Remove a tag from every session, including ones in Trash. The sessions themselves stay. */
+export async function deleteTag(tag: string, database: TabfoldDB = db): Promise<number> {
+  return database.transaction('rw', [database.sessions, database.meta], async () => {
+    const rows = await database.sessions.where('tags').equals(tag).toArray();
+    const now = Date.now();
+    for (const row of rows) {
+      await database.sessions.put({ ...row, tags: row.tags.filter((t) => t !== tag), updatedAt: now, version: row.version + 1 });
+    }
+    if (rows.length) await bumpSearchVersion(database);
+    return rows.length;
+  });
 }
 
 export async function duplicateSession(id: string, database: TabfoldDB = db): Promise<string | null> {

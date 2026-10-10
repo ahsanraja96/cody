@@ -1,7 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { browser, type Browser } from 'wxt/browser';
 import { getSettings, updateSettings, watchSettings, DEFAULT_SETTINGS, type Settings } from '@/lib/settings';
-import { lastAction, recoveryOffer, windowNames, type LastAction, type RecoveryOffer } from '@/lib/state';
+import {
+  activeRestore,
+  groupsUnavailable,
+  lastAction,
+  recoveryOffer,
+  updateReady,
+  windowNames,
+  type ActiveRestore,
+  type LastAction,
+  type RecoveryOffer,
+  type UpdateReady,
+} from '@/lib/state';
 import { SearchClient } from '@/lib/search/client';
 import type { SearchDoc } from '@/lib/search/engine';
 import type { SearchResponse } from '@/lib/search/protocol';
@@ -43,6 +54,36 @@ export function useRecoveryOffer(): RecoveryOffer | undefined {
   return value;
 }
 
+/** The restore in progress (from any page), or undefined. */
+export function useActiveRestore(): ActiveRestore | undefined {
+  const [value, setValue] = useState<ActiveRestore>();
+  useEffect(() => {
+    activeRestore.get().then(setValue);
+    return activeRestore.watch(setValue);
+  }, []);
+  return value;
+}
+
+/** A downloaded update waiting for the pages to reload (`browser.runtime.reload()` applies it). */
+export function useUpdateReady(): UpdateReady | undefined {
+  const [value, setValue] = useState<UpdateReady>();
+  useEffect(() => {
+    updateReady.get().then(setValue);
+    return updateReady.watch(setValue);
+  }, []);
+  return value;
+}
+
+/** True when Chrome refuses the tab groups API (for example an organisation policy). */
+export function useGroupsUnavailable(): boolean {
+  const [value, setValue] = useState(false);
+  useEffect(() => {
+    groupsUnavailable.get().then(setValue);
+    return groupsUnavailable.watch((v) => setValue(v === true));
+  }, []);
+  return value;
+}
+
 /** Re-render every second while a countdown is visible. */
 export function useNow(active: boolean, intervalMs = 1000): number {
   const [now, setNow] = useState(Date.now());
@@ -58,6 +99,7 @@ export interface OpenWindow {
   id: number;
   name: string;
   focused: boolean;
+  incognito: boolean;
   tabs: Browser.tabs.Tab[];
 }
 
@@ -65,7 +107,8 @@ export interface OpenWindow {
  * Open normal windows with their tabs, kept fresh from tab and window events (batched, so a page
  * load's many update events cause one refresh). Closing a window while the popup is open is fine.
  */
-export function useOpenWindows(): { windows: OpenWindow[]; loaded: boolean } {
+export function useOpenWindows(options: { includeIncognito?: boolean } = {}): { windows: OpenWindow[]; loaded: boolean } {
+  const includeIncognito = options.includeIncognito ?? false;
   const [windows, setWindows] = useState<OpenWindow[]>([]);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
@@ -79,12 +122,13 @@ export function useOpenWindows(): { windows: OpenWindow[]; loaded: boolean } {
       if (!alive) return;
       setWindows(
         all
-          .filter((w) => !w.incognito && w.id !== undefined)
+          .filter((w) => (includeIncognito || !w.incognito) && w.id !== undefined)
           .map((w) => ({
             id: w.id!,
             name: names[w.id!] ?? '',
             focused: w.focused,
-            tabs: (w.tabs ?? []).filter((t) => !t.incognito).sort((a, b) => a.index - b.index),
+            incognito: w.incognito,
+            tabs: (w.tabs ?? []).filter((t) => includeIncognito || !t.incognito).sort((a, b) => a.index - b.index),
           })),
       );
       setLoaded(true);
@@ -128,7 +172,7 @@ export function useOpenWindows(): { windows: OpenWindow[]; loaded: boolean } {
       browser.tabs.onUpdated.removeListener(onUpdated);
       stopNames();
     };
-  }, []);
+  }, [includeIncognito]);
   return { windows, loaded };
 }
 
