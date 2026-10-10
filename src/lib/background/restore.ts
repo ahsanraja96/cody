@@ -371,6 +371,34 @@ export async function handleSnapshotToSession(snapshotId: number): Promise<{ ses
   return { sessionId: result.savedTabIds.length ? result.sessionId : null };
 }
 
+type OpenTabsCommand = Extract<Command, { type: 'open-tabs' }>;
+
+/**
+ * "Open all": open folded tabs in the current (or given) normal window, in the background and
+ * lazily like a restore (each loads once, muted, then sleeps). With `asGroup` they become one
+ * Chrome tab group with that name and colour. The tabs stay in the list.
+ */
+export async function handleOpenTabs(command: OpenTabsCommand): Promise<{ opened: number }> {
+  const rows = (await db.tabs.bulkGet(command.tabRecordIds)).filter((t): t is NonNullable<typeof t> => !!t);
+  if (rows.length === 0) return { opened: 0 };
+  const settings = await getSettings();
+  const group = command.asGroup;
+  const tabs: RestoreTab[] = rows.map((row) => ({
+    url: row.url,
+    title: row.title,
+    pinned: false,
+    groupName: group ? group.name : null,
+    groupColor: group ? safeGroupColor(group.color) : null,
+    groupCollapsed: false,
+  }));
+  const result = await restoreWindows([{ name: '', bounds: null, state: null, focused: false, tabs }], {
+    mode: 'current',
+    lazy: settings.lazyRestore,
+    currentWindowId: command.windowId,
+  });
+  return { opened: result.opened };
+}
+
 export async function handleOpenSavedTab(
   tabRecordId: string,
   active: boolean,

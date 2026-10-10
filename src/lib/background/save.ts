@@ -11,7 +11,7 @@ import {
   type SaveOutcome,
   type TabRef,
 } from '../messages';
-import { deleteSessionsForever, findSavedCopies, removeTabs, saveCapture } from '../repo';
+import { deleteSessionsForever, findSavedCopies, removeTabs, saveCapture, type SaveResult } from '../repo';
 import { getSettings, type Settings } from '../settings';
 import { getDeviceId, lastAction, UNDO_WINDOW_MS, windowNames, type LastAction } from '../state';
 import type { CapturedTab, TabRecord } from '../types';
@@ -34,9 +34,13 @@ type SaveCommand = Extract<Command, { type: 'save' }>;
 type PreflightCommand = Extract<Command, { type: 'preflight-save' }>;
 type BrowserTab = Browser.tabs.Tab;
 
-const saveOnce = singleFlight<SaveOutcome>(800);
+/**
+ * Saves and folds share one queue: two of them never race to close the same tabs, and the same
+ * request arriving twice (double-click, shortcut plus button) runs once.
+ */
+export const saveQueue = singleFlight<SaveOutcome>(800);
 
-async function buildPlan(
+export async function buildPlan(
   windows: Browser.windows.Window[],
   command: Pick<SaveCommand, 'scope' | 'windowId' | 'tabIds' | 'audible' | 'keywordsByTabId' | 'includeIncognito'>,
   settings: Settings,
@@ -58,19 +62,19 @@ async function buildPlan(
   });
 }
 
-function tabsById(windows: Browser.windows.Window[]): Map<number, BrowserTab> {
+export function tabsById(windows: Browser.windows.Window[]): Map<number, BrowserTab> {
   const map = new Map<number, BrowserTab>();
   for (const tab of windows.flatMap((w) => w.tabs ?? [])) if (tab.id !== undefined) map.set(tab.id, tab);
   return map;
 }
 
 /** An open tab as pages see it. Addresses are capped like saved ones, so a huge data: URL stays out of messages. */
-function toRef(tab: BrowserTab): TabRef {
+export function toRef(tab: BrowserTab): TabRef {
   const url = capUrl(rawTabUrl(tab)).url;
   return { tabId: tab.id ?? -1, windowId: tab.windowId ?? -1, title: tab.title?.trim() || displayHost(url) || url, url };
 }
 
-function capturedTabs(plan: CapturePlan): CapturedTab[] {
+export function capturedTabs(plan: CapturePlan): CapturedTab[] {
   return plan.windows.flatMap((w) => w.tabs);
 }
 
@@ -117,11 +121,33 @@ export async function preflightSave(command: PreflightCommand): Promise<Prefligh
   };
 }
 
-interface CloseResult {
+export interface CloseResult {
   closed: number;
+  /** Still open a moment after closing (for example showing Chrome's "Leave site?" dialog). */
   failed: BrowserTab[];
   /** Tabs that turned up in the saved windows after planning; they stay open. */
   newTabsLeftOpen: number;
+}
+
+export interface CloseOptions {
+  batchSize?: number;
+  /** After each batch, with how many of the tabs are closed so far. */
+  onBatch?: (closed: number) => Promise<void> | void;
+}
+
+/**
+ * tabs.remove, but never waiting long: Chrome holds the call for a batch until a "Leave site?"
+ * dialog in it is answered (the other tabs close at once).
+ */
+async function removeQuickly(ids: number | number[], ms: number): Promise<void> {
+  await Promise.race([browser.tabs.remove(ids as number[]), sleep(ms)]);
+}
+
+/** Which of these tabs are still open. */
+export async function stillOpen(ids: Iterable<number>): Promise<BrowserTab[]> {
+  const wanted = new Set(ids);
+  if (wanted.size === 0) return [];
+  return (await browser.tabs.query({})).filter((t) => t.id !== undefined && wanted.has(t.id));
 }
 
 /**
@@ -129,7 +155,11 @@ interface CloseResult {
  * and reports tabs that refused to close (for example a "Leave site?" prompt).
  * `planned` holds, per saved browser window, every tab it had when the save was planned.
  */
-async function closeTabsSafely(tabIds: number[], planned: Map<number, Set<number>>): Promise<CloseResult> {
+export async function closeTabsSafely(
+  tabIds: number[],
+  planned: Map<number, Set<number>>,
+  options: CloseOptions = {},
+): Promise<CloseResult> {
   if (tabIds.length === 0) return { closed: 0, failed: [], newTabsLeftOpen: 0 };
   // Re-read windows right before closing: a window may have been opened or dragged meanwhile.
   const windows = await getNormalWindows();
@@ -144,17 +174,39 @@ async function closeTabsSafely(tabIds: number[], planned: Map<number, Set<number
     .filter((w) => w.id !== undefined && planned.has(w.id))
     .flatMap((w) => (w.tabs ?? []).filter((t) => t.id !== undefined && t.id !== keeper && !closing.has(t.id) && !planned.get(w.id!)!.has(t.id)))
     .length;
-  for (let i = 0; i < tabIds.length; i += 50) {
-    const batch = tabIds.slice(i, i + 50);
+  const size = options.batchSize ?? 50;
+  let closedSoFar = 0;
+  for (let i = 0; i < tabIds.length; i += size) {
+    const batch = tabIds.slice(i, i + size);
     try {
-      await browser.tabs.remove(batch);
+      await removeQuickly(batch, 1500);
     } catch {
-      for (const id of batch) await browser.tabs.remove(id).catch(() => undefined);
+      for (const id of batch) await removeQuickly(id, 1000).catch(() => undefined);
+    }
+    if (options.onBatch) {
+      closedSoFar += batch.length - (await stillOpen(batch)).length;
+      await options.onBatch(closedSoFar);
     }
   }
   await sleep(600);
-  const failed = (await browser.tabs.query({})).filter((t) => t.id !== undefined && closing.has(t.id));
+  const failed = await stillOpen(closing);
   return { closed: tabIds.length - failed.length, failed, newTabsLeftOpen };
+}
+
+/** Per saved browser window, every tab it had when the save was planned. */
+export function plannedTabs(plan: CapturePlan, windows: Browser.windows.Window[]): Map<number, Set<number>> {
+  const planned = new Map<number, Set<number>>();
+  for (const window of plan.windows) {
+    const source = windows.find((w) => w.id === window.sourceWindowId);
+    if (source?.id !== undefined) planned.set(source.id, new Set((source.tabs ?? []).map((t) => t.id!).filter((id) => id !== undefined)));
+  }
+  return planned;
+}
+
+/** A tab that refused to close, as pages see it (with what we knew about it before, if Chrome lost it). */
+export function refusedRef(tab: BrowserTab, before: Map<number, BrowserTab>): TabRef {
+  const known = before.get(tab.id!);
+  return toRef({ ...tab, title: tab.title || known?.title, url: tab.url || known?.url, windowId: tab.windowId ?? known?.windowId });
 }
 
 function sourceFor(command: SaveCommand): 'save-all' | 'save-window' | 'save-tabs' {
@@ -180,8 +232,57 @@ export function duplicatesMode(command: Pick<SaveCommand, 'duplicates'>, setting
 }
 
 
+/**
+ * Remember a save for Undo (10 s): what it wrote, and the tabs it closed without writing them
+ * (already saved elsewhere), which Undo reopens too. Returns the action id, or null when there is
+ * nothing to undo.
+ */
+export async function recordUndo(input: {
+  result: SaveResult;
+  plan: CapturePlan;
+  now: number;
+  close: boolean;
+  closedTabs: number;
+  freedBytes: number;
+  /** Browser tabs that never closed. */
+  stillOpen: Set<number>;
+  incognito: boolean;
+}): Promise<string | null> {
+  const { result, plan, close, stillOpen } = input;
+  const reopenOnly: NonNullable<LastAction['reopenOnly']> = close
+    ? result.skippedTabs
+        .filter((s) => s.tab.sourceTabId === undefined || !stillOpen.has(s.tab.sourceTabId))
+        .map((s) => ({ url: s.tab.url, title: s.tab.title, pinned: s.tab.pinned, sourceWindowId: s.sourceWindowId }))
+    : [];
+  if (result.savedTabIds.length === 0 && reopenOnly.length === 0) return null;
+  const actionId = crypto.randomUUID();
+  const notClosedTabIds = [...stillOpen].map((id) => result.tabIdMap.get(id)).filter((id): id is string => !!id);
+  const action: LastAction = {
+    id: actionId,
+    kind: 'save',
+    at: input.now,
+    expiresAt: Date.now() + UNDO_WINDOW_MS,
+    sessionId: result.sessionId,
+    sessionName: result.sessionName,
+    savedTabs: result.savedTabIds.length,
+    closedTabs: input.closedTabs,
+    freedBytes: input.freedBytes,
+    keptOpen: plan.kept,
+    intoUnsorted: result.intoUnsorted,
+    savedTabIds: result.savedTabIds,
+    createdSession: result.createdSession,
+    windowSources: Object.fromEntries(result.windowSources),
+    closed: close,
+    ...(reopenOnly.length ? { reopenOnly } : {}),
+    ...(notClosedTabIds.length ? { notClosedTabIds } : {}),
+    ...(input.incognito ? { incognito: true } : {}),
+  };
+  await lastAction.set(action);
+  return actionId;
+}
+
 export function handleSave(command: SaveCommand): Promise<SaveOutcome> {
-  return saveOnce(saveKey(command), async () => {
+  return saveQueue(saveKey(command), async () => {
     const settings = await getSettings();
     const duplicates = duplicatesMode(command, settings);
     const windows = await getNormalWindows();
@@ -249,56 +350,17 @@ export function handleSave(command: SaveCommand): Promise<SaveOutcome> {
     let newTabsLeftOpen = 0;
     const stillOpen = new Set<number>();
     if (command.close) {
-      const planned = new Map<number, Set<number>>();
-      for (const window of plan.windows) {
-        const source = windows.find((w) => w.id === window.sourceWindowId);
-        if (source?.id !== undefined) planned.set(source.id, new Set((source.tabs ?? []).map((t) => t.id!).filter((id) => id !== undefined)));
-      }
-      const outcome = await closeTabsSafely(plan.closeTabIds, planned);
+      const outcome = await closeTabsSafely(plan.closeTabIds, plannedTabs(plan, windows));
       closedTabs = outcome.closed;
       newTabsLeftOpen = outcome.newTabsLeftOpen;
       for (const tab of outcome.failed) stillOpen.add(tab.id!);
       freedBytes = estimateBytes(
         plan.closeTabIds.filter((id) => byId.has(id) && !byId.get(id)!.discarded && !stillOpen.has(id)).length,
       );
-      failedToClose = outcome.failed.map((t) => {
-        const before = byId.get(t.id!);
-        return toRef({ ...t, title: t.title || before?.title, url: t.url || before?.url, windowId: t.windowId ?? before?.windowId });
-      });
+      failedToClose = outcome.failed.map((t) => refusedRef(t, byId));
     }
 
-    const reopenOnly: NonNullable<LastAction['reopenOnly']> = command.close
-      ? result.skippedTabs
-          .filter((s) => s.tab.sourceTabId === undefined || !stillOpen.has(s.tab.sourceTabId))
-          .map((s) => ({ url: s.tab.url, title: s.tab.title, pinned: s.tab.pinned, sourceWindowId: s.sourceWindowId }))
-      : [];
-
-    let actionId: string | null = null;
-    if (result.savedTabIds.length > 0 || reopenOnly.length > 0) {
-      actionId = crypto.randomUUID();
-      const notClosedTabIds = [...stillOpen].map((id) => result.tabIdMap.get(id)).filter((id): id is string => !!id);
-      const action: LastAction = {
-        id: actionId,
-        kind: 'save',
-        at: now,
-        expiresAt: Date.now() + UNDO_WINDOW_MS,
-        sessionId: result.sessionId,
-        sessionName: result.sessionName,
-        savedTabs: result.savedTabIds.length,
-        closedTabs,
-        freedBytes,
-        keptOpen: plan.kept,
-        intoUnsorted: result.intoUnsorted,
-        savedTabIds: result.savedTabIds,
-        createdSession: result.createdSession,
-        windowSources: Object.fromEntries(result.windowSources),
-        closed: command.close,
-        ...(reopenOnly.length ? { reopenOnly } : {}),
-        ...(notClosedTabIds.length ? { notClosedTabIds } : {}),
-        ...(savedFromIncognito ? { incognito: true } : {}),
-      };
-      await lastAction.set(action);
-    }
+    const actionId = await recordUndo({ result, plan, now, close: command.close, closedTabs, freedBytes, stillOpen, incognito: savedFromIncognito });
 
     return {
       sessionId: result.sessionId || null,

@@ -12,25 +12,22 @@ export default defineConfig({
     description:
       'Save and restore tabs and whole windows, free memory, and find any tab by title, address or keyword.',
     // Minimal permissions: no host permissions and no content scripts. Tabfold never reads web pages.
-    permissions: ['tabs', 'tabGroups', 'storage', 'unlimitedStorage', 'alarms', 'contextMenus', 'favicon'],
+    // system.memory reads the computer's free memory before and after a fold (no install warning).
+    permissions: ['tabs', 'tabGroups', 'storage', 'unlimitedStorage', 'alarms', 'contextMenus', 'favicon', 'system.memory'],
     action: { default_title: 'Tabfold' },
+    // "save-tab" keeps the id earlier versions used, so a shortcut a person changed keeps working.
     commands: {
       _execute_action: {
         suggested_key: { default: 'Alt+Shift+F' },
         description: 'Open Tabfold',
       },
-      'save-all': {
+      fold: {
         suggested_key: { default: 'Ctrl+Shift+S', mac: 'Command+Shift+S' },
-        description: 'Save all tabs and free memory',
-      },
-      // Ctrl/Cmd+Shift+W is Chrome's own "close window" shortcut, so saving a window uses Alt+Shift+W.
-      'save-window': {
-        suggested_key: { default: 'Alt+Shift+W' },
-        description: 'Save this window',
+        description: 'Fold all tabs',
       },
       'save-tab': {
         suggested_key: { default: 'Alt+Shift+S' },
-        description: 'Save this tab',
+        description: 'Fold this tab',
       },
     },
     // In production nothing may talk to the network. Dev mode needs the Vite server, so WXT manages CSP there.

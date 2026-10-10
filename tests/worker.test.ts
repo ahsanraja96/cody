@@ -173,18 +173,20 @@ describe('save: duplicates', () => {
     expect((await save({ scope: 'window', windowId: window.windowId, close: false })).savedTabs).toBe(2);
   });
 
-  it('keyboard shortcuts and menus treat "ask" as "keep"', async () => {
+  it('keyboard shortcuts fold, and never save a tab that is already folded, whatever the old setting says', async () => {
     await seed('Reading list', ['https://dup.com']);
-    await updateSettings({ duplicates: 'ask' });
+    await updateSettings({ duplicates: 'keep' });
     chrome.openWindow(['https://dup.com', 'https://z.com'], { focused: true });
-    await onCommand('save-all');
-    expect(await db.tabs.where('url').equals('https://dup.com').count()).toBe(2);
+    await onCommand('fold');
+    expect(await db.tabs.where('url').equals('https://dup.com').count()).toBe(1);
+    expect(await db.tabs.where('url').equals('https://z.com').count()).toBe(1);
+    expect(chrome.webTabs()).toHaveLength(0);
 
-    await updateSettings({ duplicates: 'skip' });
-    chrome.openWindow(['https://dup.com', 'https://w.com'], { focused: true });
-    await onCommand('save-all');
-    expect(await db.tabs.where('url').equals('https://dup.com').count()).toBe(2);
-    expect(await db.tabs.where('url').equals('https://w.com').count()).toBe(1);
+    const { tabIds } = chrome.openWindow([{ url: 'https://dup.com', active: true }, 'https://w.com'], { focused: true });
+    await onCommand('save-tab');
+    expect(await db.tabs.where('url').equals('https://dup.com').count()).toBe(1);
+    expect(chrome.tab(tabIds[0]!)).toBeUndefined();
+    expect(chrome.tab(tabIds[1]!)).toBeDefined();
   });
 });
 

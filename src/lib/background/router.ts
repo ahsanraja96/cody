@@ -1,6 +1,15 @@
 import { isQuotaError } from '../db';
 import { CommandError, type Command, type CommandResponse, type CommandResults } from '../messages';
-import { cancelRestore, handleOpenSavedTab, handleRestore, handleRestoreSnapshot, handleSnapshotToSession } from './restore';
+import { syncNow } from '../sync/engine';
+import { handleFold } from './fold';
+import {
+  cancelRestore,
+  handleOpenSavedTab,
+  handleOpenTabs,
+  handleRestore,
+  handleRestoreSnapshot,
+  handleSnapshotToSession,
+} from './restore';
 import { handleSave, handleUndo, preflightSave } from './save';
 import { dismissRecovery, recoverFromMirror, takeSnapshot } from './snapshots';
 import { suspendInactive, suspendTab } from './suspend';
@@ -32,23 +41,12 @@ async function dispatch(command: Command): Promise<CommandResults[Command['type'
     case 'dismiss-recovery':
       await dismissRecovery();
       return { ok: true };
-    case 'fold': {
-      // Contract stub: the background work adds progress, the memory reading and closing feedback.
-      const outcome = await handleSave({ type: 'save', scope: 'all', close: true, audible: 'keep', duplicates: 'skip' });
-      return {
-        ...outcome,
-        foldId: outcome.actionId ?? crypto.randomUUID(),
-        stayedOpen: { pinned: outcome.keptOpen.pinned, audible: outcome.keptOpen.audible },
-        memory: { freeBefore: null, freeAfter: null, capacity: null },
-      };
-    }
+    case 'fold':
+      return handleFold();
     case 'open-tabs':
-      // Contract stub: opens the tabs one by one; the background work adds tab groups.
-      for (const id of command.tabRecordIds) await handleOpenSavedTab(id, false, command.windowId);
-      return { opened: command.tabRecordIds.length };
+      return handleOpenTabs(command);
     case 'sync-now':
-      // Contract stub: Chrome sync is added by the background work.
-      return { ok: false };
+      return syncNow();
     case 'recover-from-mirror':
       return recoverFromMirror();
   }

@@ -63,6 +63,12 @@ export class FakeChrome {
   focusCalls: number[] = [];
   /** Runs before every windows.getAll (to simulate a tab opening while a save runs). */
   beforeWindowsRead?: () => Promise<void> | void;
+  /** Runs before every tabs.query (to simulate someone answering "Leave site?" while a fold waits). */
+  beforeTabsQuery?: () => void;
+  /** chrome.system.memory.getInfo; unset means the API isn't available. */
+  memoryInfo?: () => { capacity: number; availableCapacity: number };
+  /** tabs.group throws (for example an organisation policy). */
+  groupFails = false;
 
   openWindow(inputs: TabInput[], extra: Partial<FakeWindow> = {}): { windowId: number; tabIds: number[] } {
     const window: FakeWindow = {
@@ -132,6 +138,12 @@ export class FakeChrome {
     return { ...tab, highlighted: tab.active, selected: tab.active, autoDiscardable: true, frozen: false } as Browser.tabs.Tab;
   }
 
+  /** A tab that showed "Leave site?" closes after all (the person chose Leave). */
+  closeNow(id: number): void {
+    this.refuseClose.delete(id);
+    this.removeTab(id);
+  }
+
   private removeTab(id: number): void {
     const tab = this.tab(id);
     if (!tab || this.refuseClose.has(id)) return;
@@ -174,17 +186,20 @@ export class FakeChrome {
       return this.windowView(window);
     }) as never);
 
-    vi.spyOn(b.tabs, 'query').mockImplementation((async (q: Browser.tabs.QueryInfo = {}) =>
-      this.tabs
+    vi.spyOn(b.tabs, 'query').mockImplementation((async (q: Browser.tabs.QueryInfo = {}) => {
+      this.beforeTabsQuery?.();
+      return this.tabs
         .filter((t) => {
           const window = this.windows.find((w) => w.id === t.windowId);
           if (q.windowId !== undefined && t.windowId !== q.windowId) return false;
           if (q.windowType !== undefined && window?.type !== q.windowType) return false;
           if (q.discarded !== undefined && t.discarded !== q.discarded) return false;
           if (q.active !== undefined && t.active !== q.active) return false;
+          if (q.lastFocusedWindow && !window?.focused) return false;
           return true;
         })
-        .map((t) => this.tabView(t))) as never);
+        .map((t) => this.tabView(t));
+    }) as never);
     vi.spyOn(b.tabs, 'get').mockImplementation((async (id: number) => {
       const tab = this.tab(id);
       if (!tab) throw new Error(`No tab with id: ${id}.`);
@@ -227,6 +242,7 @@ export class FakeChrome {
       return this.tabView(tab);
     }) as never);
     vi.spyOn(b.tabs, 'group').mockImplementation((async (options: { tabIds: number[]; createProperties?: { windowId?: number } }) => {
+      if (this.groupFails) throw new Error('Tab groups are blocked by policy');
       const id = nextGroupId++;
       this.groups.push({ id, title: '', color: 'grey', collapsed: false, windowId: options.createProperties?.windowId ?? -1 });
       for (const tabId of options.tabIds) {
@@ -248,6 +264,10 @@ export class FakeChrome {
     vi.spyOn(b.runtime, 'sendMessage').mockImplementation((async (message: { __tabfoldEvent?: boolean; event?: { type: string } }) => {
       if (message?.__tabfoldEvent && message.event) this.broadcasts.push(message.event as FakeChrome['broadcasts'][number]);
       return undefined;
+    }) as never);
+    vi.spyOn(b.system.memory, 'getInfo').mockImplementation((async () => {
+      if (!this.memoryInfo) throw new Error('system.memory is not available');
+      return this.memoryInfo();
     }) as never);
     vi.spyOn(b.action, 'setBadgeText').mockImplementation((async () => undefined) as never);
     vi.spyOn(b.action, 'setBadgeBackgroundColor').mockImplementation((async () => undefined) as never);
