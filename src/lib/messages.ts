@@ -84,7 +84,11 @@ export type Command =
    * in `activeFold` (state.ts) and broadcast as `fold-progress`, so a popup that closes and
    * reopens mid-fold picks it up.
    */
-  | { type: 'fold' }
+  /**
+   * Fold every window, or with `windowId` only that window ("Just this window", or a window's own
+   * Fold). `keepWindowOpen` leaves that window open with a new tab (the window you're in).
+   */
+  | { type: 'fold'; windowId?: number; keepWindowOpen?: boolean }
   /** Open folded tabs ("Open all" on a group). With `asGroup`, they open as one Chrome tab group. */
   | { type: 'open-tabs'; tabRecordIds: string[]; asGroup?: { name: string; color: TabGroupColor }; windowId?: number }
   /** Push folded tabs to Chrome sync now (normally it runs a few seconds after each change). */
@@ -177,6 +181,8 @@ export interface MemoryReading {
 
 export interface FoldOutcome extends SaveOutcome {
   foldId: string;
+  /** Set when only this window was folded. */
+  windowId?: number;
   /**
    * Tabs that stayed open on purpose: pinned, playing sound, in app or pop-up windows, and in
    * Incognito windows while "Fold Incognito windows too" is off (counted only when Chrome lets

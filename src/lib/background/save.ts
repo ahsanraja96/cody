@@ -138,6 +138,8 @@ export interface CloseResult {
 
 export interface CloseOptions {
   batchSize?: number;
+  /** Leave this window open with a new tab if every tab in it closes (the window you folded from). */
+  keepWindowOpen?: number;
   /** After each batch, with how many of the tabs are closed so far. */
   onBatch?: (closed: number) => Promise<void> | void;
 }
@@ -172,7 +174,10 @@ export async function closeTabsSafely(
   const windows = await getNormalWindows();
   const closing = new Set(tabIds);
   let keeper: number | undefined;
-  if (wouldCloseEverything(windows, tabIds)) {
+  const emptied = windows.find((w) => w.id === options.keepWindowOpen && (w.tabs ?? []).every((t) => t.id !== undefined && closing.has(t.id)));
+  if (emptied?.id !== undefined) {
+    keeper = (await browser.tabs.create({ windowId: emptied.id, active: true })).id;
+  } else if (wouldCloseEverything(windows, tabIds)) {
     const target =
       windows.find((w) => w.focused && !w.incognito) ?? windows.find((w) => !w.incognito) ?? windows.find((w) => w.id !== undefined);
     if (target?.id !== undefined) keeper = (await browser.tabs.create({ windowId: target.id, active: true })).id;

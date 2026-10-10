@@ -323,7 +323,7 @@ export function SettingsDialog({
               }
               control={
                 <>
-                  <span className="text-text-2">Fold all</span>
+                  <span className="text-text-2">Fold tabs</span>
                   {shortcut ? <Kbd className="px-[5px]">{shortcut}</Kbd> : <span className="text-small text-text-3">Not set</span>}
                 </>
               }

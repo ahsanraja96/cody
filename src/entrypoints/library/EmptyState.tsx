@@ -12,7 +12,7 @@ export function EmptyState({ onImport, foldable }: { onImport: () => void; folda
       <h1 className="m-0 text-page font-semibold">Nothing folded yet</h1>
       <p className="m-0 mt-2 max-w-[440px] text-text-2">
         <span className="inline-flex items-center gap-1 font-semibold text-text">
-          Fold all tabs
+          Fold tabs
           <ArrowUpRight size={14} strokeWidth={2} aria-hidden className="text-accent-text" />
         </span>{' '}
         saves {foldable > 0 ? `your ${foldable === 1 ? 'open tab' : `${foldable.toLocaleString()} open tabs`}` : 'every open tab'} here and closes{' '}

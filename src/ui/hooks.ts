@@ -229,13 +229,23 @@ export function useOpenWindows(
  * The open windows a fold covers: Incognito ones too while "Fold Incognito windows too" is on and
  * Chrome allows Tabfold in Incognito.
  */
-export function useFoldWindows(): { windows: OpenWindow[]; loaded: boolean } {
+export function useFoldWindows(): {
+  /** Windows a fold covers (Incognito ones only with the setting on). */
+  windows: OpenWindow[];
+  /** Every open window Chrome shows Tabfold, for "Open windows" (an Incognito one shows "Stays open"). */
+  allWindows: OpenWindow[];
+  loaded: boolean;
+  foldsIncognito: boolean;
+} {
   const [settings, , settingsLoaded] = useSettings();
   const access = useIncognitoAccess();
-  return useOpenWindows({
-    includeIncognito: settings.foldIncognito && access === true,
-    paused: !settingsLoaded || (settings.foldIncognito && access === undefined),
+  const { windows: allWindows, loaded } = useOpenWindows({
+    includeIncognito: access === true,
+    paused: !settingsLoaded || access === undefined,
   });
+  const foldsIncognito = settings.foldIncognito && access === true;
+  const windows = useMemo(() => (foldsIncognito ? allWindows : allWindows.filter((w) => !w.incognito)), [allWindows, foldsIncognito]);
+  return { windows, allWindows, loaded, foldsIncognito };
 }
 
 /** "Allow in Incognito" is on for Tabfold in chrome://extensions (undefined until known). */

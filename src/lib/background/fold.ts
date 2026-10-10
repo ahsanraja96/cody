@@ -69,8 +69,17 @@ function memoryReading(before: MemoryInfo | null, after: MemoryInfo | null): Mem
  * One fold at a time: a second request while one runs gets the running one's outcome. Folds and
  * saves share a queue, so they never race to close the same tabs.
  */
-export function handleFold(options: { keepTabId?: number } = {}): Promise<FoldOutcome> {
-  return saveQueue('fold', () => runFold(options), 0) as Promise<FoldOutcome>;
+export interface FoldOptions {
+  /** The Tabfold page that asked: it stays open. */
+  keepTabId?: number;
+  /** Only this window. */
+  windowId?: number;
+  /** Leave that window open with a new tab (the window you're in). */
+  keepWindowOpen?: boolean;
+}
+
+export function handleFold(options: FoldOptions = {}): Promise<FoldOutcome> {
+  return saveQueue(`fold:${options.windowId ?? 'all'}`, () => runFold(options), 0) as Promise<FoldOutcome>;
 }
 
 /**
@@ -91,22 +100,32 @@ async function leftOut(windows: Browser.windows.Window[], includeIncognito: bool
   };
 }
 
-async function runFold({ keepTabId }: { keepTabId?: number }): Promise<FoldOutcome> {
+async function runFold({ keepTabId, windowId, keepWindowOpen }: FoldOptions): Promise<FoldOutcome> {
   const foldId = crypto.randomUUID();
   const settings = await getSettings();
   const windows = await getNormalWindows();
   const includeIncognito = settings.foldIncognito && (await incognitoAllowed());
-  // Every normal window, whatever the old "current window only" setting says.
+  const one = windowId !== undefined;
+  // One window, or every normal window whatever the old "current window only" setting says.
   const plan = await buildPlan(
     windows,
-    { scope: 'all', audible: 'keep', includeIncognito },
+    { scope: one ? 'window' : 'all', windowId, audible: 'keep', includeIncognito },
     { ...settings, includeAllWindows: true },
     keepTabId !== undefined ? [keepTabId] : [],
   );
-  const left = await leftOut(windows, includeIncognito);
+  // Other windows staying open is the point of folding one window: only "all" reports them.
+  const left = one ? { apps: 0, incognito: 0 } : await leftOut(windows, includeIncognito);
   const total = plan.closeTabIds.length;
 
-  let progress: ActiveFold = { foldId, phase: 'saving', total, closed: 0, waiting: [], startedAt: Date.now() };
+  let progress: ActiveFold = {
+    foldId,
+    phase: 'saving',
+    total,
+    closed: 0,
+    waiting: [],
+    startedAt: Date.now(),
+    ...(one ? { windowId } : {}),
+  };
   const report = async (patch: Partial<ActiveFold>) => {
     progress = { ...progress, ...patch };
     await activeFold.set(progress).catch(() => undefined);
@@ -116,6 +135,7 @@ async function runFold({ keepTabId }: { keepTabId?: number }): Promise<FoldOutco
 
   const outcome: FoldOutcome = {
     foldId,
+    ...(one ? { windowId } : {}),
     sessionId: null,
     sessionName: '',
     savedTabs: 0,
@@ -162,6 +182,7 @@ async function runFold({ keepTabId }: { keepTabId?: number }): Promise<FoldOutco
   const byId = tabsById(windows);
   const closing = await closeTabsSafely(plan.closeTabIds, plannedTabs(plan, windows), {
     batchSize: BATCH_SIZE,
+    ...(one && keepWindowOpen ? { keepWindowOpen: windowId } : {}),
     onBatch: (closed) => report({ closed }),
   });
 

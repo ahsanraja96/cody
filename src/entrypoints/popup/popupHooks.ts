@@ -93,7 +93,7 @@ export type FoldView =
  * The fold to show: the worker's (from session storage and `fold-progress` events), so a popup
  * reopened mid-fold picks it up, or the one this popup just started until the worker reports it.
  */
-export function useFold(foldTotal: number) {
+export function useFold() {
   const stored = useActiveFold();
   const action = useLastAction();
   const [remote, setRemote] = useState<ActiveFold | undefined>();
@@ -131,14 +131,23 @@ export function useFold(foldTotal: number) {
     }
   }
 
-  const start = async () => {
+  /** Fold every window, or one (`windowId`); `total` is how many tabs that should fold, for the progress shown first. */
+  const start = async (options: { windowId?: number; keepWindowOpen?: boolean }, total: number) => {
     const startedAt = Date.now();
-    const pending: ActiveFold = { foldId: `local-${startedAt}`, phase: 'saving', total: foldTotal, closed: 0, waiting: [], startedAt };
+    const pending: ActiveFold = {
+      foldId: `local-${startedAt}`,
+      phase: 'saving',
+      total,
+      closed: 0,
+      waiting: [],
+      startedAt,
+      ...(options.windowId !== undefined ? { windowId: options.windowId } : {}),
+    };
     setLocal(pending);
     const settle = (patch: Partial<ActiveFold>) =>
       setLocal((current) => (current && current.startedAt === startedAt ? { ...current, ...patch, finishedAt: Date.now() } : current));
     try {
-      const outcome = await send({ type: 'fold' });
+      const outcome = await send({ type: 'fold', ...options });
       settle({ phase: 'done', foldId: outcome.foldId, total: outcome.savedTabs + outcome.skippedDuplicates, closed: outcome.closedTabs, outcome });
     } catch (error) {
       settle({ phase: 'failed', error: error instanceof Error ? error.message : 'Something went wrong. Please try again.' });

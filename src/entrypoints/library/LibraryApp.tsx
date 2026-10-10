@@ -3,13 +3,17 @@ import type { TabRecord } from '@/lib/types';
 import { ConfirmHost } from '@/ui/components/Dialog';
 import { ToastViewport } from '@/ui/components/Toast';
 import { ImportDialog } from '@/ui/ImportPanel';
+import { browser } from 'wxt/browser';
+import { extUrl } from '@/lib/extUrl';
 import { useActiveFold, useFoldedTabs, useFoldWindows, useSettings, useSyncStatus } from '@/ui/hooks';
+import { describeWindows, foldChoice, type WindowInfo } from '@/ui/windows';
 import { EmptyState } from './EmptyState';
-import { startFold, useFoldCandidates, useFoldToast } from './fold';
+import { isFolding, startFold, useFoldCandidates, useFoldToast } from './fold';
 import { count } from './format';
 import { GroupedList } from './GroupedList';
 import { HowPage } from './HowPage';
 import { Notices } from './Notices';
+import { OpenWindows } from './OpenWindows';
 import { RecentFolds } from './RecentFolds';
 import { useRoute } from './router';
 import { SearchResults } from './SearchResults';
@@ -26,8 +30,8 @@ function isTyping(target: EventTarget | null): boolean {
 }
 
 /**
- * The full list (Min-List): top bar with search, sync line, Settings and Fold all tabs; the last
- * three folds; every folded tab grouped by kind of site. Search results replace the list while
+ * The full list (Min-List-Windows): top bar with search, sync line, Settings and Fold tabs; the
+ * open windows, each with its own Fold; the last three folds; every folded tab grouped by kind of site. Search results replace the list while
  * there is a query. Settings and Import open over it; How it works is its own page.
  */
 export function LibraryApp() {
@@ -39,8 +43,22 @@ export function LibraryApp() {
   const folded = useFoldedTabs();
   const fold = useActiveFold();
   const syncStatus = useSyncStatus();
-  const { windows } = useFoldWindows();
-  const candidates = useFoldCandidates(windows, settings.keepPinnedOpen);
+  const { windows, allWindows, foldsIncognito } = useFoldWindows();
+  const [currentWindowId, setCurrentWindowId] = useState<number>();
+  useEffect(() => {
+    browser.windows
+      .getCurrent()
+      .then((w) => setCurrentWindowId(w.id))
+      .catch(() => undefined);
+  }, []);
+  const infos = useMemo(
+    () => describeWindows(allWindows, { currentWindowId, keepPinnedOpen: settings.keepPinnedOpen, foldsIncognito, ownOrigin: extUrl('/') }),
+    [allWindows, currentWindowId, settings.keepPinnedOpen, foldsIncognito],
+  );
+  const choice = foldChoice(infos);
+  const candidates = useFoldCandidates(infos);
+  // The window this page is in stays open with a new tab; another window is folded away.
+  const foldWindow = (info: WindowInfo) => void startFold({ windowId: info.id, keepWindowOpen: info.current });
   const shortcut = useFoldShortcut();
   const hasRemovals = useRemovals((s) => s.removals.size > 0);
   const [activeResult, setActiveResult] = useState<string | undefined>();
@@ -128,6 +146,15 @@ export function LibraryApp() {
         onFold={() => void startFold()}
         fold={fold}
         candidates={candidates}
+        choice={{
+          ask: choice.ask,
+          thisCount: choice.thisWindow?.foldable.length ?? 0,
+          allCount: choice.allTabs,
+          windowCount: choice.withTabs.length,
+          allNamed: choice.withTabs.length === infos.filter((w) => w.folds).length,
+          onThis: () => choice.thisWindow && foldWindow(choice.thisWindow),
+          onAll: () => void startFold(),
+        }}
         shortcut={shortcut}
         activeDescendant={searching ? activeResult : undefined}
       />
@@ -148,9 +175,13 @@ export function LibraryApp() {
                 onActive={onActiveResult}
               />
             ) : empty ? (
-              <EmptyState onImport={openImport} foldable={candidates.tabs} />
+              <>
+                <OpenWindows windows={infos} disabled={isFolding(fold)} onFold={foldWindow} />
+                <EmptyState onImport={openImport} foldable={candidates.tabs} />
+              </>
             ) : (
               <>
+                <OpenWindows windows={infos} disabled={isFolding(fold)} onFold={foldWindow} />
                 <RecentFolds folds={recent} tabs={tabs} />
                 {folded && (
                   <div className={recent.length ? 'mt-7 mb-1 flex items-baseline gap-2.5 px-0.5' : 'mb-1 flex items-baseline gap-2.5 px-0.5'}>

@@ -65,6 +65,21 @@ async function open(url, size) {
   return page;
 }
 
+/** The popup's Fold button once it has read the open windows (it is disabled until then). */
+const foldReady = (page) =>
+  page.waitFor(() => [...document.querySelectorAll('button')].some((b) => b.innerText.includes('Fold tabs') && !b.disabled), null, 8000);
+
+/** Open a Tabfold page as a tab in a given window (so "This window" is that window). */
+async function openIn(windowId, url, size) {
+  const before = new Set((await browser.targets()).map((t) => t.targetId));
+  await control.evaluate(([w, u]) => chrome.tabs.create({ windowId: w, url: u, active: true }), [windowId, url]);
+  const target = await until(async () => (await browser.targets()).find((t) => !before.has(t.targetId) && t.type === 'page' && t.url.startsWith(url.split('#')[0])), 8000);
+  const page = await browser.attach(target.targetId, size);
+  pages.push(page);
+  await page.waitFor(() => document.readyState === 'complete', null, 8000);
+  return page;
+}
+
 const onboardingTarget = await until(async () => (await browser.targets()).find((t) => t.url.includes('onboarding.html')), 10_000);
 check('the welcome tab opens on first install', !!onboardingTarget);
 
@@ -133,22 +148,29 @@ const webTabs = async () => (await api.tabs()).filter((t) => t.url?.startsWith('
 const screen = { left: 0, top: 0, width: 1440, height: 900 };
 
 // ---------------------------------------------------------------------------------------------
-// Fold from the popup: every tab saves and closes, the pinned one stays
-await api.newWindow([site('stripe-webhooks'), site('supabase'), site('react')]);
+// Fold from the popup: open windows first; Fold asks which windows; "All" saves and closes every
+// tab, the pinned one stays
+const devWindow = await api.newWindow([site('stripe-webhooks'), site('supabase'), site('react')]);
 await api.newWindow([site('lisbon'), site('news')]);
 await until(async () => (await webTabs()).filter((t) => t.title && Object.values(PAGES).includes(t.title)).length >= 5);
 const newsTab = (await webTabs()).find((t) => t.url.endsWith('/news'));
 await control.evaluate((id) => chrome.tabs.update(id, { pinned: true }), newsTab.id);
 
-const popup = await open(ext('popup.html'), { width: 400, height: 580 });
-check('popup offers to fold the 4 unpinned tabs', await popup.waitForText('Fold 4 tabs', 8000));
+const popup = await openIn(devWindow, ext('popup.html'), { width: 400, height: 580 });
+check('popup lists the open windows first', (await hasText(popup, 'Open windows', 8000)) && (await hasText(popup, 'This window', 2000)));
+check('with several windows, Fold says it will ask', (await popup.waitForText('Fold tabs', 4000)) && (await hasText(popup, 'Asks which windows', 2000)));
 check('popup shows memory in use', await hasText(popup, 'In use', 4000));
 await popup.screenshot(path.join(SHOTS, 'popup-light.png'));
 await popup.colorScheme('dark');
 await sleep(300);
 await popup.screenshot(path.join(SHOTS, 'popup-dark.png'));
 await popup.colorScheme('light');
-await popup.clickText('Fold 4 tabs');
+await foldReady(popup);
+await popup.clickText('Fold tabs');
+check('Fold asks "Just this window" or "All windows"', (await hasText(popup, 'Fold which windows?', 4000)) && (await hasText(popup, 'All windows', 2000)));
+await sleep(200);
+await popup.screenshot(path.join(SHOTS, 'popup-ask.png'));
+await popup.clickText('All windows');
 const fold1 = await until(async () => {
   const f = await api.storage('session', 'activeFold');
   return f?.phase === 'done' ? f : null;
@@ -173,6 +195,26 @@ counts = await api.counts();
 check('undo reopened the tabs and emptied the list', open1.length === 5 && counts.tabs === 0, `${open1.length} open, ${counts.tabs} in the list`);
 await popup.close();
 
+// "Just this window" folds only the window the popup is in
+const popupThis = await openIn(devWindow, ext('popup.html'), { width: 400, height: 580 });
+await foldReady(popupThis);
+await popupThis.clickText('Fold tabs');
+await hasText(popupThis, 'Fold which windows?', 4000);
+await popupThis.clickText('Just this window');
+const foldThis = await until(async () => {
+  const f = await api.storage('session', 'activeFold');
+  return f?.phase === 'done' && f.windowId === devWindow ? f : null;
+}, 20_000, 200);
+open1 = await webTabs();
+check('"Just this window" folds only that window', foldThis?.outcome?.savedTabs === 3 && open1.some((t) => t.url.endsWith('/lisbon')) && !open1.some((t) => t.windowId === devWindow), open1.map((t) => t.url.split('/').pop()).join(', '));
+check('the popup says it folded this window', await hasText(popupThis, 'this window', 4000));
+await popupThis.screenshot(path.join(SHOTS, 'popup-this-window.png'));
+await popupThis.clickText('Undo');
+await until(async () => (await webTabs()).length >= 5, 10_000);
+counts = await api.counts();
+check('undo of "Just this window" puts the 3 tabs back', (await webTabs()).filter((t) => t.windowId === devWindow).length === 3 && counts.tabs === 0, `${counts.tabs} in the list`);
+await popupThis.close();
+
 // Fold again through the command (as the shortcut does)
 let response = await api.send({ type: 'fold' });
 check('fold command works', response?.ok && response.data.savedTabs === 4, JSON.stringify(response?.error ?? response?.data?.savedTabs));
@@ -191,7 +233,7 @@ check('sync status says synced', sync?.state === 'synced' && sync.syncedTabs >= 
 // ---------------------------------------------------------------------------------------------
 // The full list: grouped, open one tab, remove with Undo, Open all as a tab group, reopen a fold
 const list = await open(ext('library.html'));
-check('full list shows Recent folds', await hasText(list, 'Recent folds', 8000));
+check('full list shows open windows first, then Recent folds', (await hasText(list, 'Open windows', 8000)) && (await hasText(list, 'Recent folds', 4000)));
 check('full list groups the tabs', await list.waitForText('Dev', 4000));
 await sleep(400);
 await list.screenshot(path.join(SHOTS, 'list-light.png'));
@@ -260,6 +302,28 @@ open1 = await webTabs();
 const restored = open1.filter((t) => !t.pinned);
 check('the fold comes back as its 2 windows', new Set(restored.map((t) => t.windowId)).size === 2, `${restored.length} tabs`);
 check('background tabs sleep after loading, with their real titles', restored.filter((t) => t.discarded).length >= 2 && restored.every((t) => t.title && !t.title.startsWith('127.0.0.1')), restored.map((t) => `${t.title}${t.discarded ? ' (asleep)' : ''}`).join(', '));
+
+// The full list in one of those windows: Fold asks in a menu; each window card has its own Fold
+const devAgain = restored.find((t) => t.url.endsWith('/react')).windowId;
+const lisbonWindow = restored.find((t) => t.url.endsWith('/lisbon')).windowId;
+const listHere = await openIn(devAgain, ext('library.html'));
+await hasText(listHere, 'Open windows', 8000);
+await listHere.clickText('Fold tabs');
+check('the full list asks which windows in a menu', (await hasText(listHere, 'Fold which windows?', 4000)) && (await hasText(listHere, 'Just this window', 2000)));
+await sleep(200);
+await listHere.screenshot(path.join(SHOTS, 'list-windows.png'));
+await listHere.evaluate(() => document.querySelector('[role=menu]')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+await sleep(200);
+check('Esc closes the menu without folding', !(await listHere.evaluate(() => !!document.querySelector('[role=menu]'))) && (await webTabs()).some((t) => t.url.endsWith('/react')));
+const cardFold = await listHere.evaluate(() => {
+  const button = [...document.querySelectorAll('button[aria-label^="Fold "]')].find((b) => / 1 tab$/.test(b.getAttribute('aria-label') ?? '') && !b.disabled);
+  button?.click();
+  return button?.getAttribute('aria-label') ?? null;
+});
+await until(async () => !(await webTabs()).some((t) => t.url.endsWith('/lisbon')), 10_000);
+open1 = await webTabs();
+check("a window card's Fold folds just that window", !!cardFold && !open1.some((t) => t.windowId === lisbonWindow) && open1.some((t) => t.url.endsWith('/react')), `${cardFold}: ${open1.map((t) => t.url.split('/').pop()).join(', ')}`);
+await listHere.close();
 
 // Suspend inactive still works
 response = await api.send({ type: 'suspend-inactive' });

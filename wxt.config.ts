@@ -23,7 +23,7 @@ export default defineConfig({
       },
       fold: {
         suggested_key: { default: 'Ctrl+Shift+S', mac: 'Command+Shift+S' },
-        description: 'Fold all tabs',
+        description: 'Fold tabs (asks which windows when several are open)',
       },
       'save-tab': {
         suggested_key: { default: 'Alt+Shift+S' },

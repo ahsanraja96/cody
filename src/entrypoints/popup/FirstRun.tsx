@@ -3,12 +3,19 @@ import { Archive, Laptop } from 'lucide-react';
 import { openLibrary } from '@/lib/openLibrary';
 import '@/ui/components/FoldedList.css';
 
-/** Nothing folded yet (Min-Popup-FirstRun): three lines on what Tabfold does, and Import from OneTab. */
-export function FirstRun() {
-  return (
+/**
+ * Nothing folded yet (Min-Popup-FirstRun): three lines on what Tabfold does, and Import from
+ * OneTab, under the open windows when there are any.
+ */
+export function FirstRun({ top }: { top?: ReactNode }) {
+  const intro = (
     <section
       aria-label="How Tabfold works"
-      className="flex min-h-0 flex-1 flex-col justify-center gap-6 overflow-y-auto border-t border-border px-8 pt-3 pb-4"
+      className={
+        top
+          ? 'flex flex-col gap-5 px-8 pt-3 pb-4'
+          : 'flex min-h-0 flex-1 flex-col justify-center gap-6 overflow-y-auto border-t border-border px-8 pt-3 pb-4'
+      }
     >
       <ul className="flex flex-col gap-[18px]">
         <Line icon={<Archive size={16} strokeWidth={1.75} />}>Fold to free memory</Line>
@@ -28,6 +35,13 @@ export function FirstRun() {
         </button>
       </p>
     </section>
+  );
+  if (!top) return intro;
+  return (
+    <div className="scroll-thin min-h-0 flex-1 overflow-y-auto border-t border-border">
+      <div className="px-2 pt-1">{top}</div>
+      {intro}
+    </div>
   );
 }
 

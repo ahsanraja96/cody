@@ -48,7 +48,7 @@ async function dispatch(command: Command, source: CommandSource): Promise<Comman
       return { ok: true };
     case 'fold':
       // A fold started from a Tabfold page leaves that page open.
-      return handleFold({ keepTabId: source.tabId });
+      return handleFold({ keepTabId: source.tabId, windowId: command.windowId, keepWindowOpen: command.keepWindowOpen });
     case 'open-tabs':
       return handleOpenTabs(command);
     case 'sync-now':

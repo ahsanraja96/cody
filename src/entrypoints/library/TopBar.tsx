@@ -1,5 +1,5 @@
-import { forwardRef } from 'react';
-import { Archive, Search, Settings, X } from 'lucide-react';
+import { forwardRef, useEffect, useRef, useState } from 'react';
+import { AppWindow, Archive, Layers, Search, Settings, X } from 'lucide-react';
 import type { ActiveFold, SyncStatus } from '@/lib/state';
 import { Kbd } from '@/ui/components/Chips';
 import { Logo } from '@/ui/components/Logo';
@@ -8,9 +8,24 @@ import { isFolding } from './fold';
 import { approxBytes, count } from './format';
 import { SyncLine } from './SyncLine';
 
+/** What Fold offers (Min-Windows-States "Full list › Fold tabs"). */
+export interface FoldMenuChoice {
+  /** More than one window has tabs to fold: Fold asks. */
+  ask: boolean;
+  thisCount: number;
+  allCount: number;
+  /** Windows with tabs to fold. */
+  windowCount: number;
+  /** Every open window has tabs to fold, so "All 3 windows" (otherwise just "All windows"). */
+  allNamed: boolean;
+  onThis: () => void;
+  onAll: () => void;
+}
+
 /**
- * The full list's top bar (Min-List): logo, the wide search, the sync line, Settings and the
- * primary "Fold all tabs". While a fold runs the button shows its progress.
+ * The full list's top bar (Min-List-Windows): logo, the wide search, the sync line, Settings and
+ * the primary "Fold tabs", which asks "Just this window" or "All N windows" when several windows
+ * have tabs to fold. While a fold runs the button shows its progress.
  */
 export const TopBar = forwardRef<
   HTMLInputElement,
@@ -23,15 +38,18 @@ export const TopBar = forwardRef<
     onFold: () => void;
     fold: ActiveFold | undefined;
     candidates: { tabs: number; bytes: number };
+    choice: FoldMenuChoice;
     shortcut: string;
     /** The highlighted search result, for screen readers (↑↓ move it while typing). */
     activeDescendant?: string;
   }
->(function TopBar({ query, onQuery, syncStatus, syncEnabled, onSettings, onFold, fold, candidates, shortcut, activeDescendant }, searchRef) {
+>(function TopBar({ query, onQuery, syncStatus, syncEnabled, onSettings, onFold, fold, candidates, choice, shortcut, activeDescendant }, searchRef) {
+  const [menuOpen, setMenuOpen] = useState(false);
   const folding = isFolding(fold);
   const progress = folding && fold ? (fold.phase === 'saving' ? 'Folding…' : `Folding ${Math.min(fold.closed, fold.total)} of ${fold.total}…`) : '';
-  const title =
-    candidates.tabs > 0
+  const title = choice.ask
+    ? `Asks: just this window, or all ${choice.windowCount}. Pinned and playing tabs stay open.${shortcut ? ` ${shortcut}` : ''}`
+    : candidates.tabs > 0
       ? `Saves and closes ${count(candidates.tabs, 'tab')}${candidates.bytes > 0 ? ` · frees ${approxBytes(candidates.bytes)}` : ''}. Pinned and playing tabs stay open.${shortcut ? ` ${shortcut}` : ''}`
       : 'Nothing to fold: only pinned, playing or new tab pages are open.';
   return (
@@ -91,22 +109,79 @@ export const TopBar = forwardRef<
       >
         <Settings size={20} strokeWidth={1.75} aria-hidden />
       </button>
-      <button
-        type="button"
-        onClick={onFold}
-        disabled={folding}
-        title={folding ? progress : title}
-        className={cx(
-          'inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-control bg-accent px-4 font-semibold whitespace-nowrap text-on-accent',
-          'hover:bg-accent-hover disabled:cursor-default disabled:opacity-90',
-        )}
-      >
-        <Archive size={16} strokeWidth={1.75} aria-hidden className={cx(folding && 'animate-pulse')} />
-        {folding ? progress : 'Fold all tabs'}
-      </button>
+      <span className="relative shrink-0">
+        <button
+          type="button"
+          onClick={() => (choice.ask ? setMenuOpen((o) => !o) : onFold())}
+          disabled={folding}
+          title={folding ? progress : title}
+          aria-haspopup={choice.ask ? 'menu' : undefined}
+          aria-expanded={choice.ask ? menuOpen : undefined}
+          className={cx(
+            'inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-control bg-accent px-4 font-semibold whitespace-nowrap text-on-accent',
+            'hover:bg-accent-hover disabled:cursor-default disabled:opacity-90',
+          )}
+        >
+          <Archive size={16} strokeWidth={1.75} aria-hidden className={cx(folding && 'animate-pulse')} />
+          {folding ? progress : 'Fold tabs'}
+        </button>
+        {menuOpen && choice.ask && !folding && <FoldMenu choice={choice} onClose={() => setMenuOpen(false)} />}
+      </span>
       <span role="status" className="sr-only">
         {progress}
       </span>
     </header>
   );
 });
+
+/** "Fold which windows?" under the Fold button: Just this window (first) or All N windows. */
+function FoldMenu({ choice, onClose }: { choice: FoldMenuChoice; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.querySelector<HTMLButtonElement>('[role=menuitem]')?.focus();
+    const away = (e: MouseEvent) => {
+      if (!ref.current?.parentElement?.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, [onClose]);
+  const item = (Icon: typeof AppWindow, label: string, tabs: number, run: () => void) => (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={() => {
+        onClose();
+        run();
+      }}
+      className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-[9px] text-left hover:bg-hover focus-visible:bg-hover focus-visible:outline-none"
+    >
+      <Icon size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-text-2" />
+      <span className="flex-1 font-semibold">{label}</span>
+      <span className="text-small text-text-3 tabular-nums">{count(tabs, 'tab')}</span>
+    </button>
+  );
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      aria-label="Fold which windows?"
+      onKeyDown={(e) => {
+        const items = [...(ref.current?.querySelectorAll<HTMLButtonElement>('[role=menuitem]') ?? [])];
+        const at = items.indexOf(document.activeElement as HTMLButtonElement);
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          items[(at + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+        } else if (e.key === 'Escape' || e.key === 'Tab') {
+          e.preventDefault();
+          e.stopPropagation();
+          onClose();
+        }
+      }}
+      className="absolute top-12 right-0 z-30 w-[300px] rounded-card border border-border bg-surface p-1.5 text-text shadow-pop"
+    >
+      <div className="px-2 pt-1.5 pb-2 text-small font-semibold text-text-2">Fold which windows?</div>
+      {item(AppWindow, 'Just this window', choice.thisCount, choice.onThis)}
+      {item(Layers, choice.allNamed ? `All ${choice.windowCount} windows` : 'All windows', choice.allCount, choice.onAll)}
+    </div>
+  );
+}

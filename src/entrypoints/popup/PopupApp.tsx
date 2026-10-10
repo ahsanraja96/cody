@@ -4,11 +4,13 @@ import { Search, Settings as SettingsIcon, X } from 'lucide-react';
 import type { CategoryGroup } from '@/lib/categories';
 import { send } from '@/lib/messages';
 import { openLibrary } from '@/lib/openLibrary';
-import { pendingKeywordSave } from '@/lib/state';
+import { extUrl } from '@/lib/extUrl';
+import { pendingFoldAsk, pendingKeywordSave } from '@/lib/state';
 import type { TabRecord } from '@/lib/types';
 import { FoldedList, useRemoveWithUndo } from '@/ui/components/FoldedList';
 import { Logo } from '@/ui/components/Logo';
 import { cx } from '@/ui/cx';
+import { describeWindows, foldChoice, type WindowInfo } from '@/ui/windows';
 import {
   useFoldedTabs,
   useFoldWindows,
@@ -22,6 +24,7 @@ import {
 import { FirstRun } from './FirstRun';
 import { Hero } from './Hero';
 import { KeywordFold } from './KeywordFold';
+import { OpenWindows } from './OpenWindows';
 import { CrashLine, OpenProblem, PopupFooter, SectionLabel } from './parts';
 import { useFold, useFoldShortcut, useOpenTabStats } from './popupHooks';
 import { openDocs, RESULTS_ID, SearchResults, type SearchNav } from './SearchResults';
@@ -41,12 +44,22 @@ export function PopupApp() {
   const [view, setView] = useState<View>({ kind: asWindow ? 'loading' : 'home' });
   const [currentWindowId, setCurrentWindowId] = useState<number>();
   // With "Fold Incognito windows too" on (and allowed), Incognito tabs count as tabs to fold.
-  const { windows, loaded } = useFoldWindows();
+  const { windows, allWindows, loaded, foldsIncognito } = useFoldWindows();
+  // Opened by the fold shortcut with several windows open: start at "Fold which windows?".
+  const [askOnOpen, setAskOnOpen] = useState(false);
   const update = useUpdateReady();
 
   useEffect(() => {
     const lookup = asWindow ? browser.windows.getLastFocused({ windowTypes: ['normal'] }) : browser.windows.getCurrent();
     lookup.then((w) => setCurrentWindowId(w.id)).catch(() => undefined);
+    pendingFoldAsk
+      .get()
+      .then((pending) => {
+        if (!pending) return;
+        if (Date.now() - pending.at < PENDING_MAX_AGE_MS) setAskOnOpen(true);
+        void pendingFoldAsk.set(null);
+      })
+      .catch(() => undefined);
     pendingKeywordSave
       .get()
       .then((pending) => {
@@ -75,17 +88,64 @@ export function PopupApp() {
   }
   return (
     <>
-      <Home windows={windows} loaded={loaded} currentWindowId={currentWindowId} />
+      <Home
+        windows={windows}
+        allWindows={allWindows}
+        foldsIncognito={foldsIncognito}
+        loaded={loaded}
+        currentWindowId={currentWindowId}
+        askOnOpen={askOnOpen}
+      />
       {overlay}
     </>
   );
 }
 
-function Home({ windows, loaded, currentWindowId }: { windows: OpenWindow[]; loaded: boolean; currentWindowId?: number }) {
+function Home({
+  windows,
+  allWindows,
+  foldsIncognito,
+  loaded,
+  currentWindowId,
+  askOnOpen,
+}: {
+  /** Windows a fold covers. */
+  windows: OpenWindow[];
+  /** Every window Chrome shows Tabfold (for "Open windows"). */
+  allWindows: OpenWindow[];
+  foldsIncognito: boolean;
+  loaded: boolean;
+  currentWindowId?: number;
+  askOnOpen: boolean;
+}) {
   const [settings, , settingsLoaded] = useSettings();
   const stats = useOpenTabStats(windows, settings.keepPinnedOpen);
   const ready = loaded && settingsLoaded;
-  const { view, start } = useFold(stats.foldable.length);
+  const { view, start } = useFold();
+  const infos = useMemo(
+    () => describeWindows(allWindows, { currentWindowId, keepPinnedOpen: settings.keepPinnedOpen, foldsIncognito, ownOrigin: extUrl('/') }),
+    [allWindows, currentWindowId, settings.keepPinnedOpen, foldsIncognito],
+  );
+  const choice = foldChoice(infos);
+  const [asking, setAsking] = useState(false);
+  const [highlight, setHighlight] = useState<'this' | 'all'>('this');
+  useEffect(() => {
+    if (askOnOpen && ready) setAsking(true);
+  }, [askOnOpen, ready]);
+  const folding = view.kind === 'folding';
+  const foldAll = () => {
+    setAsking(false);
+    void start({}, stats.foldable.length);
+  };
+  const foldWindow = (info: WindowInfo) => {
+    setAsking(false);
+    // The window you're in stays open with a new tab; another window is folded away.
+    void start({ windowId: info.id, keepWindowOpen: info.current }, info.foldable.length);
+  };
+  const onFold = () => (choice.ask ? setAsking(true) : foldAll());
+  const openWindows = (
+    <OpenWindows windows={infos} highlight={asking && choice.ask ? highlight : null} disabled={folding} onFold={foldWindow} />
+  );
   const folded = useFoldedTabs();
   const offer = useRecoveryOffer();
   const sync = useSyncStatus();
@@ -242,11 +302,32 @@ function Home({ windows, loaded, currentWindowId }: { windows: OpenWindow[]; loa
       ) : (
         <>
           {offer && <CrashLine offer={offer} windowId={currentWindowId} />}
-          <Hero view={view} stats={stats} ready={ready} shortcut={shortcut} onFold={() => void start()} />
+          <Hero
+            view={view}
+            stats={stats}
+            ready={ready}
+            shortcut={shortcut}
+            onFold={onFold}
+            windowCount={infos.filter((w) => w.folds).length}
+            currentWindowId={currentWindowId}
+            ask={{
+              available: choice.ask,
+              open: asking,
+              thisCount: choice.thisWindow?.foldable.length ?? 0,
+              allCount: choice.allTabs,
+              windowCount: choice.withTabs.length,
+              allNamed: choice.withTabs.length === infos.filter((w) => w.folds).length,
+              onThis: () => choice.thisWindow && foldWindow(choice.thisWindow),
+              onAll: foldAll,
+              onCancel: () => setAsking(false),
+              onFocusChange: setHighlight,
+            }}
+          />
           {firstRun ? (
-            <FirstRun />
+            <FirstRun top={ready && openWindows} />
           ) : (
             <div className="scroll-thin min-h-0 flex-1 overflow-y-auto border-t border-border px-2 pt-1 pb-2">
+              {ready && openWindows}
               {foldedTabs && (
                 <>
                   <SectionLabel count={foldedTabs.length}>Folded</SectionLabel>

@@ -1,11 +1,12 @@
-import { useRef, useState, type ReactNode } from 'react';
-import { Archive, CircleAlert, MemoryStick, RotateCcw } from 'lucide-react';
+import { forwardRef, useEffect, useRef, useState, type ReactNode } from 'react';
+import { AppWindow, Archive, CircleAlert, Layers, MemoryStick, RotateCcw, X, type LucideIcon } from 'lucide-react';
 import { send } from '@/lib/messages';
 import type { ActiveFold } from '@/lib/state';
 import { Favicon } from '@/ui/components/Favicon';
 import { BigNumber, formatGb, FreedNumber, MemoryCapsule, type TabKind } from '@/ui/components/MemoryCapsule';
 import { cx } from '@/ui/cx';
 import { useLastAction, useNow } from '@/ui/hooks';
+import { Kbd } from './parts';
 import { showTab, siteLabel, type FoldView, type OpenTabStats } from './popupHooks';
 
 /**
@@ -39,6 +40,7 @@ export function FoldButton({
   shortcut,
   onFold,
   noted = true,
+  asks,
   className,
 }: {
   count: number;
@@ -48,6 +50,8 @@ export function FoldButton({
   onFold: () => void;
   /** A note under the button explains it. */
   noted?: boolean;
+  /** Pressing it asks which windows: the label doesn't promise a number yet. */
+  asks?: { windows: number };
   className?: string;
 }) {
   const describedBy = noted ? 'fold-note' : undefined;
@@ -72,7 +76,8 @@ export function FoldButton({
       type="button"
       onClick={onFold}
       disabled={!ready}
-      title="Saves every open tab to your list, then closes it"
+      title={asks ? `Asks: just this window, or all ${asks.windows}` : 'Saves every open tab to your list, then closes it'}
+      aria-haspopup={asks ? 'true' : undefined}
       aria-describedby={describedBy}
       className={cx(
         'relative flex h-11 w-full items-center justify-center gap-2 rounded-control bg-accent px-4 font-semibold text-on-accent transition-colors hover:bg-accent-hover',
@@ -80,7 +85,7 @@ export function FoldButton({
       )}
     >
       <Archive size={16} strokeWidth={1.75} aria-hidden />
-      {ready ? `Fold ${plural(count, 'tab')}` : 'Fold tabs'}
+      {ready && !asks ? `Fold ${plural(count, 'tab')}` : 'Fold tabs'}
       {shortcut && (
         <span
           aria-hidden="true"
@@ -106,7 +111,7 @@ function capsuleLabel(stats: OpenTabStats): string {
   return `Memory in use: ${plural(loaded, 'loaded tab')} and ${plural(stats.sleeping, 'sleeping tab')}, about ${formatGb(stats.inUseBytes)} GB`;
 }
 
-function InUseHead({ stats, ready }: { stats: OpenTabStats; ready: boolean }) {
+function InUseHead({ stats, ready, windowCount }: { stats: OpenTabStats; ready: boolean; windowCount: number }) {
   return (
     <HeroHead
       left={
@@ -118,13 +123,37 @@ function InUseHead({ stats, ready }: { stats: OpenTabStats; ready: boolean }) {
       right={
         ready && (
           <span className="text-small text-text-2 tabular-nums">
-            {plural(stats.tabs.length, 'tab')} open
-            {stats.sleeping > 0 && ` · ${stats.sleeping.toLocaleString()} sleeping`}
+            {windowCount > 1 ? (
+              `${plural(stats.tabs.length, 'tab')} · ${windowCount} windows`
+            ) : (
+              <>
+                {plural(stats.tabs.length, 'tab')} open
+                {stats.sleeping > 0 && ` · ${stats.sleeping.toLocaleString()} sleeping`}
+              </>
+            )}
           </span>
         )
       }
     />
   );
+}
+
+/** "Fold which windows?" (Min-Popup-FoldAsk): shown instead of the Fold button while it asks. */
+export interface FoldAskProps {
+  /** Fold asks (more than one window has tabs to fold). */
+  available: boolean;
+  open: boolean;
+  thisCount: number;
+  allCount: number;
+  /** Windows with tabs to fold. */
+  windowCount: number;
+  /** Every open window has tabs to fold, so "All 3 windows" (otherwise just "All windows"). */
+  allNamed: boolean;
+  onThis: () => void;
+  onAll: () => void;
+  onCancel: () => void;
+  /** The highlighted choice, so "Open windows" tints the windows it covers. */
+  onFocusChange: (choice: 'this' | 'all') => void;
 }
 
 export function Hero({
@@ -133,26 +162,43 @@ export function Hero({
   ready,
   shortcut,
   onFold,
+  ask,
+  windowCount,
+  currentWindowId,
 }: {
   view: FoldView;
   stats: OpenTabStats;
   ready: boolean;
   shortcut: string;
   onFold: () => void;
+  ask: FoldAskProps;
+  windowCount: number;
+  currentWindowId?: number;
 }) {
   // The last "freed so far" shown, so the finished number rolls up from it.
   const freedSoFar = useRef(0);
   const foldCount = stats.foldable.length;
+  const asks = ask.available ? { windows: ask.windowCount } : undefined;
 
   if (view.kind === 'folding') {
     const { fold } = view;
     return <Folding fold={fold} stats={stats} freedSoFar={freedSoFar} />;
+  }
+  if (ask.open && ask.available) {
+    return (
+      <section aria-label="Memory and Fold" className="flex flex-none flex-col px-4 pt-1 pb-[18px]">
+        <InUseHead stats={stats} ready={ready} windowCount={windowCount} />
+        <MemoryCapsule className="mt-3.5" stayed={stats.kinds} label={capsuleLabel(stats)} />
+        <FoldAsk {...ask} />
+      </section>
+    );
   }
   if (view.kind === 'done') {
     return (
       <Folded
         fold={view.fold}
         stats={stats}
+        currentWindowId={currentWindowId}
         rollFrom={view.seenRunning ? freedSoFar.current : undefined}
         button={
           <FoldButton
@@ -162,6 +208,7 @@ export function Hero({
             shortcut={shortcut}
             onFold={onFold}
             noted={!!stayedLine(view.fold)}
+            asks={asks}
           />
         }
       />
@@ -170,21 +217,98 @@ export function Hero({
 
   return (
     <section aria-label="Memory and Fold" className="flex flex-none flex-col px-4 pt-1 pb-5">
-      <InUseHead stats={stats} ready={ready} />
+      <InUseHead stats={stats} ready={ready} windowCount={windowCount} />
       <MemoryCapsule className="mt-3.5" stayed={stats.kinds} label={capsuleLabel(stats)} />
       {view.kind === 'failed' ? (
         <FoldFailed error={view.fold.error} onRetry={onFold} />
       ) : (
         <>
-          <FoldButton className="mt-4" count={foldCount} ready={ready} shortcut={shortcut} onFold={onFold} />
+          <FoldButton className="mt-4" count={foldCount} ready={ready} shortcut={shortcut} onFold={onFold} asks={asks} />
           <FoldNote>
             {ready && foldCount === 0
               ? 'Only pinned and playing tabs are open.'
-              : 'Saves and closes them. Pinned and playing tabs stay open.'}
+              : asks
+                ? 'Asks which windows. Pinned and playing tabs stay open.'
+                : 'Saves and closes them. Pinned and playing tabs stay open.'}
           </FoldNote>
         </>
       )}
     </section>
+  );
+}
+
+const Choice = forwardRef<
+  HTMLButtonElement,
+  { icon: LucideIcon; label: string; count: number; primary?: boolean; onClick: () => void; onFocus: () => void }
+>(function Choice({ icon: Icon, label, count, primary, onClick, onFocus }, ref) {
+  return (
+    <button
+      ref={ref}
+      type="button"
+      onClick={onClick}
+      onFocus={onFocus}
+      onMouseEnter={onFocus}
+      className={cx(
+        'flex h-11 w-full items-center gap-2.5 rounded-control px-3.5 text-left font-semibold',
+        'focus-visible:shadow-[0_0_0_3px_var(--tf-accent-soft)] focus-visible:outline-none',
+        primary ? 'bg-accent text-on-accent hover:bg-accent-hover' : 'border border-border-strong bg-surface text-text hover:bg-hover',
+      )}
+    >
+      <Icon size={16} strokeWidth={1.75} aria-hidden className="flex-none" />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className={cx('flex-none text-small font-normal tabular-nums', primary ? 'opacity-85' : 'text-text-2')}>{plural(count, 'tab')}</span>
+    </button>
+  );
+});
+
+function FoldAsk({ thisCount, allCount, windowCount, allNamed, onThis, onAll, onCancel, onFocusChange }: FoldAskProps) {
+  const thisRef = useRef<HTMLButtonElement>(null);
+  const allRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    thisRef.current?.focus();
+    onFocusChange('this');
+    // Focus "Just this window" once, when the question appears.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <div
+      role="group"
+      aria-labelledby="fold-ask"
+      className="mt-4 flex flex-col gap-2"
+      onKeyDown={(e) => {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          (document.activeElement === allRef.current ? thisRef : allRef).current?.focus();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          onCancel();
+        }
+      }}
+    >
+      <div className="flex h-6 items-center gap-2">
+        <h2 id="fold-ask" className="m-0 flex-1 text-body font-semibold">
+          Fold which windows?
+        </h2>
+        <button
+          type="button"
+          aria-label="Cancel"
+          title="Cancel"
+          onClick={onCancel}
+          className="flex size-6 flex-none items-center justify-center rounded-md text-text-3 hover:bg-hover hover:text-text"
+        >
+          <X size={14} strokeWidth={1.75} aria-hidden />
+        </button>
+      </div>
+      <Choice ref={thisRef} primary icon={AppWindow} label="Just this window" count={thisCount} onClick={onThis} onFocus={() => onFocusChange('this')} />
+      <Choice ref={allRef} icon={Layers} label={allNamed ? `All ${windowCount} windows` : 'All windows'} count={allCount} onClick={onAll} onFocus={() => onFocusChange('all')} />
+      <p aria-hidden="true" className="mt-0.5 flex items-center gap-1.5 text-small whitespace-nowrap text-text-3">
+        <Kbd>↵</Kbd>this window<span className="mx-0.5">·</span>
+        <Kbd>↓</Kbd>
+        <Kbd>↵</Kbd>all windows<span className="mx-0.5">·</span>
+        <Kbd>esc</Kbd>cancel
+      </p>
+    </div>
   );
 }
 
@@ -288,11 +412,13 @@ function stayedLine(fold: ActiveFold): string | null {
 function Folded({
   fold,
   stats,
+  currentWindowId,
   rollFrom,
   button,
 }: {
   fold: ActiveFold;
   stats: OpenTabStats;
+  currentWindowId?: number;
   rollFrom?: number;
   button: ReactNode;
 }) {
@@ -309,7 +435,10 @@ function Folded({
         left={
           <>
             <FreedNumber bytes={freedBytes} fromBytes={rollFrom} />
-            <Caps className="mt-2.5 ml-[38px]">Folded {plural(folded, 'tab')} · estimate</Caps>
+            <Caps className="mt-2.5 ml-[38px]">
+              Folded {plural(folded, 'tab')} ·{' '}
+              {fold.windowId === undefined ? 'estimate' : fold.windowId === currentWindowId ? 'this window' : 'one window'}
+            </Caps>
           </>
         }
         right={outcome?.actionId ? <UndoFold actionId={outcome.actionId} /> : null}

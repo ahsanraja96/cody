@@ -1,6 +1,8 @@
 import { browser, type Browser } from 'wxt/browser';
 import { extUrl } from '../extUrl';
-import { pendingKeywordSave } from '../state';
+import { getSettings } from '../settings';
+import { pendingFoldAsk, pendingKeywordSave } from '../state';
+import { getNormalWindows, incognitoAllowed } from './browserState';
 import { handleFold } from './fold';
 import { handleSave } from './save';
 
@@ -41,6 +43,27 @@ export async function askForKeywords(tabIds: number[]): Promise<void> {
   }
 }
 
+/**
+ * The fold shortcut: with one window open it folds straight away; with several, Tabfold opens
+ * already asking "Just this window" or "All windows" (a small window when Chrome won't open the
+ * popup).
+ */
+export async function foldShortcut(): Promise<void> {
+  const [windows, settings] = await Promise.all([getNormalWindows(), getSettings()]);
+  const incognito = settings.foldIncognito && (await incognitoAllowed());
+  const foldable = windows.filter((w) => w.type === 'normal' && (incognito || !w.incognito));
+  if (foldable.length <= 1) {
+    await handleFold();
+    return;
+  }
+  await pendingFoldAsk.set({ at: Date.now() });
+  try {
+    await browser.action.openPopup();
+  } catch {
+    await browser.windows.create({ url: extUrl('/popup.html?mode=window'), type: 'popup', width: 420, height: 640, focused: true });
+  }
+}
+
 /** Fold one tab: save it and close it. A tab already in the list closes without being saved twice. */
 async function foldSingleTab(tab: Browser.tabs.Tab | undefined, withKeywords: boolean): Promise<void> {
   if (tab?.id === undefined || tab.incognito) return;
@@ -63,8 +86,7 @@ export async function onMenuClicked(info: Browser.contextMenus.OnClickData, tab?
 export async function onCommand(command: string, tab?: Browser.tabs.Tab): Promise<void> {
   switch (command) {
     case SHORTCUT.foldAll:
-      await handleFold();
-      return;
+      return foldShortcut();
     case SHORTCUT.foldTab: {
       const activeTab = tab ?? (await browser.tabs.query({ active: true, lastFocusedWindow: true }))[0] ?? undefined;
       return foldSingleTab(activeTab, false);

@@ -67,6 +67,8 @@ export interface ActiveFold {
   finishedAt?: number;
   outcome?: FoldOutcome;
   error?: string;
+  /** Only this window is being folded. */
+  windowId?: number;
 }
 
 /**
@@ -121,6 +123,7 @@ export interface PendingKeywordSave {
 const LAST_ACTION = 'lastAction';
 const WINDOW_NAMES = 'windowNames';
 const PENDING_KEYWORDS = 'pendingKeywordSave';
+const PENDING_FOLD_ASK = 'pendingFoldAsk';
 const RECOVERY = 'recoveryOffer';
 const DEVICE_ID = 'deviceId';
 const LAST_BACKUP = 'lastBackupAt';
@@ -165,6 +168,13 @@ export const windowNames = {
     await browser.storage.session.set({ [WINDOW_NAMES]: names });
   },
   watch: (callback: (value: Record<string, string> | undefined) => void) => watchKey('session', WINDOW_NAMES, callback),
+};
+
+/** The fold shortcut with several windows open: the popup opens already asking which windows. */
+export const pendingFoldAsk = {
+  get: () => getKey<{ at: number }>('session', PENDING_FOLD_ASK),
+  set: (value: { at: number } | null) =>
+    value ? browser.storage.session.set({ [PENDING_FOLD_ASK]: value }) : browser.storage.session.remove(PENDING_FOLD_ASK),
 };
 
 export const pendingKeywordSave = {

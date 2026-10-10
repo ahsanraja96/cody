@@ -3,7 +3,7 @@ import { fakeBrowser } from 'wxt/testing/fake-browser';
 import { resetGroupsFlagCache } from '@/lib/background/browserState';
 import { forgetUnfinishedFold, handleFold } from '@/lib/background/fold';
 import { handleMessage } from '@/lib/background';
-import { createMenus, MENU, onCommand, onMenuClicked } from '@/lib/background/menus';
+import { createMenus, foldShortcut, MENU, onCommand, onMenuClicked } from '@/lib/background/menus';
 import { handleOpenSavedTab, handleOpenTabs, handleRestore, INCOGNITO_OFF } from '@/lib/background/restore';
 import { route } from '@/lib/background/router';
 import { handleUndo } from '@/lib/background/save';
@@ -12,7 +12,7 @@ import { db } from '@/lib/db';
 import type { FoldOutcome } from '@/lib/messages';
 import { getSessionGraph, saveCapture } from '@/lib/repo';
 import { updateSettings } from '@/lib/settings';
-import { activeFold, lastAction, pendingKeywordSave, type ActiveFold } from '@/lib/state';
+import { activeFold, lastAction, pendingFoldAsk, pendingKeywordSave, type ActiveFold } from '@/lib/state';
 import { FakeChrome } from './chrome';
 import { capturedWindow } from './fixtures';
 
@@ -243,6 +243,77 @@ describe('fold: what stays open', () => {
     const outcome = await handleFold();
     expect(outcome.stayedOpen).toEqual({ pinned: 0, audible: 0, apps: 1, incognito: 2 });
     expect(chrome.webTabs().map((t) => t.url).sort()).toEqual(['https://meet.example.com', 'https://private.com', 'https://private.com/2']);
+  });
+});
+
+describe('fold: one window', () => {
+  it('"Just this window" folds only that window and leaves it open with a new tab', async () => {
+    const here = chrome.openWindow([{ url: 'https://mail.com', pinned: false }, 'https://a.com'], { focused: true });
+    const other = chrome.openWindow(['https://b.com', 'https://c.com']);
+    chrome.openWindow(['https://private.com'], { incognito: true });
+    const outcome = await handleFold({ windowId: here.windowId, keepWindowOpen: true });
+    expect(outcome).toMatchObject({ windowId: here.windowId, savedTabs: 2, closedTabs: 2, stayedOpen: { pinned: 0, audible: 0, apps: 0, incognito: 0 } });
+    // This window is still there, with a new tab; the other windows are untouched.
+    expect(chrome.windows.some((w) => w.id === here.windowId)).toBe(true);
+    expect(chrome.tabs.filter((t) => t.windowId === here.windowId).map((t) => t.url)).toEqual(['chrome://newtab/']);
+    expect(chrome.tabs.filter((t) => t.windowId === other.windowId).map((t) => t.url)).toEqual(['https://b.com', 'https://c.com']);
+    expect((await db.tabs.toArray()).map((t) => t.url).sort()).toEqual(['https://a.com', 'https://mail.com']);
+    expect(progress().at(-1)).toMatchObject({ phase: 'done', windowId: here.windowId });
+  });
+
+  it("another window's own Fold folds it away, and keeps pinned tabs as usual", async () => {
+    const here = chrome.openWindow(['https://a.com'], { focused: true });
+    const other = chrome.openWindow(['https://b.com', 'https://c.com']);
+    const pinned = chrome.openWindow([{ url: 'https://p.com', pinned: true }, 'https://d.com']);
+    await handleFold({ windowId: other.windowId });
+    expect(chrome.windows.some((w) => w.id === other.windowId)).toBe(false);
+    expect(chrome.tabs.filter((t) => t.windowId === here.windowId).map((t) => t.url)).toEqual(['https://a.com']);
+    const outcome = await handleFold({ windowId: pinned.windowId });
+    expect(outcome).toMatchObject({ savedTabs: 1, stayedOpen: { pinned: 1 } });
+    expect(chrome.tabs.filter((t) => t.windowId === pinned.windowId).map((t) => t.url)).toEqual(['https://p.com']);
+  });
+
+  it('undo of a one-window fold puts the tabs back in that window', async () => {
+    const here = chrome.openWindow(['https://a.com', 'https://b.com'], { focused: true });
+    chrome.openWindow(['https://c.com']);
+    const outcome = await handleFold({ windowId: here.windowId, keepWindowOpen: true });
+    expect(await handleUndo(outcome.actionId!)).toEqual({ undone: true });
+    expect(chrome.tabs.filter((t) => t.windowId === here.windowId && t.url.startsWith('https')).map((t) => t.url)).toEqual(['https://a.com', 'https://b.com']);
+    expect(await db.tabs.count()).toBe(0);
+  });
+
+  it('the command passes the window through', async () => {
+    const here = chrome.openWindow(['https://a.com'], { focused: true });
+    chrome.openWindow(['https://b.com']);
+    const response = await route({ type: 'fold', windowId: here.windowId, keepWindowOpen: true });
+    expect(response).toMatchObject({ ok: true, data: { windowId: here.windowId, savedTabs: 1 } });
+    expect(chrome.webTabs().map((t) => t.url)).toEqual(['https://b.com']);
+  });
+});
+
+describe('the fold shortcut', () => {
+  it('with one window open, folds straight away', async () => {
+    const openPopup = vi.spyOn(fakeBrowser.action, 'openPopup').mockResolvedValue(undefined as never);
+    chrome.openWindow(['https://a.com', 'https://b.com'], { focused: true });
+    chrome.openWindow(['https://private.com'], { incognito: true });
+    await foldShortcut();
+    expect(openPopup).not.toHaveBeenCalled();
+    expect(chrome.webTabs().map((t) => t.url)).toEqual(['https://private.com']);
+  });
+
+  it('with several windows, opens Tabfold asking which windows (a small window if the popup can\'t open)', async () => {
+    const openPopup = vi.spyOn(fakeBrowser.action, 'openPopup').mockResolvedValue(undefined as never);
+    chrome.openWindow(['https://a.com'], { focused: true });
+    chrome.openWindow(['https://b.com']);
+    await onCommand('fold');
+    expect(openPopup).toHaveBeenCalledTimes(1);
+    expect((await pendingFoldAsk.get())?.at).toBeGreaterThan(Date.now() - 5000);
+    expect(chrome.webTabs()).toHaveLength(2);
+
+    openPopup.mockRejectedValue(new Error('No active browser window'));
+    await foldShortcut();
+    expect(chrome.createdWindows.at(-1)).toMatchObject({ type: 'popup' });
+    expect(String(chrome.createdWindows.at(-1)?.url)).toContain('popup.html?mode=window');
   });
 });
 
