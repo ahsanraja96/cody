@@ -47,7 +47,6 @@ export function UpdateBanner() {
         size="sm"
         variant="primary"
         className="h-[30px]"
-        autoFocus
         onClick={() => {
           try {
             browser.runtime.reload();

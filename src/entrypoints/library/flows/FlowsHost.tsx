@@ -70,7 +70,7 @@ export function FlowsHost({
     <>
       {showFloatingProgress && <RestoreProgressFloating progress={progress} onCancel={() => cancelRestore(progress.restoreId)} />}
       {showFloatingFailures && !showFloatingProgress && (
-        <div className="anim-in fixed right-6 bottom-6 z-40 w-[min(400px,calc(100vw-48px))] shadow-pop">
+        <div className="anim-in fixed right-6 bottom-6 z-40 w-[min(400px,calc(100vw-48px))] rounded-card bg-surface shadow-pop">
           <RestoreFailuresCard failures={failures} onDismiss={() => flows().setFailures(null)} />
         </div>
       )}

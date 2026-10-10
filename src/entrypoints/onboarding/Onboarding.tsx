@@ -120,7 +120,7 @@ export function Onboarding() {
   const [step, setStep] = useState(1);
   const [importSource, setImportSource] = useState<ImportSource | null>(null);
   const [saveShortcut, setSaveShortcut] = useState(isMac ? '⌘⇧S' : 'Ctrl+Shift+S');
-  const imported = useLiveQuery(async () => (await listLiveSessions()).length, []) ?? 0;
+  const imported = useLiveQuery(async () => (await listLiveSessions()).filter((s) => s.source === 'import').length, []) ?? 0;
 
   useEffect(() => {
     browser.commands
@@ -159,7 +159,7 @@ export function Onboarding() {
             </p>
             <span className="flex-1" />
             <div className="flex justify-end">
-              <Button variant="primary" onClick={() => setStep(2)} autoFocus>
+              <Button variant="primary" onClick={() => setStep(2)}>
                 Next
               </Button>
             </div>

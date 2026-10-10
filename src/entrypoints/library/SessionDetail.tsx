@@ -333,7 +333,7 @@ export function SessionDetail({
                   <Button
                     variant="primary"
                     className="min-w-0 flex-1"
-                    icon={<AppWindow size={16} aria-hidden />}
+                    icon={<AppWindow size={16} aria-hidden className="shrink-0" />}
                     onClick={() => restoreSession(session.id, 'original')}
                   >
                     Restore as original windows
@@ -641,7 +641,7 @@ function SavedTabRow({
               ))}
               {tab.keywords.length > 2 && <span className="text-meta text-text-3">+{tab.keywords.length - 2}</span>}
             </>
-          ) : special ? (
+          ) : special && !tab.urlTruncated ? (
             <span className="inline-flex h-[18px] items-center rounded border border-border-strong px-1.5 text-meta font-semibold text-text-2">
               {SPECIAL_PAGE_LABEL[special]}
             </span>

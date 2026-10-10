@@ -316,6 +316,7 @@ export function ImportPanel({
           <p className="text-text-2">In OneTab, choose "Export URLs", copy all the text and paste it here.</p>
           <textarea
             autoFocus
+            data-autofocus
             value={pasted}
             onChange={(e) => setPasted(e.target.value)}
             rows={7}
@@ -631,7 +632,11 @@ export function ImportDialog({
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
+    if (open && !dialog.open) {
+      dialog.showModal();
+      // showModal focuses the first control (the close button); the paste box should have it.
+      dialog.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+    }
     if (!open && dialog.open) dialog.close();
   }, [open]);
   return (

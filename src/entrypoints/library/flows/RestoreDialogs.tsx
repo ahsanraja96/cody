@@ -97,7 +97,7 @@ export function RestoreOptionsDialog({ sessionId, onClose }: { sessionId: string
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" onClick={run} autoFocus>
+          <Button variant="primary" onClick={run} data-autofocus>
             Restore {plural(total, 'tab')}
           </Button>
         </>
@@ -204,7 +204,7 @@ export function AlreadyOpenDialog({
           </Button>
           <Button
             variant="primary"
-            autoFocus
+            data-autofocus
             onClick={async () => {
               onClose();
               const target = windowIds[0];
@@ -276,7 +276,7 @@ export function FileAccessDialog({
       <div className="mt-1 flex flex-col gap-2">
         <Button
           variant="primary"
-          autoFocus
+          data-autofocus
           icon={<ExternalLink size={16} aria-hidden />}
           onClick={() => {
             void browser.tabs.create({ url: `chrome://extensions/?id=${browser.runtime.id}` });

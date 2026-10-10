@@ -11,6 +11,7 @@ const WEB_STORE = /^https:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/
 
 export function specialPage(url: string): SpecialPage | null {
   if (WEB_STORE.test(url)) return 'web-store';
+  if (/^javascript:/i.test(url)) return 'text';
   switch (classifyUrl(url)) {
     case 'web':
     case 'blank':
@@ -35,7 +36,7 @@ export const SPECIAL_PAGE_LABEL: Record<SpecialPage, string> = {
   'web-store': 'Web Store',
   file: 'Local file',
   extension: 'Extension page',
-  data: 'Saved in page',
+  data: 'Data address',
   text: 'Saved as text',
 };
 

@@ -49,7 +49,7 @@ export function ClearDataDialog({ onClose }: { onClose: () => void }) {
         <input
           id={inputId}
           value={text}
-          autoFocus
+          data-autofocus
           autoComplete="off"
           spellCheck={false}
           onChange={(e) => setText(e.target.value)}

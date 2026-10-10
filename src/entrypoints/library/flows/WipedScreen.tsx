@@ -41,7 +41,7 @@ export function WipedScreen({
         return;
       }
       await acknowledgeWipe();
-      toast('The snapshot is back as a session. Nothing opens until you restore it.');
+      toast('Snapshot saved as a session.');
       onRecovered(sessionId);
     } catch (error) {
       toast(error instanceof Error ? error.message : "Couldn't restore the snapshot.", { tone: 'error' });

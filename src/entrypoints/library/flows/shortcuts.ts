@@ -69,4 +69,4 @@ export const APP_KEYS: Array<{ label: string; keys: string[] }> = [
 
 export const PLATFORM_NOTE = isMac
   ? 'Shown for Mac. Windows and Linux use Ctrl for ⌘ and Alt for ⌥.'
-  : 'Shown for Windows and Linux. On a Mac, ⌘ stands in for Ctrl and ⌥ for Alt.';
+  : 'Shown for Windows and Linux. A Mac uses ⌘ for Ctrl and ⌥ for Alt.';

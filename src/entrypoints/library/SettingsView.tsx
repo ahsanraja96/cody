@@ -178,7 +178,7 @@ function useActiveSection(root: React.RefObject<HTMLElement | null>, initial: st
         const el = document.getElementById(id);
         if (el && el.getBoundingClientRect().top - top <= 80) current = id;
       }
-      if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4) current = SECTIONS.at(-1)![0];
+      if (scroller.scrollTop > 0 && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4) current = SECTIONS.at(-1)![0];
       setActive(current);
     };
     onScroll();
@@ -238,7 +238,7 @@ export function SettingsView({ section, onBack }: { section?: string; onBack?: (
         ))}
       </nav>
 
-      <div ref={scrollRef} className="scroll-thin min-w-0 flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="scroll-thin relative min-w-0 flex-1 overflow-y-auto">
         <main className="px-6 pt-8 pb-16 min-[900px]:px-10">
           <div className="flex max-w-[760px] flex-col gap-9">
             <div className="flex flex-col gap-3">

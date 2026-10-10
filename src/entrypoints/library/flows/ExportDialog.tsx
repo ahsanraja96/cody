@@ -41,7 +41,7 @@ export function ExportDialog({ sessionIds, onClose }: { sessionIds?: string[]; o
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" icon={<Download size={16} aria-hidden />} disabled={busy} onClick={run}>
+          <Button variant="primary" icon={<Download size={16} aria-hidden />} disabled={busy} onClick={run} data-autofocus>
             Export HTML
           </Button>
         </>

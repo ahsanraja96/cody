@@ -155,7 +155,7 @@ export function LibraryApp() {
 
   if (route.view === 'settings') {
     return (
-      <div className="flex h-screen flex-col overflow-hidden bg-bg text-text">
+      <div className="relative flex h-screen flex-col overflow-hidden bg-bg text-text">
         {updateReady && <UpdateBanner />}
         <div className={cx('min-h-0 flex-1', updateReady && 'pointer-events-none opacity-50')} inert={!!updateReady}>
           <SettingsView section={route.section} onBack={() => navigate({ view: 'all' })} />
@@ -201,7 +201,7 @@ export function LibraryApp() {
   );
 
   return (
-    <div className="flex h-screen overflow-hidden bg-bg text-text">
+    <div className="relative flex h-screen overflow-hidden bg-bg text-text">
       <Sidebar route={route} navigate={navigate} />
       <div className="relative flex min-w-0 flex-1 flex-col">
         {updateReady && <UpdateBanner />}
@@ -220,7 +220,7 @@ export function LibraryApp() {
                     onSearchChange('');
                   }
                 }}
-                placeholder={tabTotal > 0 ? `Search ${tabTotal.toLocaleString()} tabs by title, address or keyword` : 'Search tabs by title, address or keyword'}
+                placeholder={tabTotal > 0 ? `Search ${plural(tabTotal, 'tab')} by title, address or keyword` : 'Search tabs by title, address or keyword'}
                 aria-label="Search saved and open tabs by title, address or keyword"
                 className="h-full min-w-0 flex-1 border-0 bg-transparent p-0 text-text outline-none [&::-webkit-search-cancel-button]:hidden"
               />
@@ -241,7 +241,7 @@ export function LibraryApp() {
           <div className="flex min-h-0 flex-1">
             <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
               <LibraryNotices />
-              <div className="min-h-0 flex-1">{view(route)}</div>
+              <div className="relative min-h-0 flex-1">{view(route)}</div>
             </main>
             {wide && detail}
           </div>
