@@ -1,88 +1,177 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { formatDateTime, plural } from '@/lib/format';
-import { listTrash, restoreFromTrash, TRASH_RETENTION_MS } from '@/lib/repo';
+import { Clock, Info, Trash2, Undo2 } from 'lucide-react';
+import { plural } from '@/lib/format';
+import { deleteSessionsForever, listTrash, restoreFromTrash, TRASH_RETENTION_MS } from '@/lib/repo';
+import type { SessionRecord } from '@/lib/types';
 import { Button } from '@/ui/components/Button';
+import { confirmAction } from '@/ui/components/Dialog';
 import { Favicon } from '@/ui/components/Favicon';
 import { toast } from '@/ui/components/Toast';
 import { cx } from '@/ui/cx';
-import { deleteForever } from './actions';
 
 const DAY = 24 * 60 * 60 * 1000;
 
+function deletedLabel(deletedAt: number, now: number): string {
+  const days = Math.floor((now - deletedAt) / DAY);
+  if (days <= 0) return 'Deleted today';
+  if (days === 1) return 'Deleted yesterday';
+  return `Deleted ${days} days ago`;
+}
+
+/** Trash (Library-Trash): 30 days to change your mind; Delete forever only here, always confirmed. */
 export function TrashView({ selectedId, onSelect }: { selectedId?: string; onSelect: (id: string | undefined) => void }) {
   const trash = useLiveQuery(() => listTrash(), []);
+  const now = Date.now();
+  const tabs = (trash ?? []).reduce((n, s) => n + s.tabCount, 0);
+
+  const emptyTrash = async () => {
+    if (!trash?.length) return;
+    const ok = await confirmAction({
+      title: 'Empty Trash?',
+      body: `${plural(trash.length, 'session')} and ${plural(tabs, 'tab')} will be deleted for good.`,
+      confirmLabel: 'Empty Trash',
+      danger: true,
+    });
+    if (!ok) return;
+    await deleteSessionsForever(trash.map((s) => s.id));
+    onSelect(undefined);
+  };
+
+  const deleteOne = async (session: SessionRecord) => {
+    const ok = await confirmAction({
+      title: `Delete ${session.name} forever?`,
+      body: `Its ${plural(session.tabCount, 'tab')} can't be recovered.`,
+      confirmLabel: 'Delete forever',
+      danger: true,
+    });
+    if (!ok) return;
+    await deleteSessionsForever([session.id]);
+    if (selectedId === session.id) onSelect(undefined);
+  };
+
+  const restore = async (session: SessionRecord) => {
+    await restoreFromTrash([session.id]);
+    if (selectedId === session.id) onSelect(undefined);
+    toast(`Restored ${session.name}.`);
+  };
 
   return (
-    <div className="scroll-thin h-full overflow-y-auto bg-bg-subtle">
-      <div className="flex flex-wrap items-center gap-3 px-6 pt-5">
+    <section aria-label="Trash" className="scroll-thin h-full overflow-y-auto bg-bg-subtle px-6 pt-5 pb-6">
+      <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-[240px] flex-1">
-          <h1 className="text-page font-semibold">Trash</h1>
-          <p className="mt-1 text-text-2">Deleted sessions stay here for 30 days, then they are removed for good.</p>
+          <div className="flex items-baseline gap-2.5">
+            <h1 className="text-page font-semibold">Trash</h1>
+            {trash && trash.length > 0 && (
+              <span className="text-text-3">
+                {plural(trash.length, 'session')} · {plural(tabs, 'tab')}
+              </span>
+            )}
+          </div>
+          <p className="mt-1 flex items-center gap-1.5 text-text-2">
+            <Info size={14} aria-hidden className="shrink-0" />
+            Sessions in Trash are deleted for good after 30 days.
+          </p>
         </div>
         {trash && trash.length > 0 && (
-          <Button
-            variant="danger-soft"
-            onClick={async () => {
-              if (await deleteForever(trash.map((s) => s.id), `${plural(trash.length, 'session')} in Trash`)) {
-                onSelect(undefined);
-                toast('Trash emptied.');
-              }
-            }}
-          >
+          <Button variant="danger-soft" icon={<Trash2 size={16} aria-hidden />} onClick={() => void emptyTrash()}>
             Empty Trash
           </Button>
         )}
       </div>
-      <div className="flex flex-col gap-2 px-6 pt-5 pb-8">
-        {trash?.length === 0 && (
-          <p className="rounded-card border border-dashed border-border-strong px-4 py-8 text-center text-text-2">Trash is empty.</p>
-        )}
-        {trash?.map((session) => {
-          const daysLeft = Math.max(0, Math.ceil((session.deletedAt + TRASH_RETENTION_MS - Date.now()) / DAY));
-          return (
-            <div
-              key={session.id}
-              onClick={() => onSelect(session.id)}
-              className={cx(
-                'flex cursor-pointer flex-wrap items-center gap-3 rounded-card border bg-surface px-4 py-3',
-                selectedId === session.id ? 'border-accent' : 'border-border hover:border-border-strong',
-              )}
-            >
-              <span aria-hidden className="flex gap-1">
-                {session.preview.slice(0, 3).map((p) => (
-                  <Favicon key={p.url} url={p.url} />
-                ))}
-              </span>
-              <div className="min-w-[200px] flex-1">
-                <div className="truncate font-semibold">{session.name}</div>
-                <div className="text-meta text-text-3">
-                  {plural(session.tabCount, 'tab')} · deleted {formatDateTime(session.deletedAt)} · removed in {plural(daysLeft, 'day')}
-                </div>
+
+      {trash?.length === 0 && (
+        <p className="mt-5 rounded-card border border-dashed border-border-strong px-4 py-10 text-center text-text-2">
+          Trash is empty. Sessions you delete stay here for 30 days.
+        </p>
+      )}
+
+      {trash && trash.length > 0 && (
+        <div role="grid" aria-label="Sessions in Trash" className="@container mt-5 rounded-card border border-border bg-surface">
+          {trash.map((session, index) => {
+            const daysLeft = Math.max(0, Math.ceil((session.deletedAt + TRASH_RETENTION_MS - now) / DAY));
+            const soon = daysLeft < 3;
+            return (
+              <div
+                key={session.id}
+                role="row"
+                aria-current={selectedId === session.id || undefined}
+                onClick={() => onSelect(session.id)}
+                className={cx(
+                  'group flex h-14 cursor-pointer items-center gap-4 pr-3 pl-4 hover:bg-hover has-[:focus-visible]:bg-hover',
+                  index < trash.length - 1 && 'border-b border-border',
+                  index === 0 && 'rounded-t-card',
+                  index === trash.length - 1 && 'rounded-b-card',
+                  selectedId === session.id && 'shadow-[inset_3px_0_0_var(--tf-accent)]',
+                )}
+              >
+                <span role="gridcell" aria-hidden className="flex w-16 shrink-0 gap-1">
+                  {session.preview.slice(0, 3).map((p, i) => (
+                    <Favicon key={`${p.url}-${i}`} url={p.url} />
+                  ))}
+                </span>
+                <span role="gridcell" className="flex min-w-0 flex-1 flex-col">
+                  <button
+                    type="button"
+                    dir="auto"
+                    title={session.name}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelect(session.id);
+                    }}
+                    className="truncate text-left font-semibold"
+                  >
+                    {session.name}
+                  </button>
+                  <span className="text-meta text-text-3">
+                    {plural(session.tabCount, 'tab')} · {plural(session.windowCount, 'window')}
+                  </span>
+                </span>
+                <span role="gridcell" className="w-40 shrink-0 text-small text-text-2 @max-[640px]:hidden">
+                  {deletedLabel(session.deletedAt, now)}
+                </span>
+                <span role="gridcell" className="flex w-[140px] shrink-0">
+                  {soon ? (
+                    <span className="inline-flex h-[22px] items-center gap-[5px] rounded-full border border-amber-line bg-amber-soft px-2 text-meta font-semibold text-amber">
+                      <Clock size={12} aria-hidden />
+                      {daysLeft === 0 ? 'Less than a day left' : `${plural(daysLeft, 'day')} left`}
+                    </span>
+                  ) : (
+                    <span className="text-small text-text-2">{plural(daysLeft, 'day')} left</span>
+                  )}
+                </span>
+                <span className="invisible flex w-[260px] shrink-0 items-center justify-end gap-1 group-hover:visible group-has-[:focus-visible]:visible @max-[760px]:w-auto">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void restore(session);
+                    }}
+                    className="inline-flex h-7 items-center gap-1.5 rounded-control border border-border-strong bg-surface px-2.5 text-small font-semibold text-text hover:bg-hover"
+                  >
+                    <Undo2 size={14} aria-hidden />
+                    Restore
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void deleteOne(session);
+                    }}
+                    className="inline-flex h-7 items-center rounded-control px-2 text-small font-semibold whitespace-nowrap text-red hover:bg-red-soft"
+                  >
+                    Delete forever
+                  </button>
+                </span>
               </div>
-              <Button
-                size="sm"
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  await restoreFromTrash([session.id]);
-                  toast(`Restored “${session.name}”.`);
-                }}
-              >
-                Put back
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  if (await deleteForever([session.id], `“${session.name}”`) && selectedId === session.id) onSelect(undefined);
-                }}
-              >
-                Delete forever
-              </Button>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+            );
+          })}
+        </div>
+      )}
+      {trash && trash.length > 0 && (
+        <p className="mx-1 mt-3 text-small text-text-3">
+          Looking for one tab? Search can look in Trash too: switch the search scope to <span className="font-semibold text-text-2">Trash</span>.
+        </p>
+      )}
+    </section>
   );
 }

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { cx } from '../cx';
 
 export type MenuItem =
-  | { label: string; onSelect: () => void; danger?: boolean; disabled?: boolean; hint?: string; icon?: ReactNode }
+  | { label: string; onSelect: () => void; danger?: boolean; disabled?: boolean; hint?: ReactNode; icon?: ReactNode }
   | 'separator';
 
 /** Small popover menu. Opens on click, closes on outside click, Escape or selection; arrow keys move. */
@@ -87,7 +87,7 @@ export function Menu({
               >
                 {item.icon}
                 <span className="flex-1">{item.label}</span>
-                {item.hint && <span className="text-[10px] font-semibold text-accent-text">{item.hint}</span>}
+                {item.hint && <span className="inline-flex items-center text-[10px] font-semibold text-accent-text">{item.hint}</span>}
               </button>
             ),
           )}
