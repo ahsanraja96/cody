@@ -1,0 +1,214 @@
+/*
+ * The memory capsule (board Min-Memory): one slim segment per open tab, loaded tabs filled with the
+ * indigo to violet mix, sleeping tabs hollow, freed space an empty ticked track, and a small fold
+ * capsule at the end that fills as tabs fold into the list. Tokens follow styles.css: light on
+ * :root, dark under prefers-color-scheme (unless the theme is forced light) and data-theme="dark".
+ */
+
+:root {
+  --tf-mem-from: #5560de;
+  --tf-mem-to: #8d6bef;
+  --tf-mem-glow: rgba(85, 96, 222, 0.22);
+  --tf-mem-hi: rgba(255, 255, 255, 0.38);
+  --tf-mem-line: rgba(79, 91, 213, 0.5);
+  --tf-mem-tick: rgba(23, 23, 26, 0.09);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --tf-mem-from: #6973ee;
+    --tf-mem-to: #a78bfa;
+    --tf-mem-glow: rgba(140, 128, 255, 0.5);
+    --tf-mem-hi: rgba(255, 255, 255, 0.22);
+    --tf-mem-line: rgba(163, 170, 247, 0.55);
+    --tf-mem-tick: rgba(255, 255, 255, 0.07);
+  }
+}
+
+:root[data-theme='dark'] {
+  --tf-mem-from: #6973ee;
+  --tf-mem-to: #a78bfa;
+  --tf-mem-glow: rgba(140, 128, 255, 0.5);
+  --tf-mem-hi: rgba(255, 255, 255, 0.22);
+  --tf-mem-line: rgba(163, 170, 247, 0.55);
+  --tf-mem-tick: rgba(255, 255, 255, 0.07);
+}
+
+.tf-cap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tf-cap[data-size='page'] {
+  gap: 8px;
+}
+
+.tf-cap-track {
+  min-width: 0;
+  height: 10px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 2px;
+  border: 1px solid var(--tf-border);
+  border-radius: 999px;
+  background-color: var(--tf-bg-subtle);
+  background-image: repeating-linear-gradient(90deg, var(--tf-mem-tick) 0 1px, transparent 1px 4px);
+}
+
+.tf-cap[data-size='page'] .tf-cap-track {
+  height: 14px;
+  padding: 0 3px;
+}
+
+.tf-seg {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 6px;
+  border-radius: 1px;
+  transition:
+    flex-grow 300ms cubic-bezier(0.2, 0.7, 0.3, 1),
+    background-color 400ms ease-out,
+    border-color 400ms ease-out;
+}
+
+.tf-cap[data-size='page'] .tf-seg {
+  height: 8px;
+  border-radius: 2px;
+}
+
+.tf-seg[data-kind='loaded'] {
+  background: var(--seg-c);
+  box-shadow:
+    inset 0 1px 0 var(--tf-mem-hi),
+    0 0 5px var(--tf-mem-glow);
+}
+
+.tf-seg[data-kind='sleeping'] {
+  border: 1px solid var(--tf-mem-line);
+  background: var(--tf-bg-subtle);
+}
+
+/* A tab that just folded: it slides right and squeezes into the fold capsule, then is gone. */
+.tf-seg[data-leaving] {
+  transform-origin: right center;
+  animation: tf-seg-leave 800ms cubic-bezier(0.2, 0.7, 0.3, 1) var(--d, 0ms) both;
+}
+
+@keyframes tf-seg-leave {
+  from {
+    background: var(--seg-c);
+    box-shadow:
+      inset 0 1px 0 var(--tf-mem-hi),
+      0 0 5px var(--tf-mem-glow);
+    transform: none;
+    opacity: 1;
+  }
+  to {
+    background: var(--seg-c);
+    transform: translateX(var(--dx)) scaleX(0.1);
+    opacity: 0;
+  }
+}
+
+/* While folding, the last few tabs keep flowing into the fold capsule. */
+.tf-seg[data-flow] {
+  transform-origin: right center;
+  animation: tf-seg-flow 800ms cubic-bezier(0.2, 0.7, 0.3, 1) var(--d, 0ms) infinite;
+}
+
+@keyframes tf-seg-flow {
+  to {
+    transform: translateX(var(--dx)) scaleX(0.1);
+    opacity: 0;
+  }
+}
+
+.tf-cap-fold {
+  position: relative;
+  width: 24px;
+  height: 10px;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--tf-accent-line);
+  border-radius: 999px;
+  background: var(--tf-bg-subtle);
+  transition: box-shadow 300ms ease-out;
+}
+
+.tf-cap[data-size='page'] .tf-cap-fold {
+  width: 40px;
+  height: 14px;
+}
+
+.tf-cap-fold[data-active] {
+  box-shadow: 0 0 8px var(--tf-mem-glow);
+}
+
+.tf-cap-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background-color: var(--tf-accent-soft);
+  background-image: repeating-linear-gradient(90deg, var(--tf-mem-to) 0 1px, transparent 1px 3px);
+  transition: width 800ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+/* The freed number rolls up once like an odometer (tabular figures, so digits never jump sideways). */
+.tf-odo-col {
+  display: inline-block;
+  height: 1em;
+  overflow: hidden;
+  vertical-align: top;
+}
+
+.tf-odo-col > span {
+  display: block;
+}
+
+.tf-odo-col > span > span {
+  display: block;
+  height: 1em;
+}
+
+.tf-odo-roll {
+  animation: tf-odo 700ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+@keyframes tf-odo {
+  from {
+    transform: translateY(0);
+  }
+}
+
+/* The check after a fold: one green pulse ring once the number settles, then still. */
+.tf-ring {
+  box-shadow:
+    0 0 0 4px var(--tf-bg),
+    0 0 0 5px var(--tf-green-line);
+}
+
+.tf-ring[data-pulse] {
+  animation: tf-ring 900ms ease-out 700ms 1 both;
+}
+
+@keyframes tf-ring {
+  0% {
+    box-shadow: 0 0 0 0 var(--tf-green-line);
+  }
+  70% {
+    box-shadow: 0 0 0 14px transparent;
+  }
+  100% {
+    box-shadow:
+      0 0 0 4px var(--tf-bg),
+      0 0 0 5px var(--tf-green-line);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Nothing moves: the final number at once and no ring (styles.css already stops animations). */
+  .tf-ring {
+    box-shadow: none;
+  }
+}
