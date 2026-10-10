@@ -1,0 +1,7 @@
+# Supabase CLI settings for the Tabfold Pro server. Run `supabase` commands from the server/ folder.
+project_id = "tabfold"
+
+[functions.tabfold]
+# The function checks the ExtensionPay key itself. Supabase's own sign-in check would turn the
+# extension away, because the extension never signs in to Supabase.
+verify_jwt = false
