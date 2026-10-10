@@ -50,6 +50,7 @@ export function planFromUser(user: ExtPayUser, now: number): PlanState {
   return {
     tier,
     trial: trialRunning && !(paidActive && tierOfNickname(user.plan?.nickname) === 'pro-ai') ? { startedAt: trialStartedAt!, endsAt: trialEndsAt! } : null,
+    trialUsed: trialStartedAt !== null,
     email: user.email ?? null,
     interval: paidActive ? interval : null,
     status: user.subscriptionStatus ?? (user.paid ? 'active' : null),

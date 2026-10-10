@@ -11,6 +11,8 @@ export type BillingInterval = 'month' | 'year';
 export interface PlanState {
   tier: Tier;
   trial: { startedAt: number; endsAt: number } | null;
+  /** A trial was started at some point (ExtensionPay allows one per email). */
+  trialUsed?: boolean;
   email: string | null;
   interval: BillingInterval | null;
   status: 'active' | 'past_due' | 'canceled' | null;
@@ -71,6 +73,7 @@ export function planFromUser(user: ExtPayUser, now: number): PlanState {
       trialRunning && !(paidActive && tierOfNickname(user.plan?.nickname) === 'pro-ai')
         ? { startedAt: trialStartedAt!, endsAt: trialEndsAt! }
         : null,
+    trialUsed: trialStartedAt !== null,
     email: user.email ?? null,
     interval: paidActive ? interval : null,
     status: user.subscriptionStatus ?? (user.paid ? 'active' : null),

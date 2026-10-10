@@ -15,6 +15,8 @@ export interface PlanState {
   tier: Tier;
   /** The 7-day Pro AI trial, while it runs. */
   trial: { startedAt: number; endsAt: number } | null;
+  /** A trial was started at some point (ExtensionPay allows one per email). */
+  trialUsed?: boolean;
   /** The email the plan belongs to (payment or trial sign-up). */
   email: string | null;
   /** A paid plan's billing period. */

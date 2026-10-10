@@ -8,15 +8,19 @@ import tailwindcss from '@tailwindcss/vite';
  * permissions are needed.
  */
 function connectSources(): string {
-  const sources = ["'self'", 'https://extensionpay.com'];
   // WXT has loaded .env files into process.env by the time the manifest is built.
   const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
-  const api = env.WXT_TABFOLD_API?.trim();
-  if (api) {
+  const sources = ["'self'"];
+  // WXT_EXTPAY_HOST is only set by the end-to-end test (a fake ExtensionPay).
+  for (const [name, value] of [
+    ['WXT_EXTPAY_HOST', env.WXT_EXTPAY_HOST?.trim() || 'https://extensionpay.com'],
+    ['WXT_TABFOLD_API', env.WXT_TABFOLD_API?.trim()],
+  ] as const) {
+    if (!value) continue;
     try {
-      sources.push(new URL(api).origin);
+      sources.push(new URL(value).origin);
     } catch {
-      throw new Error(`WXT_TABFOLD_API is not a valid URL: ${api}`);
+      throw new Error(`${name} is not a valid URL: ${value}`);
     }
   }
   return sources.join(' ');
@@ -25,6 +29,8 @@ function connectSources(): string {
 // See https://wxt.dev/api/config.html
 export default defineConfig({
   srcDir: 'src',
+  // The end-to-end Pro test builds a separate copy with a fake ExtensionPay and server.
+  outDir: (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.TABFOLD_OUT_DIR || '.output',
   imports: false,
   modules: ['@wxt-dev/module-react'],
   manifest: ({ mode }) => ({

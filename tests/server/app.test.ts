@@ -43,7 +43,7 @@ describe('sign-in', () => {
     const res = await server.request('GET', '/me', { key: 'free' });
     expect(res.status).toBe(200);
     expect(res.json).toEqual({
-      plan: { tier: 'free', trial: null, email: 'free@example.com', interval: null, status: null, cancelAt: null, checkedAt: NOW },
+      plan: { tier: 'free', trial: null, trialUsed: false, email: 'free@example.com', interval: null, status: null, cancelAt: null, checkedAt: NOW },
       runs: null,
     });
   });

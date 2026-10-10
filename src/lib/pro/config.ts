@@ -13,4 +13,5 @@ export function proConfigured(): boolean {
   return !!PRO_CONFIG.extpayId && !!PRO_CONFIG.apiUrl;
 }
 
-export const EXTPAY_HOST = 'https://extensionpay.com';
+/** ExtensionPay. WXT_EXTPAY_HOST exists only so the end-to-end test can point a build at a fake. */
+export const EXTPAY_HOST = ((import.meta.env.WXT_EXTPAY_HOST as string | undefined) || 'https://extensionpay.com').replace(/\/+$/, '');
