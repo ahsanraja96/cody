@@ -14,7 +14,11 @@ Design: [Tabfold design canvas](https://claude.ai/artifact/MGqcUEKEqHvcmZdSboDKP
 - **Same list on every computer**: the newest folded tabs (up to 500, within Chrome's sync quota) are shared through `chrome.storage.sync`, so they appear wherever the person is signed in to Chrome. No account, no server. Removals travel as tombstones; an emptied store never deletes anything; quota errors back off and retry. Can be turned off in Settings.
 - **Restore**: lazy (background tabs load once, muted, then sleep, so they keep their real title, icon and address), with tab groups and pinned tabs rebuilt; failures listed with "Copy links".
 - **Safety**: background snapshots and a "Chrome closed unexpectedly. Reopen your tabs?" line after a crash; a record outside IndexedDB detects wiped data and can recover the last snapshot; updates install cleanly; every message to the background must come from Tabfold itself.
-- **Settings** (five things): keep pinned tabs open, idle sleep time, Chrome sync, theme, import from OneTab and export to HTML, plus "Clear everything".
+- **Settings**: your plan, keep pinned tabs open, idle sleep time, sync, Incognito, theme, import from OneTab and export (a web page; Markdown, CSV and JSON with Pro), plus "Clear everything" and "Remove Tabfold…".
+- **Remove Tabfold…** (Settings): before uninstalling, take the tabs along: reopen them all (asleep until clicked), save them to Chrome bookmarks (a "Tabfold · date" folder, sorted by kind of site; the bookmarks permission is asked for only then), or download the web page export. Then Chrome's own confirmation removes the extension.
+- **Pro** ($5 a month or $48 a year): every folded tab syncs through a Tabfold account instead of Chrome sync (no 500-tab limit, no Chrome sign-in needed), a daily backup kept 30 days ("Restore a backup…" only adds missing tabs back), and Markdown, CSV and JSON export.
+- **Pro AI** ($9 a month or $84 a year, 7-day free trial without a card): everything in Pro, plus **Organise with AI** (a preview of projects for the newest 300 folded tabs, then "Group my list by project"; 300 runs a month), **smart names** for folds ("Checkout app · Stripe webhooks"), and **Copy as context for AI** on a group. Only titles and sites are sent, never pages, never Incognito tabs.
+- **Asking for Pro** happens in four quiet places only: the sync line when more than 500 tabs are folded, "Organise with AI" in the full list, an occasional milestone after a fold (Free only, at most weekly, never in the first 3 days, 30 days quiet after "Not now"), and "Your plan" in Settings. When a plan or the trial ends, the list, projects and backups stay; a one-time notice says what paused.
 - **Welcome tab** on install, light and dark themes, keyboard use, screen-reader labels.
 
 ## Develop
@@ -28,12 +32,23 @@ npm run zip          # store-ready zip
 npm run compile      # TypeScript, strict
 npm test             # unit tests (Vitest, fake IndexedDB, fake browser APIs)
 npm run e2e          # end-to-end smoke test in real Chromium (run `npm run build` first)
+npm run e2e:pro      # end-to-end Pro test: builds a copy against a fake ExtensionPay and the real server code
 npm run icons        # regenerate PNG icons
 ```
 
 The e2e test needs a Chromium binary: it uses `$CHROME_PATH`, or finds one in `/opt/pw-browsers` or common install paths. It drives Chromium over the DevTools protocol directly rather than through Playwright, because Playwright attaches to every tab and drops the browser connection when a tab it watches is discarded.
 
 Load the build by hand: `chrome://extensions` → Developer mode → Load unpacked → `.output/chrome-mv3`.
+
+### Building with Pro switched on
+
+Pro needs an ExtensionPay account and the Tabfold server; [`server/README.md`](server/README.md) sets both up from nothing. Then build with both values (in the environment or a `.env` file):
+
+```bash
+WXT_EXTPAY_ID=tabfold WXT_TABFOLD_API=https://<project id>.supabase.co/functions/v1/tabfold npm run zip
+```
+
+Without them the build is Free: the Pro screens still show, say "Pro isn't switched on in this build yet", and nothing talks to a server. The extension's content security policy only allows ExtensionPay and that server address.
 
 ## How it fits together
 
@@ -47,13 +62,15 @@ Load the build by hand: `chrome://extensions` → Developer mode → Load unpack
 | Popup | `src/entrypoints/popup/` | 400 × 580, opens in well under 150 ms (reads recent sessions only). |
 | Library | `src/entrypoints/library/` | Sessions, detail, search, snapshots, Trash, settings. |
 | Onboarding | `src/entrypoints/onboarding/` | Opens on first install. |
+| Pro | `src/lib/pro/`, `src/lib/background/pro.ts` | Plans from ExtensionPay (a small client of its web API, not its library), account sync (`src/lib/sync/`, the same format as Chrome sync with larger limits), AI requests, milestones. |
+| Server | `server/` | A Supabase Edge Function and Postgres: sign-in through ExtensionPay keys, sync, daily backups, AI limits, and the Claude calls. The Anthropic key lives only there. See `server/README.md` and `server/API.md`. |
 | Design tokens | `src/assets/styles.css` | CSS variables for light and dark, mapped to Tailwind utilities. |
 
 ## Measured
 
 - Search over 10,000 saved tabs: about 19 ms per query, 190 ms to build the index (unit test, Node).
 - Popup: first paint in about 60 to 150 ms in headless Chromium, with thousands of folded tabs.
-- 204 unit tests and a 57-check end-to-end smoke test pass (including real Incognito windows).
+- 428 unit tests (including the server, run in Node), a 57-check end-to-end smoke test (including real Incognito windows) and a 25-check end-to-end Pro test (trial, account sync, Organise with AI, smart names, backups, trial end, Remove Tabfold) pass.
 
 ## Decisions and known limits
 
@@ -64,4 +81,8 @@ Load the build by hand: `chrome://extensions` → Developer mode → Load unpack
 - **Unsaved typing can't be detected** without reading pages, which Tabfold never does. Sites that ask "Leave site?" are reported during a fold; others close normally.
 - **Memory in use is an estimate** (about 48 MB per loaded tab); the "Your computer" figure after a fold is a real reading of free memory (`system.memory`, which adds no install warning).
 - **No `sessions` permission**: crash recovery uses Tabfold's own snapshots.
-- **Pro (account sync without the 500-tab limit, backup) and Pro AI** are designed for later; nothing in this build talks to a server.
+- **Payments go through ExtensionPay**, called directly over its web API rather than through its library: the library is AGPL-licensed and needs a content script on extensionpay.com, which would add an install warning. Tabfold notices a payment or trial by checking the plan every 5 seconds while ExtensionPay's page is open (up to 15 minutes), and otherwise every 6 hours.
+- **The account is the email on the ExtensionPay plan.** The server checks every key with ExtensionPay (cached for 5 minutes) and stores only a fingerprint of it.
+- **AI uses Claude Haiku 5.5** at low effort with structured outputs; a run counts only when it succeeds, and a bad answer is retried once.
+- **Projects stay on the computer where you organised** (tabs synced to another computer arrive without them).
+- **Not yet tried against the live services**: the ExtensionPay, Supabase and Anthropic calls are covered by unit tests and by the end-to-end test against fakes and the real server code, not yet by real accounts. Prices are in USD; check VAT/sales-tax handling with ExtensionPay and Stripe before charging.

@@ -39,6 +39,9 @@ export function FoldedHeading({
   const hasProjects = projects.projects.length > 0;
   const byProject = groupBy === 'project' && hasProjects;
   const fresh = byProject ? newSinceOrganised(tabs, projects) : 0;
+  // Projects whose tabs were all removed or reopened don't count.
+  const inUse = new Set(tabs.map((t) => t.project));
+  const projectCount = projects.projects.filter((p) => inUse.has(p.name)).length;
   const options: Array<{ value: GroupBy; label: string }> = [
     { value: 'site', label: 'By site' },
     { value: 'project', label: 'By project' },
@@ -49,7 +52,7 @@ export function FoldedHeading({
       <div className={cx('mb-1 flex min-h-8 flex-wrap items-center gap-x-2.5 gap-y-2 px-0.5', spaced && 'mt-7')}>
         <h1 className="m-0 text-page leading-[1.45] font-semibold">Folded</h1>
         <span className="text-text-3">
-          {count(tabs.length, 'tab')} · {byProject ? count(projects.projects.length, 'project') : 'newest first'}
+          {count(tabs.length, 'tab')} · {byProject ? count(projectCount, 'project') : 'newest first'}
         </span>
         <span className="min-w-0 flex-1" />
         {hasProjects && (

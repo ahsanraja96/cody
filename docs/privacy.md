@@ -48,7 +48,7 @@ and a short note of tabs you removed, as with Chrome sync. Tab groups, windows, 
 
 Tabfold's server keeps your synced tabs, your daily backups, how many AI runs you've used this month, and your plan's email address, which identifies your account. Requests to it are identified by the ExtensionPay key, never stored on the server itself (only a fingerprint of it, for a few minutes).
 
-**Deleting it.** Settings › Clear all data removes your folded tabs on this computer and empties the copy in your Tabfold account; the daily backups that are left are deleted within 30 days. Cancelling your plan (from Tabfold's settings, through ExtensionPay) stops syncing and AI requests. To have your account's synced tabs and backups deleted right away, use Clear all data before you cancel, or write to the address below. Nothing on your computer is ever deleted or locked when a plan ends.
+**Deleting it.** Settings › Clear everything removes your folded tabs on this computer and empties the copy in your Tabfold account; the daily backups that are left are deleted within 30 days. Cancelling your plan (from Tabfold's settings, through ExtensionPay) stops syncing and AI requests. To have your account's synced tabs and backups deleted right away, use Clear everything before you cancel, or write to the address below. Nothing on your computer is ever deleted or locked when a plan ends.
 
 ## Free memory
 
@@ -56,7 +56,7 @@ After you fold tabs, Tabfold reads how much free memory your computer has (Chrom
 
 ## Incognito
 
-Tabfold doesn't touch Incognito windows unless you turn on "Fold Incognito windows too" in its settings and also allow Tabfold in Incognito in Chrome's extension settings. Tabs folded from Incognito are kept on this computer in Tabfold's storage (so they survive closing the Incognito window), never go to Chrome sync, and only ever reopen in an Incognito window. Remove them with × or Clear all data like any other tab.
+Tabfold doesn't touch Incognito windows unless you turn on "Fold Incognito windows too" in its settings and also allow Tabfold in Incognito in Chrome's extension settings. Tabs folded from Incognito are kept on this computer in Tabfold's storage (so they survive closing the Incognito window), never go to Chrome sync, and only ever reopen in an Incognito window. Remove them with × or Clear everything like any other tab.
 
 ## What Tabfold never does
 
@@ -70,7 +70,7 @@ Suggested keywords are worked out on your computer from a tab's title and addres
 
 ## Deleting your data
 
-Remove tabs from your list with ×, or use Settings › Clear all data, which also removes your tabs from Chrome sync (and, with Pro, from your Tabfold account). Removing the extension deletes its data from this browser; to remove the copy in Chrome sync or your Tabfold account as well, use Clear all data first.
+Remove tabs from your list with ×, or use Settings › Clear everything, which also removes your tabs from Chrome sync (and, with Pro, from your Tabfold account). Removing the extension deletes its data from this browser; Settings › Remove Tabfold… first offers to reopen your tabs, save them to Chrome bookmarks or download them. To remove the copy in Chrome sync or your Tabfold account as well, use Clear everything first.
 
 ## Changes
 

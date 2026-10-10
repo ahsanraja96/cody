@@ -2,7 +2,7 @@
   "name": "tabfold",
   "description": "Save and restore tabs and whole windows, free memory, and find any tab by title, address or keyword.",
   "private": true,
-  "version": "0.3.2",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "node e2e/smoke.mjs",
+    "e2e:pro": "node --experimental-transform-types --no-warnings e2e/pro.mjs",
     "icons": "node scripts/make-icons.mjs",
     "postinstall": "wxt prepare"
   },
