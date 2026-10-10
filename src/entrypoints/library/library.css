@@ -1,0 +1,139 @@
+/*
+ * Full list, How it works and Welcome: the few colours and motions the shared stylesheet doesn't
+ * have. Chrome's tab group colours (one per site category) and the memory colours from the
+ * Min-Memory board, for light and dark like the tokens in styles.css.
+ */
+
+:root {
+  --tf-mem-from: #5560de;
+  --tf-mem-to: #8d6bef;
+  --tf-mem-glow: rgba(85, 96, 222, 0.22);
+  --tf-mem-hi: rgba(255, 255, 255, 0.38);
+  --tf-mem-line: rgba(79, 91, 213, 0.5);
+  --tf-mem-tick: rgba(23, 23, 26, 0.09);
+  --cg-grey: #5f6368;
+  --cg-blue: #1a73e8;
+  --cg-red: #d93025;
+  --cg-yellow: #f9ab00;
+  --cg-green: #188038;
+  --cg-pink: #d01884;
+  --cg-purple: #a142f4;
+  --cg-cyan: #007b83;
+  --cg-orange: #fa903e;
+  --tf-fav-ring: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --tf-mem-from: #6973ee;
+    --tf-mem-to: #a78bfa;
+    --tf-mem-glow: rgba(140, 128, 255, 0.5);
+    --tf-mem-hi: rgba(255, 255, 255, 0.22);
+    --tf-mem-line: rgba(163, 170, 247, 0.55);
+    --tf-mem-tick: rgba(255, 255, 255, 0.07);
+    --cg-grey: #bdc1c6;
+    --cg-blue: #8ab4f8;
+    --cg-red: #f28b82;
+    --cg-yellow: #fdd663;
+    --cg-green: #81c995;
+    --cg-pink: #ff8bcb;
+    --cg-purple: #c58af9;
+    --cg-cyan: #78d9ec;
+    --cg-orange: #fcad70;
+    --tf-fav-ring: 0 0 0 1px var(--tf-border-strong);
+  }
+}
+
+:root[data-theme='dark'] {
+  --tf-mem-from: #6973ee;
+  --tf-mem-to: #a78bfa;
+  --tf-mem-glow: rgba(140, 128, 255, 0.5);
+  --tf-mem-hi: rgba(255, 255, 255, 0.22);
+  --tf-mem-line: rgba(163, 170, 247, 0.55);
+  --tf-mem-tick: rgba(255, 255, 255, 0.07);
+  --cg-grey: #bdc1c6;
+  --cg-blue: #8ab4f8;
+  --cg-red: #f28b82;
+  --cg-yellow: #fdd663;
+  --cg-green: #81c995;
+  --cg-pink: #ff8bcb;
+  --cg-purple: #c58af9;
+  --cg-cyan: #78d9ec;
+  --cg-orange: #fcad70;
+  --tf-fav-ring: 0 0 0 1px var(--tf-border-strong);
+}
+
+/* A folded-tab row: the time gives way to the actions on hover or keyboard focus. */
+.tf-row .tf-row-actions {
+  display: none;
+}
+.tf-row:hover .tf-row-actions,
+.tf-row:focus-within .tf-row-actions {
+  display: flex;
+}
+.tf-row:hover .tf-row-time,
+.tf-row:focus-within .tf-row-time {
+  display: none;
+}
+
+/* A small dark tooltip under an icon button, on hover or keyboard focus. */
+.tf-tip {
+  position: relative;
+  display: flex;
+}
+.tf-tip > [role='tooltip'] {
+  display: none;
+  position: absolute;
+  z-index: 5;
+  top: 32px;
+  right: 0;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--tf-inverse);
+  color: var(--tf-on-inverse);
+  font-size: 11px;
+  box-shadow: var(--tf-shadow);
+  pointer-events: none;
+}
+.tf-tip:hover > [role='tooltip'],
+.tf-tip:has(:focus-visible) > [role='tooltip'] {
+  display: block;
+}
+
+.tf-spin {
+  animation: tf-spin 1.2s linear infinite;
+}
+
+/* A memory segment: a small block in the memory colours (Min-Memory board). */
+.tf-seg {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--seg-c);
+  box-shadow:
+    inset 0 1px 0 var(--tf-mem-hi),
+    0 0 5px var(--tf-mem-glow);
+}
+.tf-seg-asleep {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 6px;
+  border-radius: 1px;
+  border: 1px solid var(--tf-mem-line);
+  background: var(--tf-bg-subtle);
+}
+.tf-ticks {
+  background-color: var(--tf-bg-subtle);
+  background-image: repeating-linear-gradient(90deg, var(--tf-mem-tick) 0 1px, transparent 1px 4px);
+}
+.tf-capsule-fill {
+  background-color: var(--tf-accent-soft);
+  background-image: repeating-linear-gradient(90deg, var(--tf-mem-to) 0 1px, transparent 1px 3px);
+}
+
+/* Dark letter tiles in the illustrations get a hairline ring in the dark theme. */
+.tf-fav-dark {
+  box-shadow: var(--tf-fav-ring);
+}

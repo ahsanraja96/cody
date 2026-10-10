@@ -1,267 +1,170 @@
-import { useEffect, useRef, useState } from 'react';
-import { browser } from 'wxt/browser';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { Archive, Search, X } from 'lucide-react';
-import { checkWiped } from '@/lib/dataGuard';
-import { send } from '@/lib/messages';
-import { listLiveSessions } from '@/lib/repo';
-import { Button, IconButton } from '@/ui/components/Button';
-import { Kbd } from '@/ui/components/Chips';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { TabRecord } from '@/lib/types';
 import { ConfirmHost } from '@/ui/components/Dialog';
-import { ProInfoHost } from '@/ui/components/ProDialog';
-import { dismissToast, toast, ToastViewport, triggerLatestUndo } from '@/ui/components/Toast';
-import { cx } from '@/ui/cx';
-import { useLastAction, useUpdateReady } from '@/ui/hooks';
-import { plural } from '@/lib/format';
-import { useRoute, type Route } from './router';
-import { Sidebar } from './Sidebar';
-import { SessionsView } from './SessionsView';
-import { SessionDetail } from './SessionDetail';
-import { SearchView } from './SearchView';
-import { SnapshotsView } from './SnapshotsView';
-import { TrashView } from './TrashView';
-import { SettingsView } from './SettingsView';
-import { GroupsUnavailableBanner, StorageWarning, UpdateBanner } from './flows/Banners';
-import { FlowsHost } from './flows/FlowsHost';
-import { openShortcutsDialog } from './flows/index';
-import { WipedScreen } from './flows/WipedScreen';
+import { ToastViewport } from '@/ui/components/Toast';
+import { ImportDialog } from '@/ui/ImportPanel';
+import { useActiveFold, useFoldedTabs, useOpenWindows, useSettings, useSyncStatus } from '@/ui/hooks';
+import { EmptyState } from './EmptyState';
+import { startFold, useFoldCandidates, useFoldToast } from './fold';
+import { count } from './format';
+import { GroupedList } from './GroupedList';
+import { HowPage } from './HowPage';
+import { Notices } from './Notices';
+import { RecentFolds } from './RecentFolds';
+import { useRoute } from './router';
+import { SearchResults } from './SearchResults';
+import { SettingsDialog, useFoldShortcut } from './SettingsDialog';
+import { TopBar } from './TopBar';
+import { undoLatest } from './undo';
+import { useRemovals } from './actions';
 
-/** Below this width the session detail opens as an overlay panel and the sidebar becomes a rail. */
-export const WIDE_LAYOUT = '(min-width: 1200px)';
-
-function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const list = window.matchMedia(query);
-    const onChange = () => setMatches(list.matches);
-    list.addEventListener('change', onChange);
-    onChange();
-    return () => list.removeEventListener('change', onChange);
-  }, [query]);
-  return matches;
-}
+const NO_TABS: TabRecord[] = [];
 
 function isTyping(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   return !!el && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement || el.isContentEditable);
 }
 
-function anyDialogOpen(): boolean {
-  return !!document.querySelector('dialog[open]');
-}
-
-/** A save made from the popup, a shortcut or here shows its Undo with the seconds left, while it is still undoable. */
-function useUndoToast() {
-  const action = useLastAction();
-  const shown = useRef<{ actionId: string; toastId: number } | null>(null);
-  useEffect(() => {
-    // Undo in one place clears it everywhere.
-    if (shown.current && (!action || action.undone || action.id !== shown.current.actionId)) {
-      dismissToast(shown.current.toastId);
-      if (!action || action.id === shown.current.actionId) shown.current = null;
-    }
-    if (!action || action.undone || action.expiresAt < Date.now() || shown.current?.actionId === action.id) return;
-    const left = Math.max(2000, action.expiresAt - Date.now());
-    const message =
-      action.closedTabs > 0 || !action.sessionName ? `Saved ${plural(action.savedTabs, 'tab')}` : `Saved ${plural(action.savedTabs, 'tab')} to ${action.sessionName}`;
-    const toastId = toast(message, {
-      tone: 'success',
-      duration: left,
-      countdown: true,
-      announce: `${message}. Undo available for ${Math.round(left / 1000)} seconds.`,
-      action: {
-        label: 'Undo',
-        onClick: () =>
-          send({ type: 'undo', actionId: action.id })
-            .then((result) => {
-              if (!result.undone && result.reason) toast(result.reason, { tone: 'error' });
-            })
-            .catch(() => undefined),
-      },
-    });
-    shown.current = { actionId: action.id, toastId };
-  }, [action]);
-}
-
+/**
+ * The full list (Min-List): top bar with search, sync line, Settings and Fold all tabs; the last
+ * three folds; every folded tab grouped by kind of site. Search results replace the list while
+ * there is a query. Settings and Import open over it; How it works is its own page.
+ */
 export function LibraryApp() {
   const [route, navigate] = useRoute();
-  const wide = useMediaQuery(WIDE_LAYOUT);
+  const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
-  const [searchText, setSearchText] = useState(route.view === 'search' ? (route.query ?? '') : '');
-  const updateReady = useUpdateReady();
-  const live = useLiveQuery(() => listLiveSessions(), []);
-  const [wipeCheckKey, setWipeCheckKey] = useState(0);
-  const wipe = useLiveQuery(() => checkWiped(), [wipeCheckKey]);
-  const tabTotal = live?.reduce((n, s) => n + s.tabCount, 0) ?? 0;
+  const scrollRef = useRef<HTMLElement>(null);
+  const [settings, , settingsLoaded] = useSettings();
+  const folded = useFoldedTabs();
+  const fold = useActiveFold();
+  const syncStatus = useSyncStatus();
+  const { windows } = useOpenWindows();
+  const candidates = useFoldCandidates(windows, settings.keepPinnedOpen);
+  const shortcut = useFoldShortcut();
+  const hasRemovals = useRemovals((s) => s.removals.size > 0);
+  const [activeResult, setActiveResult] = useState<string | undefined>();
+  useFoldToast();
 
-  useUndoToast();
+  const tabs = folded?.tabs ?? NO_TABS;
+  const recent = useMemo(
+    () =>
+      (folded?.folds ?? [])
+        .filter((f) => f.kind !== 'unsorted' && f.source !== 'import' && f.tabCount > 0)
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, 3),
+    [folded],
+  );
+  const searching = query.trim().length > 0;
 
-  // Keep the search box in sync when the route changes from outside (back button, popup link).
   useEffect(() => {
-    if (route.view === 'search') setSearchText(route.query ?? '');
-  }, [route.view, route.query]);
+    document.title = route === 'how' ? 'How Tabfold frees memory' : 'Tabfold';
+  }, [route]);
 
-  const selectSession = (sessionId: string | undefined) => navigate({ ...route, sessionId }, { replace: true });
-  const openSession = (sessionId: string) => navigate({ view: 'all', sessionId });
-  const showDetail = !!route.sessionId && route.view !== 'settings' && route.view !== 'snapshots';
-
+  // / focuses search, Esc clears it, ⌘Z / Ctrl+Z undoes the last removal or fold.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return;
+      if (e.defaultPrevented || document.querySelector('dialog[open]')) return;
       const typing = isTyping(e.target);
-      if (e.key === '/' && !typing && !anyDialogOpen()) {
+      if (e.key === '/' && !typing && route === 'list') {
         e.preventDefault();
         searchRef.current?.focus();
         searchRef.current?.select();
-      } else if (e.key === '?' && !typing && !anyDialogOpen()) {
+      } else if (e.key === 'Escape' && query && route === 'list') {
         e.preventDefault();
-        openShortcutsDialog();
-      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && !typing && !anyDialogOpen()) {
-        if (triggerLatestUndo()) e.preventDefault();
-      } else if (e.key === 'Escape' && !anyDialogOpen() && showDetail && !typing) {
-        e.preventDefault();
-        selectSession(undefined);
+        setQuery('');
+      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && !typing) {
+        if (undoLatest()) e.preventDefault();
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  });
+  }, [query, route]);
 
-  const onSearchChange = (value: string) => {
-    setSearchText(value);
-    if (value.trim()) navigate({ view: 'search', query: value, sessionId: route.sessionId }, { replace: route.view === 'search' });
-    else if (route.view === 'search') navigate({ view: 'all' }, { replace: true });
-  };
+  // A new query starts at the top.
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [searching]);
 
-  const saveAll = async () => {
-    try {
-      const current = await browser.windows.getCurrent();
-      const outcome = await send({ type: 'save', scope: 'all', close: true, windowId: current.id, audible: 'keep' });
-      if (outcome.savedTabs === 0 && outcome.skippedDuplicates === 0) toast('Nothing to save: only pinned, blank or Tabfold tabs are open.');
-      else if (outcome.keptOpen.audible) toast(`${plural(outcome.keptOpen.audible, 'tab')} playing audio stayed open.`);
-    } catch (error) {
-      toast(error instanceof Error ? error.message : 'Saving failed.', { tone: 'error' });
-    }
-  };
+  const onActiveResult = useCallback((id: string | undefined) => setActiveResult(id), []);
+  const openImport = () => navigate('import');
 
   const hosts = (
     <>
-      <FlowsHost detailSessionId={showDetail ? route.sessionId : undefined} onOpenSession={openSession} />
+      <SettingsDialog
+        open={route === 'settings'}
+        onClose={() => navigate('list', { replace: true })}
+        onHow={() => navigate('how')}
+        onImport={() => navigate('import', { replace: true })}
+        syncStatus={syncStatus}
+        foldedCount={tabs.length}
+      />
+      <ImportDialog open={route === 'import'} onClose={() => navigate('list', { replace: true })} />
       <ToastViewport />
       <ConfirmHost />
-      <ProInfoHost />
     </>
   );
 
-  if (route.view === 'settings') {
+  if (route === 'how') {
     return (
-      <div className="relative flex h-screen flex-col overflow-hidden bg-bg text-text">
-        {updateReady && <UpdateBanner />}
-        <div className={cx('min-h-0 flex-1', updateReady && 'pointer-events-none opacity-50')} inert={!!updateReady}>
-          <SettingsView section={route.section} onBack={() => navigate({ view: 'all' })} />
-        </div>
+      <>
+        <HowPage onBack={() => navigate('list')} />
         {hosts}
-      </div>
+      </>
     );
   }
 
-  const view = (r: Route) => {
-    if (wipe?.wiped && (r.view === 'all' || r.view === 'pinned' || r.view === 'recent' || r.view === 'tag')) {
-      return (
-        <WipedScreen
-          check={wipe}
-          onRecovered={(id) => {
-            setWipeCheckKey((k) => k + 1);
-            openSession(id);
-          }}
-          onDismissed={() => setWipeCheckKey((k) => k + 1)}
-        />
-      );
-    }
-    switch (r.view) {
-      case 'snapshots':
-        return <SnapshotsView />;
-      case 'trash':
-        return <TrashView selectedId={r.sessionId} onSelect={selectSession} />;
-      case 'search':
-        return <SearchView query={r.query ?? ''} selectedId={r.sessionId} onSelect={selectSession} />;
-      default:
-        return <SessionsView route={r} navigate={navigate} onSaveAll={saveAll} />;
-    }
-  };
-
-  const detail = showDetail && route.sessionId && (
-    <SessionDetail
-      key={route.sessionId}
-      sessionId={route.sessionId}
-      highlightQuery={route.view === 'search' ? route.query : undefined}
-      overlay={!wide}
-      onClose={() => selectSession(undefined)}
-    />
-  );
+  const empty = folded !== undefined && tabs.length === 0 && !hasRemovals;
 
   return (
-    <div className="relative flex h-screen overflow-hidden bg-bg text-text">
-      <Sidebar route={route} navigate={navigate} />
-      <div className="relative flex min-w-0 flex-1 flex-col">
-        {updateReady && <UpdateBanner />}
-        <div className={cx('flex min-h-0 flex-1 flex-col', updateReady && 'pointer-events-none opacity-50')} inert={!!updateReady}>
-          <div className="flex min-h-14 flex-wrap items-center gap-2.5 border-b border-border px-6 py-2.5">
-            <label className="flex h-9 min-w-[220px] flex-[0_1_420px] items-center gap-2 rounded-control border border-border-strong bg-surface pr-2 pl-3 text-text-3 focus-within:border-accent focus-within:shadow-[0_0_0_3px_var(--tf-accent-soft)]">
-              <Search size={16} aria-hidden className="shrink-0" />
-              <input
-                ref={searchRef}
-                type="search"
-                value={searchText}
-                onChange={(e) => onSearchChange(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape' && searchText) {
-                    e.preventDefault();
-                    onSearchChange('');
-                  }
+    <div className="flex h-screen flex-col overflow-hidden bg-bg text-text">
+      <TopBar
+        ref={searchRef}
+        query={query}
+        onQuery={setQuery}
+        syncStatus={syncStatus}
+        syncEnabled={settingsLoaded && settings.syncWithChrome}
+        onSettings={() => navigate('settings')}
+        onFold={() => void startFold()}
+        fold={fold}
+        candidates={candidates}
+        shortcut={shortcut}
+        activeDescendant={searching ? activeResult : undefined}
+      />
+      <main ref={scrollRef} className="scroll-thin relative min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]">
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,880px)_minmax(0,1fr)] px-8 pt-6 pb-12 max-[720px]:px-4">
+          <div className="col-start-2 row-start-1 min-w-0">
+            <Notices fold={fold} onImport={openImport} />
+            {searching ? (
+              <SearchResults
+                query={query}
+                windows={windows}
+                foldedCount={tabs.length}
+                scrollRef={scrollRef}
+                onClear={() => {
+                  setQuery('');
+                  searchRef.current?.focus();
                 }}
-                placeholder={tabTotal > 0 ? `Search ${plural(tabTotal, 'tab')} by title, address or keyword` : 'Search tabs by title, address or keyword'}
-                aria-label="Search saved and open tabs by title, address or keyword"
-                className="h-full min-w-0 flex-1 border-0 bg-transparent p-0 text-text outline-none [&::-webkit-search-cancel-button]:hidden"
+                onActive={onActiveResult}
               />
-              {searchText ? (
-                <IconButton label="Clear search" size="sm" tone="muted" onClick={() => onSearchChange('')}>
-                  <X size={14} aria-hidden />
-                </IconButton>
-              ) : (
-                <Kbd>/</Kbd>
-              )}
-            </label>
-            <span className="flex-1" />
-            <Button variant="primary" icon={<Archive size={16} aria-hidden />} onClick={saveAll}>
-              Save all now
-            </Button>
+            ) : empty ? (
+              <EmptyState onImport={openImport} foldable={candidates.tabs} />
+            ) : (
+              <>
+                <RecentFolds folds={recent} />
+                {folded && (
+                  <div className={recent.length ? 'mt-7 mb-1 flex items-baseline gap-2.5 px-0.5' : 'mb-1 flex items-baseline gap-2.5 px-0.5'}>
+                    <h1 className="m-0 text-page leading-[1.45] font-semibold">Folded</h1>
+                    <span className="text-text-3">{count(tabs.length, 'tab')} · newest first</span>
+                  </div>
+                )}
+              </>
+            )}
           </div>
-
-          <div className="flex min-h-0 flex-1">
-            <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-              <LibraryNotices />
-              <div className="relative min-h-0 flex-1">{view(route)}</div>
-            </main>
-            {wide && detail}
-          </div>
+          {!searching && !empty && folded && <GroupedList tabs={tabs} scrollRef={scrollRef} />}
         </div>
-        {!wide && showDetail && (
-          <div aria-hidden className="anim-in absolute inset-0 z-20 bg-overlay" onClick={() => selectSession(undefined)} />
-        )}
-      </div>
-      {!wide && detail}
+      </main>
       {hosts}
-    </div>
-  );
-}
-
-/** Policy and storage notices above the current view. */
-function LibraryNotices() {
-  return (
-    <div className="flex shrink-0 flex-col gap-3 px-6 empty:hidden [&>*:first-child]:mt-4">
-      <GroupsUnavailableBanner />
-      <StorageWarning />
     </div>
   );
 }

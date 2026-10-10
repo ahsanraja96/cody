@@ -1,243 +1,208 @@
-import { useEffect, useState } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { browser } from 'wxt/browser';
-import { ArrowDown, ChevronRight } from 'lucide-react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import type { ImportSource } from '@/lib/importers';
-import { openLibrary } from '@/lib/openLibrary';
-import { listLiveSessions } from '@/lib/repo';
-import { Button } from '@/ui/components/Button';
-import { Kbd } from '@/ui/components/Chips';
-import { ProInfoHost } from '@/ui/components/ProDialog';
-import { ToastViewport } from '@/ui/components/Toast';
-import { ImportDialog, SourceTile } from '@/ui/ImportPanel';
-import { cx } from '@/ui/cx';
-import { isMac } from '@/ui/hooks';
+import { ArrowDown, ArrowRight, Check, Pin, Puzzle, RefreshCw } from 'lucide-react';
+import { extUrl } from '@/lib/extUrl';
+import { Logo } from '@/ui/components/Logo';
+import { LetterTile, MemoryBar, type Seg } from '../library/diagrams';
 
-function Steps({ step, onSkip }: { step: number; onSkip?: () => void }) {
+const TABS: Array<[string, string, string?, boolean?]> = [
+  ['G', '#1F2328', undefined, true],
+  ['D', '#4285F4'],
+  ['Y', '#FF0033'],
+  ['C', '#D97757'],
+  ['a', '#FF9900', '#111111'],
+];
+
+const FOLDED: Seg[] = Array.from({ length: 30 }, (_, i) => (i < 3 ? 'on' : 'off'));
+
+const GROUPS: Array<{ name: string; color: string; n: number; icons: Array<[string, string, string?, boolean?]> }> = [
+  { name: 'Dev', color: 'blue', n: 64, icons: [['G', '#1F2328', undefined, true], ['V', '#000000', undefined, true], ['S', '#3ECF8E', '#0B3D26']] },
+  { name: 'AI', color: 'purple', n: 27, icons: [['C', '#D97757'], ['C', '#10A37F']] },
+  { name: 'Video', color: 'red', n: 23, icons: [['Y', '#FF0033'], ['V', '#1AB7EA']] },
+  { name: 'Reading', color: 'green', n: 52, icons: [['M', '#111111', undefined, true], ['S', '#FF6719']] },
+];
+
+function Card({ illustration, title, children }: { illustration: ReactNode; title: string; children: ReactNode }) {
   return (
-    <div className="flex items-center gap-2.5">
-      <span className="text-meta text-text-3">Step {step} of 3</span>
-      <span aria-hidden className="flex gap-1">
-        {[1, 2, 3].map((n) => (
-          <span key={n} className={cx('h-1 w-[18px] rounded-sm', n <= step ? 'bg-accent' : 'bg-border-strong')} />
-        ))}
-      </span>
-      <span className="flex-1" />
-      {onSkip && (
-        <button type="button" className="h-7 rounded-md px-2 text-text-2 hover:bg-hover hover:text-text" onClick={onSkip}>
-          Skip
-        </button>
-      )}
+    <div className="flex flex-col">
+      <div aria-hidden className="flex h-[184px] items-center justify-center overflow-hidden rounded-card border border-border bg-bg-subtle">
+        {illustration}
+      </div>
+      <h2 className="m-0 mt-5 text-section font-semibold">{title}</h2>
+      <p className="m-0 mt-1.5 text-text-2">{children}</p>
     </div>
   );
 }
 
-function FoldIllustration() {
-  const colors = ['#635BFF', '#1F2328', '#3ECF8E', '#FF0033', '#D97757'];
+function FoldDrawing() {
   return (
-    <div aria-hidden className="relative h-[220px] overflow-hidden rounded-card border border-border bg-bg-subtle">
-      <div className="absolute top-[34px] left-7 flex flex-col gap-1.5">
-        {colors.map((color, i) => (
-          <div
-            key={color}
-            className="tf-fold flex h-[26px] w-[150px] items-center gap-2 rounded-t-lg rounded-b-sm border border-border bg-surface px-2"
-            style={{ transform: `translateX(${i * 10}px)`, opacity: 1 - i * 0.13, animationDelay: `${i * 90}ms` }}
+    <div className="flex flex-col items-center gap-3">
+      <div className="flex pl-2">
+        {TABS.map(([letter, bg, fg, dark], i) => (
+          <span
+            key={i}
+            className="-ml-2 flex h-[26px] w-14 shrink-0 items-center gap-1.5 rounded-control border border-border-strong bg-surface px-2 shadow-[0_1px_2px_var(--tf-overlay)]"
           >
-            <span className="size-3 rounded-[3px]" style={{ background: color }} />
-            <span className="h-1.5 flex-1 rounded bg-hover" />
-          </div>
+            <LetterTile letter={letter} bg={bg} fg={fg} size={12} dark={dark} />
+            <span className="h-1 flex-1 rounded-sm bg-skeleton" />
+          </span>
         ))}
       </div>
-      <svg width="40" height="24" viewBox="0 0 40 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="absolute top-[98px] left-[228px] text-accent">
-        <path d="M2 12h34" />
-        <path d="m28 4 8 8-8 8" />
-      </svg>
-      <div className="absolute top-14 right-6 flex w-[122px] flex-col gap-2 rounded-card border border-accent-line bg-surface p-3 shadow-pop">
-        <span className="text-meta font-semibold">Oct 10 · 14:32</span>
-        <span className="flex gap-[3px]">
-          {colors.map((color) => (
-            <span key={color} className="size-3 rounded-[3px]" style={{ background: color }} />
-          ))}
-        </span>
-        <span className="text-meta text-text-3">47 tabs · 3 windows</span>
+      <ArrowDown size={18} strokeWidth={1.75} className="text-text-3" />
+      <div className="w-60">
+        <MemoryBar segments={FOLDED} capsule={1} label="Tabs folded, memory freed" />
       </div>
-      <span className="absolute top-[158px] right-6 inline-flex h-[22px] items-center rounded-full border border-green-line bg-green-soft px-2 text-meta font-semibold text-green">
-        Freed ~2.1 GB
+      <span className="inline-flex h-7 items-center gap-1.5 rounded-full border border-green-line bg-green-soft px-3 text-small font-semibold text-green">
+        <Check size={14} strokeWidth={2.2} />
+        <span className="tabular-nums">Folded 44 tabs · freed ~2.1 GB</span>
       </span>
     </div>
   );
 }
 
-function WindowsIllustration() {
-  const windows: Array<[string, string[]]> = [
-    ['Docs', ['80%', '60%', '70%']],
-    ['Dashboards', ['70%', '85%', '50%']],
-    ['AI chats', ['60%', '75%', '65%']],
-  ];
+function ListDrawing() {
   return (
-    <div aria-hidden className="flex h-[220px] flex-col justify-center gap-3.5 rounded-card border border-border bg-bg-subtle p-5">
-      <div className="flex gap-2.5">
-        {windows.map(([name, widths]) => (
-          <div key={name} className="flex-1 overflow-hidden rounded-control border border-border bg-surface">
-            <div className="flex h-[22px] items-center gap-1 border-b border-border bg-hover px-2">
-              <span className="size-1.5 rounded-full bg-border-strong" />
-              <span className="size-1.5 rounded-full bg-border-strong" />
-              <span className="ml-1.5 text-[10px] font-semibold text-text-2">{name}</span>
-            </div>
-            <div className="flex flex-col gap-1.5 p-2.5">
-              {widths.map((width, i) => (
-                <span key={i} className="h-1.5 rounded bg-hover" style={{ width }} />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-      <ArrowDown size={16} className="self-center text-accent" />
-      <div className="flex flex-col gap-1.5 rounded-card border border-accent-line bg-surface px-3 py-2.5">
-        <span className="text-meta font-semibold">Checkout app</span>
-        <span className="flex flex-wrap gap-1.5">
-          {['Docs · 9', 'Dashboards · 6', 'AI chats · 9'].map((label) => (
-            <span key={label} className="inline-flex h-5 items-center rounded-full border border-border px-[7px] text-[10px] text-text-2">
-              {label}
-            </span>
-          ))}
-        </span>
-      </div>
+    <div className="w-[236px] rounded-card border border-border bg-surface py-1 shadow-[0_1px_2px_var(--tf-overlay)]">
+      {GROUPS.map((group) => (
+        <div key={group.name} className="flex h-[30px] items-center gap-2 px-2.5">
+          <span className="size-2 shrink-0 rounded-full" style={{ background: `var(--cg-${group.color})` }} />
+          <span className="text-small font-semibold">{group.name}</span>
+          <span className="text-meta text-text-3">· {group.n}</span>
+          <span className="flex-1" />
+          <span className="flex shrink-0 gap-[3px]">
+            {group.icons.map(([letter, bg, fg, dark], i) => (
+              <LetterTile key={i} letter={letter} bg={bg} fg={fg} size={12} dark={dark} />
+            ))}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
 
-/** Chrome gives "⇧⌘S" on a Mac and "Ctrl+Shift+S" elsewhere; the board shows "⌘⇧S". */
-function prettyShortcut(shortcut: string): string {
-  if (!isMac || shortcut.includes('+')) return shortcut;
-  const order = ['⌃', '⌥', '⌘', '⇧'];
-  const mods = [...shortcut].filter((c) => order.includes(c));
-  const rest = [...shortcut].filter((c) => !order.includes(c)).join('');
-  return `${mods.sort((a, b) => order.indexOf(a) - order.indexOf(b)).join('')}${rest}`;
+function Laptop() {
+  return (
+    <div className="flex flex-col items-center">
+      <div className="flex h-[68px] w-[104px] flex-col justify-center gap-2 rounded-t-md rounded-b-[2px] border border-border-strong bg-surface px-3.5">
+        {(
+          [
+            ['blue', 44],
+            ['purple', 30],
+            ['red', 38],
+          ] as const
+        ).map(([color, width]) => (
+          <div key={color} className="flex items-center gap-[5px]">
+            <span className="size-1.5 shrink-0 rounded-full" style={{ background: `var(--cg-${color})` }} />
+            <span className="h-1 rounded-sm bg-skeleton" style={{ width }} />
+          </div>
+        ))}
+      </div>
+      <div className="h-1.5 w-[124px] rounded-b-md border border-t-0 border-border-strong bg-hover" />
+    </div>
+  );
 }
 
-export function Onboarding() {
-  const [step, setStep] = useState(1);
-  const [importSource, setImportSource] = useState<ImportSource | null>(null);
-  const [saveShortcut, setSaveShortcut] = useState(isMac ? '⌘⇧S' : 'Ctrl+Shift+S');
-  const imported = useLiveQuery(async () => (await listLiveSessions()).filter((s) => s.source === 'import').length, []) ?? 0;
-
-  useEffect(() => {
-    browser.commands
-      .getAll()
-      .then((commands) => {
-        const shortcut = commands.find((c) => c.name === 'save-all')?.shortcut;
-        if (shortcut) setSaveShortcut(prettyShortcut(shortcut));
-      })
-      .catch(() => undefined);
-  }, []);
-
-  const finish = async () => {
-    await openLibrary();
-    const tab = await browser.tabs.getCurrent();
-    if (tab?.id !== undefined) await browser.tabs.remove(tab.id);
-  };
-
+function SyncDrawing() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-bg-subtle px-4 py-10">
-      <main
-        aria-label={`Step ${step} of 3`}
-        className="flex min-h-[534px] w-full max-w-[480px] flex-col gap-4 rounded-card border border-border bg-bg p-6 shadow-pop"
+    <div className="flex flex-col items-center gap-3">
+      <div className="flex items-center gap-3.5 max-[1180px]:gap-1.5">
+        <Laptop />
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-surface text-text-2">
+          <RefreshCw size={16} strokeWidth={1.75} />
+        </span>
+        <Laptop />
+      </div>
+      <span className="inline-flex items-center gap-1.5 text-meta text-text-3">
+        <Check size={12} strokeWidth={2.2} className="text-green" />
+        Synced with Chrome
+      </span>
+    </div>
+  );
+}
+
+async function closeTab(): Promise<void> {
+  try {
+    const tab = await browser.tabs.getCurrent();
+    if (tab?.id !== undefined) {
+      await browser.tabs.remove(tab.id);
+      return;
+    }
+  } catch {
+    // Fall through to closing the window.
+  }
+  window.close();
+}
+
+/**
+ * The Welcome tab (Min-Welcome), opened once on install: the three things Tabfold does, the tip to
+ * pin it to the toolbar, and a link to how it frees memory. "Got it" closes the tab.
+ */
+export function Onboarding() {
+  useEffect(() => {
+    document.title = 'Welcome to Tabfold';
+  }, []);
+  return (
+    <div className="relative min-h-screen overflow-x-hidden bg-bg pb-16 text-text">
+      <header className="flex h-[72px] items-center gap-2.5 px-10 max-[720px]:px-5">
+        <Logo size={28} />
+        <span className="text-section font-semibold">Tabfold</span>
+      </header>
+
+      <aside
+        aria-label="Tip"
+        className="absolute top-4 right-6 w-[316px] rounded-card border border-border bg-surface px-4 pt-3.5 pb-4 shadow-pop max-[1180px]:static max-[1180px]:mx-auto max-[1180px]:mt-2 max-[720px]:w-auto max-[720px]:mx-5"
       >
-        <Steps step={step} onSkip={step < 3 ? finish : undefined} />
+        <span
+          aria-hidden
+          className="absolute -top-[7px] right-[30px] size-3 rotate-45 border-t border-l border-border bg-surface max-[1180px]:hidden"
+        />
+        <div className="flex items-center gap-2 font-semibold">
+          <Pin size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-accent-text" />
+          Pin Tabfold to your toolbar
+        </div>
+        <p className="m-0 mt-1 mb-3 text-small text-text-2">
+          Click the puzzle piece <Puzzle size={13} strokeWidth={1.75} aria-label="(Extensions)" className="inline align-[-2px] text-text" /> in
+          Chrome’s toolbar, then the pin next to Tabfold.
+        </p>
+        <div aria-hidden className="flex h-9 items-center gap-2.5 rounded-control border border-border bg-bg-subtle pr-1.5 pl-2.5">
+          <Logo size={18} />
+          <span className="flex-1 text-small">Tabfold</span>
+          <span className="flex size-[26px] items-center justify-center rounded-md bg-accent-soft text-accent-text shadow-[0_0_0_1px_var(--tf-accent-line)]">
+            <Pin size={14} strokeWidth={1.75} />
+          </span>
+        </div>
+      </aside>
 
-        {step === 1 && (
-          <>
-            <FoldIllustration />
-            <h1 className="text-hero font-semibold">Save everything in one click</h1>
-            <p className="text-text-2">
-              Your tabs fold into a saved session and close, so Chrome gets its memory back. Pinned tabs stay open. Changed your mind? Undo
-              for 10 seconds.
-            </p>
-            <p className="flex items-center gap-1.5 text-small text-text-3">
-              Shortcut <Kbd className="h-5 rounded-[5px] px-1.5">{saveShortcut}</Kbd> from any tab
-            </p>
-            <span className="flex-1" />
-            <div className="flex justify-end">
-              <Button variant="primary" onClick={() => setStep(2)}>
-                Next
-              </Button>
-            </div>
-          </>
-        )}
+      <main className="mx-auto flex w-full max-w-[1088px] flex-col items-center px-6 pt-20 max-[1180px]:pt-12">
+        <h1 className="m-0 text-center text-[32px] leading-[1.2] font-semibold tracking-[-.01em]">Fold your tabs. Find them later.</h1>
+        <p className="m-0 mt-3 text-center text-section text-text-2">Three things, and nothing to set up.</p>
 
-        {step === 2 && (
-          <>
-            <WindowsIllustration />
-            <h1 className="text-hero font-semibold">Your windows stay separate</h1>
-            <p className="text-text-2">
-              Each window is saved as its own named group, with tab groups and pinned tabs. Restore brings back the same windows, and background
-              tabs sleep until you click them.
-            </p>
-            <span className="flex-1" />
-            <div className="flex justify-between">
-              <Button variant="ghost" onClick={() => setStep(1)}>
-                Back
-              </Button>
-              <Button variant="primary" onClick={() => setStep(3)} autoFocus>
-                Next
-              </Button>
-            </div>
-          </>
-        )}
+        <div className="mt-14 grid w-full grid-cols-3 gap-10 max-[900px]:grid-cols-1 max-[900px]:max-w-[420px]">
+          <Card illustration={<FoldDrawing />} title="Fold to free memory">
+            One click saves every open tab and closes it. Pinned and playing tabs stay open. Undo if you change your mind.
+          </Card>
+          <Card illustration={<ListDrawing />} title="One list, sorted for you">
+            Everything you fold is grouped by kind of site: Dev, Docs, Video and more. Search finds any tab.
+          </Card>
+          <Card illustration={<SyncDrawing />} title="Same list on every computer">
+            Signed into Chrome? Your folded tabs show up on your other computers too. No account needed.
+          </Card>
+        </div>
 
-        {step === 3 && (
-          <>
-            <h1 className="text-hero font-semibold">Bring your tabs with you</h1>
-            <p className="text-text-2">Import what you already saved. Nothing is uploaded; it all stays on this device.</p>
-            <div className="flex flex-col gap-2">
-              {(
-                [
-                  { source: 'onetab', title: 'OneTab', hint: 'Paste the text from OneTab\'s "Export URLs"' },
-                  { source: 'session-buddy', title: 'Session Buddy', hint: 'Choose its JSON backup file' },
-                  { source: 'bookmarks', title: 'Chrome bookmarks', hint: 'Turn a bookmark folder into a session' },
-                ] as const
-              ).map((option) => (
-                <button
-                  key={option.source}
-                  type="button"
-                  onClick={() => setImportSource(option.source)}
-                  className="flex h-[52px] items-center gap-3 rounded-card border border-border-strong bg-surface px-3.5 text-left hover:bg-hover"
-                >
-                  <SourceTile source={option.source} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-semibold">{option.title}</span>
-                    <span className="block truncate text-meta text-text-3">{option.hint}</span>
-                  </span>
-                  <ChevronRight size={16} aria-hidden className="shrink-0 text-text-3" />
-                </button>
-              ))}
-            </div>
-            {imported > 0 && (
-              <p role="status" className="text-small text-green">
-                {imported === 1 ? '1 session is ready in your library.' : `${imported.toLocaleString()} sessions are ready in your library.`}
-              </p>
-            )}
-            <span className="flex-1" />
-            <div className="flex justify-between">
-              <Button variant="ghost" onClick={finish}>
-                Skip for now
-              </Button>
-              <Button variant="primary" onClick={finish} autoFocus>
-                Start using Tabfold
-              </Button>
-            </div>
-          </>
-        )}
+        <a href={extUrl('/library.html#/how')} className="mt-10 inline-flex items-center gap-1.5 font-semibold text-accent-text no-underline hover:underline">
+          How Tabfold frees memory
+          <ArrowRight size={16} strokeWidth={1.75} aria-hidden />
+        </a>
+        <div className="mt-6">
+          <button
+            type="button"
+            onClick={() => void closeTab()}
+            className="inline-flex h-11 items-center justify-center rounded-control bg-accent px-10 font-semibold text-on-accent hover:bg-accent-hover"
+          >
+            Got it
+          </button>
+        </div>
       </main>
-      <ImportDialog
-        open={importSource !== null}
-        initialSource={importSource ?? undefined}
-        onClose={() => setImportSource(null)}
-        onOpenSession={(id) => void openLibrary(`#/session/${encodeURIComponent(id)}`)}
-      />
-      <ToastViewport />
-      <ProInfoHost />
     </div>
   );
 }

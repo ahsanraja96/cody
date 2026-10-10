@@ -1,249 +1,143 @@
-import { createElement } from 'react';
 import { browser } from 'wxt/browser';
-import { CircleStop } from 'lucide-react';
+import { create } from 'zustand';
 import { resetDataGuard } from '@/lib/dataGuard';
-import { db } from '@/lib/db';
 import { exportFileName, exportHtml } from '@/lib/exporters';
-import { plural } from '@/lib/format';
-import { send, type RestoreFailure, type RestoreMode, type RestoreOutcome } from '@/lib/messages';
-import {
-  clearAllData,
-  deleteSessionsForever,
-  duplicateSession,
-  exportGraphs,
-  LimitError,
-  listTrash,
-  restoreFromTrash,
-  setSessionPinned,
-  trashSessions,
-} from '@/lib/repo';
+import { send } from '@/lib/messages';
+import type { Category } from '@/lib/categories';
+import { clearAllData, exportGraphs, putBackTabs, removeTabsWithSnapshot, type RemovedTabs } from '@/lib/repo';
 import { DEFAULT_SETTINGS } from '@/lib/settings';
-import { backup, lastAction, recoveryOffer, snapshotMirror } from '@/lib/state';
-import { confirmAction } from '@/ui/components/Dialog';
-import { toast } from '@/ui/components/Toast';
-import { copyText, currentScreen } from '@/ui/hooks';
-import { flows } from './flows/store';
+import { lastAction, recoveryOffer, snapshotMirror, UNDO_WINDOW_MS } from '@/lib/state';
+import type { TabRecord } from '@/lib/types';
+import { dismissToast, toast } from '@/ui/components/Toast';
+import { count } from './format';
+import { dropUndo, registerUndo } from './undo';
 
-function errorText(error: unknown): string {
+export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong. Please try again.';
 }
 
 // ---------------------------------------------------------------------------------------------
-// Restoring
+// Opening
 
-interface RestoreContext {
-  sessionId: string | null;
-  sessionName: string;
-  mode?: RestoreMode;
-  windowRecordId?: string;
-}
-
-function isFileFailure(failure: RestoreFailure): boolean {
-  return failure.reason === 'file-access' || (failure.reason === undefined && /^file:/i.test(failure.url));
-}
-
-/** "Stopped. 12 tabs opened, the rest are still saved." */
-export function stoppedMessage(opened: number): string {
-  return `Stopped. ${plural(opened, 'tab')} opened, the rest are still saved.`;
-}
-
-/**
- * What the library shows when a restore it started (or cancelled) finishes: the already-open
- * prompt, the file access steps, the "Restored 21 of 24 tabs" card, or a toast. Each restore is
- * reported once, whether the answer or the worker's restore-done event arrives first.
- */
-export function reportRestoreOutcome(outcome: RestoreOutcome, context: RestoreContext): void {
-  const state = flows();
-  if (outcome.restoreId) {
-    if (state.handled.has(outcome.restoreId)) return;
-    state.handled.add(outcome.restoreId);
-    if (state.live?.restoreId === outcome.restoreId) state.setLive(null);
-  }
-  if (state.pending && state.pending.sessionId === context.sessionId) state.setPending(null);
-
-  if (context.sessionId && (outcome.alreadyOpen || outcome.alreadyOpenWindowId !== undefined)) {
-    const windowIds = outcome.alreadyOpen?.windowIds ?? (outcome.alreadyOpenWindowId !== undefined ? [outcome.alreadyOpenWindowId] : []);
-    state.open({
-      kind: 'already-open',
-      sessionId: context.sessionId,
-      sessionName: context.sessionName,
-      mode: context.mode ?? 'original',
-      windowRecordId: context.windowRecordId,
-      windowIds,
-      openTabs: outcome.alreadyOpen?.openTabs ?? 0,
-      totalTabs: outcome.alreadyOpen?.totalTabs ?? 0,
-    });
-    return;
-  }
-
-  if (outcome.cancelled) {
-    toast(stoppedMessage(outcome.opened), { icon: createElement(CircleStop, { size: 16, strokeWidth: 2, 'aria-hidden': true }) });
-  }
-
-  const files = outcome.failed.filter(isFileFailure);
-  const blocked = outcome.failed.filter((f) => !isFileFailure(f));
-  if (files.length > 0 || outcome.needsFileAccess > 0) {
-    state.enqueue({
-      kind: 'file-access',
-      sessionId: context.sessionId,
-      sessionName: context.sessionName,
-      files,
-      opened: outcome.opened,
-    });
-  }
-  if (blocked.length > 0) {
-    state.setFailures({
-      restoreId: outcome.restoreId,
-      sessionId: context.sessionId,
-      sessionName: context.sessionName,
-      opened: outcome.opened,
-      total: outcome.opened + outcome.failed.length,
-      failed: blocked,
-    });
-  } else if (state.failures?.sessionId === context.sessionId) {
-    state.setFailures(null);
-  }
-
-  if (outcome.trashed && context.sessionId) {
-    const id = context.sessionId;
-    toast('Restored. The session moved to Trash, as set in Settings.', {
-      action: { label: 'Keep it', onClick: () => restoreFromTrash([id]) },
-    });
-  }
-}
-
-/**
- * Restore a session (or one of its windows). Progress shows in the detail panel and, for big
- * restores, a floating card; the outcome is reported by `reportRestoreOutcome`.
- */
-export async function restoreSession(sessionId: string, mode: RestoreMode, windowRecordId?: string, force = false): Promise<void> {
-  const session = await db.sessions.get(sessionId).catch(() => undefined);
-  const sessionName = session?.name ?? 'Session';
-  const state = flows();
-  state.setPending({ sessionId, sessionName, windowRecordId, startedAt: Date.now() });
-  if (state.failures?.sessionId === sessionId) state.setFailures(null);
+/** Open a folded tab. It stays in the list. */
+export async function openFolded(tab: TabRecord, active: boolean): Promise<void> {
   try {
-    const current = await browser.windows.getCurrent();
-    const outcome = await send({
-      type: 'restore',
-      sessionId,
-      windowRecordId,
-      mode,
-      currentWindowId: current.id,
-      screen: currentScreen(),
-      force,
-      // New windows open behind the library, so its progress stays in view; the first one is focused at the end.
-      background: mode !== 'current',
-    });
-    reportRestoreOutcome(outcome, { sessionId, sessionName, mode, windowRecordId });
-  } catch (error) {
-    if (flows().pending?.sessionId === sessionId) flows().setPending(null);
-    toast(errorText(error), { tone: 'error' });
-  }
-}
-
-/** Stop a restore after its current batch. What's open stays open; the session isn't changed. */
-export async function cancelRestore(restoreId: string): Promise<void> {
-  flows().owned.add(restoreId);
-  try {
-    await send({ type: 'cancel-restore', restoreId });
+    const { opened, reason } = await send({ type: 'open-saved-tab', tabRecordId: tab.id, active });
+    if (!opened) toast(reason ?? 'Chrome would not open this page.', { tone: 'error' });
+    else if (!active) toast('Opened in a background tab. It stays in the list.');
   } catch (error) {
     toast(errorText(error), { tone: 'error' });
   }
 }
 
-export async function copyFailedLinks(failed: RestoreFailure[]): Promise<void> {
-  if (await copyText(failed.map((f) => f.url).join('\n'))) toast('Links copied.');
-  else toast("Couldn't copy. Select the links and copy them by hand.", { tone: 'error' });
-}
-
-// ---------------------------------------------------------------------------------------------
-// Sessions
-
-export async function trashWithUndo(ids: string[], label: string): Promise<void> {
+/** "Open all" on a group: the tabs open as one Chrome tab group in this window and stay in the list. */
+export async function openGroup(tabs: TabRecord[], category: Category): Promise<void> {
   try {
-    await trashSessions(ids);
-    toast(`Moved ${label} to Trash`, { action: { label: 'Undo', onClick: () => restoreFromTrash(ids) } });
+    const current = await browser.windows.getCurrent().catch(() => undefined);
+    const { opened } = await send({
+      type: 'open-tabs',
+      tabRecordIds: tabs.map((t) => t.id),
+      asGroup: { name: category.name, color: category.color },
+      windowId: current?.id,
+    });
+    toast(opened === tabs.length ? `Opened ${count(opened, 'tab')}. They stay in the list.` : `Opened ${opened} of ${tabs.length} tabs.`);
   } catch (error) {
     toast(errorText(error), { tone: 'error' });
   }
 }
 
-/**
- * Delete sessions for good (only offered inside Trash). One session: "Delete Competitor teardown
- * forever?" / "Its 17 tabs can't be recovered."; several: their count and tabs.
- */
-export async function deleteForever(ids: string[], label: string): Promise<boolean> {
-  const rows = (await db.sessions.bulkGet(ids)).filter((s) => !!s);
-  const tabs = rows.reduce((n, s) => n + s.tabCount, 0);
-  const single = rows.length === 1 ? rows[0] : undefined;
-  const ok = await confirmAction(
-    single
-      ? {
-          title: `Delete ${single.name} forever?`,
-          body: single.tabCount === 1 ? "Its 1 tab can't be recovered." : `Its ${plural(single.tabCount, 'tab')} can't be recovered.`,
-          confirmLabel: 'Delete forever',
-          danger: true,
-        }
-      : {
-          title: `Delete ${label} forever?`,
-          body: `${plural(rows.length, 'session')} and ${plural(tabs, 'tab')} will be deleted for good.`,
-          confirmLabel: 'Delete forever',
-          danger: true,
-        },
-  );
-  if (!ok) return false;
+/** "Switch" on an open tab in search results. */
+export async function switchToTab(tabId: number, windowId?: number): Promise<void> {
   try {
-    await deleteSessionsForever(ids);
-    // Tabfold deleted these itself, so a smaller (or empty) database isn't a wipe.
-    await resetDataGuard();
-  } catch (error) {
-    toast(errorText(error), { tone: 'error' });
-    return false;
-  }
-  return true;
-}
-
-/** "Empty Trash?" / "4 sessions and 63 tabs will be deleted for good." Resolves true when emptied. */
-export async function emptyTrash(): Promise<boolean> {
-  const trash = await listTrash();
-  if (trash.length === 0) return false;
-  const tabs = trash.reduce((n, s) => n + s.tabCount, 0);
-  const ok = await confirmAction({
-    title: 'Empty Trash?',
-    body: `${plural(trash.length, 'session')} and ${plural(tabs, 'tab')} will be deleted for good.`,
-    confirmLabel: 'Empty Trash',
-    danger: true,
-  });
-  if (!ok) return false;
-  try {
-    await deleteSessionsForever(trash.map((s) => s.id));
-    await resetDataGuard();
-    toast('Trash emptied.');
-    return true;
-  } catch (error) {
-    toast(errorText(error), { tone: 'error' });
-    return false;
-  }
-}
-
-export async function togglePin(id: string, pinned: boolean): Promise<void> {
-  await setSessionPinned(id, pinned);
-}
-
-export async function duplicate(id: string): Promise<string | null> {
-  try {
-    const copy = await duplicateSession(id);
-    if (copy) toast('Duplicated.');
-    return copy;
-  } catch (error) {
-    toast(error instanceof LimitError ? error.message : errorText(error), { tone: 'error' });
-    return null;
+    await browser.tabs.update(tabId, { active: true });
+    if (windowId !== undefined) await browser.windows.update(windowId, { focused: true });
+  } catch {
+    toast('That tab was closed.', { tone: 'error' });
   }
 }
 
 // ---------------------------------------------------------------------------------------------
-// Export and data
+// Removing, with Undo
+
+export interface Removal {
+  tab: TabRecord;
+  removed: RemovedTabs;
+  expiresAt: number;
+}
+
+/** Rows removed with ×: each shows "Removed … · Undo" in place for 10 seconds, then the list closes up. */
+export const useRemovals = create<{ removals: Map<string, Removal>; set: (id: string, removal: Removal | null) => void }>((set) => ({
+  removals: new Map(),
+  set: (id, removal) =>
+    set((s) => {
+      const next = new Map(s.removals);
+      if (removal) next.set(id, removal);
+      else next.delete(id);
+      return { removals: next };
+    }),
+}));
+
+const timers = new Map<string, ReturnType<typeof setTimeout>>();
+
+export async function undoRemoval(tabId: string): Promise<void> {
+  const removal = useRemovals.getState().removals.get(tabId);
+  if (!removal) return;
+  clearTimeout(timers.get(tabId));
+  timers.delete(tabId);
+  dropUndo(`remove:${tabId}`);
+  try {
+    await putBackTabs(removal.removed);
+    useRemovals.getState().set(tabId, null);
+  } catch (error) {
+    toast(errorText(error), { tone: 'error' });
+  }
+}
+
+/** × on a row: removed at once, no question. */
+export async function removeOne(tab: TabRecord): Promise<void> {
+  try {
+    const removed = await removeTabsWithSnapshot([tab.id]);
+    const expiresAt = Date.now() + UNDO_WINDOW_MS;
+    useRemovals.getState().set(tab.id, { tab, removed, expiresAt });
+    registerUndo(`remove:${tab.id}`, () => void undoRemoval(tab.id), expiresAt);
+    timers.set(
+      tab.id,
+      setTimeout(() => {
+        timers.delete(tab.id);
+        useRemovals.getState().set(tab.id, null);
+      }, UNDO_WINDOW_MS),
+    );
+  } catch (error) {
+    toast(errorText(error), { tone: 'error' });
+  }
+}
+
+/** "Remove all N tabs" from a group's menu: no question, an Undo toast instead. */
+export async function removeGroup(tabs: TabRecord[]): Promise<void> {
+  try {
+    const removed = await removeTabsWithSnapshot(tabs.map((t) => t.id));
+    const key = `remove-group:${Date.now()}`;
+    let toastId = 0;
+    const undo = () => {
+      dropUndo(key);
+      dismissToast(toastId);
+      putBackTabs(removed).catch((error) => toast(errorText(error), { tone: 'error' }));
+    };
+    const message = `Removed ${count(removed.tabs.length, 'tab')}`;
+    toastId = toast(message, {
+      duration: UNDO_WINDOW_MS,
+      countdown: true,
+      announce: `${message}. Undo available for 10 seconds.`,
+      action: { label: 'Undo', onClick: undo },
+    });
+    registerUndo(key, undo);
+  } catch (error) {
+    toast(errorText(error), { tone: 'error' });
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Your tabs: export and clear
 
 export function downloadText(fileName: string, text: string, type = 'text/html;charset=utf-8'): void {
   const blob = new Blob([text], { type });
@@ -257,28 +151,34 @@ export function downloadText(fileName: string, text: string, type = 'text/html;c
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-/** Download sessions as a UTF-8 HTML page (every live session when no ids are given). */
-export async function exportSessions(sessionIds?: string[]): Promise<boolean> {
+/** Export… in Settings: every folded tab as a standalone HTML page (opens anywhere, imports as bookmarks). */
+export async function exportAll(): Promise<void> {
   try {
-    const graphs = await exportGraphs(sessionIds);
-    if (graphs.length === 0) {
+    const graphs = await exportGraphs();
+    const tabs = graphs.reduce((n, g) => n + g.windows.reduce((m, w) => m + w.tabs.length, 0), 0);
+    if (tabs === 0) {
       toast('Nothing to export yet.');
-      return false;
+      return;
     }
     downloadText(exportFileName(), exportHtml(graphs));
-    if (!sessionIds) await backup.markDone();
-    toast(`Exported ${plural(graphs.length, 'session')}.`);
-    return true;
+    toast(`Exported ${count(tabs, 'tab')}.`);
   } catch (error) {
     toast(errorText(error), { tone: 'error' });
-    return false;
   }
 }
 
-/** Settings › Clear all data, after the typed confirmation. */
+/**
+ * Clear everything…, after the confirm: every folded tab, snapshot and setting on this computer,
+ * and Tabfold's copy in Chrome sync (the extension's own sync storage, which holds nothing else).
+ */
 export async function clearEverything(): Promise<void> {
   await clearAllData();
   await browser.storage.local.set({ settings: DEFAULT_SETTINGS });
-  await Promise.all([snapshotMirror.set(null), recoveryOffer.set(null), lastAction.set(null)]).catch(() => undefined);
+  await Promise.all([
+    snapshotMirror.set(null),
+    recoveryOffer.set(null),
+    lastAction.set(null),
+    browser.storage.sync.clear(),
+  ]).catch(() => undefined);
   await resetDataGuard();
 }

@@ -9,7 +9,7 @@ export interface ToastItem {
   tone: 'default' | 'success' | 'error';
   actions: Array<{ label: string; onClick: () => void }>;
   duration: number;
-  /** When the toast goes away; with `countdown` the message shows the seconds left ("· 6s left"). */
+  /** When the toast goes away; with `countdown` the seconds left show after the actions ("Undo 8s"). */
   expiresAt: number;
   countdown: boolean;
   /** Replaces the tone's icon (e.g. a stop sign for a cancelled restore). */
@@ -106,21 +106,20 @@ function ToastView({ item }: { item: ToastItem }) {
   return (
     <div
       role={item.tone === 'error' ? 'alert' : undefined}
-      className="anim-in pointer-events-auto flex h-11 w-[min(420px,100%)] min-w-0 items-center gap-2.5 rounded-card bg-inverse pr-1.5 pl-3.5 text-on-inverse shadow-pop"
+      className="anim-in pointer-events-auto flex h-11 max-w-[min(560px,100%)] min-w-0 items-center gap-2.5 rounded-card bg-inverse pr-1.5 pl-3.5 text-on-inverse shadow-pop"
     >
       <span className="flex shrink-0" aria-hidden>
         {icon}
       </span>
       <span className="min-w-0 flex-1 truncate" aria-hidden={item.announce ? true : undefined}>
         {item.message}
-        {item.countdown && <span aria-hidden> · {secondsLeft}s left</span>}
       </span>
       {item.announce && <span className="sr-only">{item.announce}</span>}
       {item.actions.map((action) => (
         <button
           key={action.label}
           type="button"
-          className="h-[30px] shrink-0 rounded-md px-2.5 font-semibold underline underline-offset-2 hover:bg-white/10 focus-visible:outline-on-inverse"
+          className="h-[30px] shrink-0 rounded-md px-2 font-semibold underline underline-offset-2 hover:bg-white/10 focus-visible:outline-on-inverse"
           onClick={() => {
             action.onClick();
             dismiss(item.id);
@@ -129,6 +128,11 @@ function ToastView({ item }: { item: ToastItem }) {
           {action.label}
         </button>
       ))}
+      {item.countdown && (
+        <span aria-hidden className="shrink-0 text-small tabular-nums opacity-70">
+          {secondsLeft}s
+        </span>
+      )}
       <button
         type="button"
         aria-label="Dismiss"

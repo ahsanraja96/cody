@@ -22,15 +22,15 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cx(
-        'relative h-[18px] w-8 shrink-0 rounded-full transition-colors duration-150 disabled:opacity-50',
+        'relative h-5 w-9 shrink-0 rounded-full transition-colors duration-150 disabled:opacity-50',
         checked ? 'bg-accent' : 'bg-border-strong',
       )}
     >
       <span
         aria-hidden
         className={cx(
-          'absolute top-0.5 size-3.5 rounded-full bg-white transition-[left] duration-150',
-          checked ? 'left-4' : 'left-0.5',
+          'absolute top-0.5 size-4 rounded-full bg-on-accent shadow-[0_1px_2px_var(--tf-overlay)] transition-[left] duration-150',
+          checked ? 'left-[18px]' : 'left-0.5',
         )}
       />
     </button>
@@ -140,7 +140,7 @@ export function Segmented<T extends string>({
           title={option.title}
           onClick={() => onChange(option.value)}
           className={cx(
-            'inline-flex h-[26px] items-center justify-center gap-1.5 rounded-md px-3',
+            'inline-flex h-[26px] items-center justify-center gap-1.5 rounded-md px-3 text-small',
             value === option.value ? 'border border-border bg-surface font-semibold text-text' : 'text-text-2 hover:text-text',
           )}
         >
