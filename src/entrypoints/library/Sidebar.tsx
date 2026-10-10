@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Clock, History, Laptop, Layers, Lock, MoreHorizontal, Pin, Settings as SettingsIcon, Tag, Trash2, User } from 'lucide-react';
 import { db } from '@/lib/db';
 import { CURRENT_PLAN, limitsFor } from '@/lib/limits';
-import { listLiveSessions, tagCounts } from '@/lib/repo';
+import { listLiveSessions, listSnapshots, tagCounts } from '@/lib/repo';
 import type { SessionRecord } from '@/lib/types';
 import { IconButton } from '@/ui/components/Button';
 import { PlanBadge, ProLock, tagColor } from '@/ui/components/Chips';
@@ -104,7 +104,7 @@ export function Sidebar({ route, navigate }: { route: Route; navigate: (route: R
   const tags = useLiveQuery(() => tagCounts(), []) ?? [];
   const trashCount = useLiveQuery(() => db.sessions.where('deletedAt').above(0).count(), []) ?? 0;
   // Every snapshot, including the rolling automatic one.
-  const snapshotCount = useLiveQuery(() => db.snapshots.count(), []) ?? 0;
+  const snapshotCount = useLiveQuery(async () => (await listSnapshots()).length, []) ?? 0;
   const openSession = useLiveQuery(async () => (route.sessionId ? ((await db.sessions.get(route.sessionId)) ?? null) : null), [route.sessionId]);
   const wide = useMediaQuery(WIDE_QUERY);
   const [panel, setPanel] = useState<null | 'manage' | 'tags'>(null);

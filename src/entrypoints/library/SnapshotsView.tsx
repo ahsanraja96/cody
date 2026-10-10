@@ -5,6 +5,7 @@ import { AppWindow, Archive, ChevronDown, ChevronRight, History, Trash2 } from '
 import { db } from '@/lib/db';
 import { formatDateTime, plural } from '@/lib/format';
 import { send } from '@/lib/messages';
+import { listSnapshots } from '@/lib/repo';
 import type { CapturedWindow, SnapshotReason, SnapshotRecord } from '@/lib/types';
 import { displayHost } from '@/lib/urls';
 import { Button, IconButton } from '@/ui/components/Button';
@@ -36,7 +37,7 @@ function listTime(snap: SnapshotRecord, now: number): string {
     if (diff < DAY) return `${Math.floor(diff / (60 * MINUTE))}h ago`;
   }
   const date = new Date(snap.createdAt);
-  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   const today = new Date(now);
   if (date.toDateString() === today.toDateString()) return time;
   if (date.toDateString() === new Date(now - DAY).toDateString()) return `Yesterday ${time}`;
@@ -63,8 +64,8 @@ function Strip({ windows, max, size = 16 }: { windows: CapturedWindow[]; max: nu
  * copies, with a preview of the selected snapshot's windows.
  */
 export function SnapshotsView() {
-  // Read the table directly so the rolling automatic ("timer") snapshot is listed too.
-  const snapshots = useLiveQuery(() => db.snapshots.orderBy('createdAt').reverse().toArray(), []);
+  // Newest first, including the rolling automatic ("timer") snapshot.
+  const snapshots = useLiveQuery(() => listSnapshots(), []);
   const offer = useRecoveryOffer();
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [taking, setTaking] = useState(false);
@@ -161,13 +162,15 @@ export function SnapshotsView() {
                       active ? 'bg-accent-soft' : 'hover:bg-hover',
                     )}
                   >
-                    <span className="flex items-center gap-2">
-                      <span className={cx('font-semibold', active ? 'text-accent-text' : 'text-text')}>{reason.label}</span>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className={cx('truncate font-semibold', active ? 'text-accent-text' : 'text-text')}>{reason.label}</span>
                       {offer?.snapshotId === snap.id && (
-                        <span className="inline-flex h-[18px] items-center rounded bg-amber-soft px-1.5 text-meta font-semibold text-amber">Not restored yet</span>
+                        <span className="inline-flex h-[18px] shrink-0 items-center rounded bg-amber-soft px-1.5 text-meta font-semibold whitespace-nowrap text-amber">
+                          Not restored yet
+                        </span>
                       )}
                       <span className="flex-1" />
-                      <span className="text-small text-text-2">{listTime(snap, now)}</span>
+                      <span className="shrink-0 text-small whitespace-nowrap text-text-2">{listTime(snap, now)}</span>
                     </span>
                     <span className="truncate text-meta text-text-3">
                       {plural(snap.tabCount, 'tab')} · {plural(snap.windowCount, 'window')}

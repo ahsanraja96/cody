@@ -99,7 +99,13 @@ function SessionMenu({ session, items, triggerClass }: { session: SessionRecord;
       label={`Actions for ${session.name}`}
       items={items}
       trigger={(props) => (
-        <IconButton label={`Actions for ${session.name}`} size="sm" tone="muted" className={triggerClass} {...props}>
+        <IconButton
+          label={`Actions for ${session.name}`}
+          size="sm"
+          tone="muted"
+          className={cx('aria-expanded:bg-hover aria-expanded:text-text', triggerClass)}
+          {...props}
+        >
           <MoreHorizontal size={16} aria-hidden />
         </IconButton>
       )}
@@ -145,7 +151,7 @@ export function SessionCard({
             ? 'border-accent-line bg-accent-soft'
             : 'bg-surface',
         !drop.over && (current ? 'border-accent shadow-[0_0_0_1px_var(--tf-accent)]' : !checked && 'border-border hover:border-border-strong'),
-        'has-[:focus-visible]:border-accent',
+        'has-[button:focus-visible]:border-accent',
       )}
     >
       <div className="flex min-h-6 items-center gap-2">
@@ -175,7 +181,7 @@ export function SessionCard({
                 e.stopPropagation();
                 onRestore();
               }}
-              className="hidden h-6 shrink-0 items-center rounded-md border border-border-strong bg-surface px-2 text-meta font-semibold text-text group-hover:inline-flex group-has-[:focus-visible]:inline-flex hover:bg-hover"
+              className="hidden h-6 shrink-0 items-center rounded-md border border-border-strong bg-surface px-2 text-meta font-semibold text-text group-hover:inline-flex group-has-[button:focus-visible]:inline-flex hover:bg-hover"
             >
               Restore
             </button>
@@ -238,7 +244,7 @@ export function SessionListRow({
       className={cx(
         'group flex h-12 cursor-pointer items-center gap-3 pr-3 pl-4',
         !last && 'border-b border-border',
-        drop.over ? 'bg-accent-soft shadow-[inset_0_0_0_1px_var(--tf-accent)]' : checked ? 'bg-accent-soft' : 'hover:bg-hover has-[:focus-visible]:bg-hover',
+        drop.over ? 'bg-accent-soft shadow-[inset_0_0_0_1px_var(--tf-accent)]' : checked ? 'bg-accent-soft' : 'hover:bg-hover has-[button:focus-visible]:bg-hover',
         current && !drop.over && 'shadow-[inset_3px_0_0_var(--tf-accent)]',
       )}
     >
@@ -296,7 +302,7 @@ export function SessionListRow({
             e.stopPropagation();
             onRestore();
           }}
-          className="invisible h-7 rounded-control border border-border-strong bg-surface px-2.5 text-small font-semibold text-text group-hover:visible group-has-[:focus-visible]:visible hover:bg-hover"
+          className="invisible h-7 rounded-control border border-border-strong bg-surface px-2.5 text-small font-semibold text-text group-hover:visible group-has-[button:focus-visible]:visible hover:bg-hover"
         >
           Restore
         </button>

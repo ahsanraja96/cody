@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Plus, X } from 'lucide-react';
 import { normalizeKeyword } from '@/lib/keywords';
@@ -43,6 +43,8 @@ export function TagsDialog({
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const newRef = useRef<HTMLInputElement>(null);
 
   // Fresh state each time the dialog opens for a different set of sessions.
   useEffect(() => {
@@ -64,6 +66,18 @@ export function TagsDialog({
   for (const tag of states.keys()) if (!rows.includes(tag)) rows.push(tag);
   const inUse = new Set(rows).size;
   const atLimit = Number.isFinite(limit) && inUse >= limit;
+
+  // The native dialog focuses its first button (Close); start in the list, or in "New tag" when asked.
+  useEffect(() => {
+    if (!open) return;
+    const id = requestAnimationFrame(() => {
+      const first = listRef.current?.querySelector<HTMLInputElement>('input');
+      if ((focusNew && !newRef.current?.disabled) || !first) newRef.current?.focus();
+      else first.focus();
+    });
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, targetKey]);
 
   const set = (tag: string, value: State) => setStates((prev) => new Map(prev).set(tag, value));
 
@@ -124,7 +138,7 @@ export function TagsDialog({
       }
     >
       {rows.length > 0 && (
-        <div role="group" aria-label="Tags" className="flex flex-col rounded-control border border-border p-1">
+        <div ref={listRef} role="group" aria-label="Tags" className="flex flex-col rounded-control border border-border p-1">
           {rows.map((tag) => {
             const value = states.get(tag) ?? false;
             const count = counts.get(tag);
@@ -166,7 +180,7 @@ export function TagsDialog({
       >
         <Plus size={14} aria-hidden />
         <input
-          autoFocus={focusNew || rows.length === 0}
+          ref={newRef}
           disabled={atLimit}
           value={text}
           placeholder="New tag"

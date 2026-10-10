@@ -204,7 +204,7 @@ export function SearchView({
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex min-w-[200px] flex-1 items-baseline gap-2.5">
               <h1 className="text-page font-semibold">Search</h1>
-              {result && trimmed && (
+              {result && trimmed && total > 0 && (
                 <span className="truncate text-text-3">
                   {total === 1 ? '1 tab matches' : `${total.toLocaleString()} tabs match`} “{trimmed}”
                 </span>
@@ -250,9 +250,9 @@ export function SearchView({
                   Clear search
                 </Button>
                 {scope === 'live' && (
-                  <Button size="sm" variant="ghost" className="font-semibold text-accent-text hover:text-accent-text" onClick={() => setScope('trash')}>
+                  <button type="button" className="h-8 rounded-control px-3 font-semibold text-accent-text hover:bg-hover" onClick={() => setScope('trash')}>
                     Search in Trash
-                  </Button>
+                  </button>
                 )}
               </div>
             </div>
