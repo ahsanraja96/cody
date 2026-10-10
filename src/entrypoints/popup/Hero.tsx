@@ -293,7 +293,8 @@ function Folded({
   button: ReactNode;
 }) {
   const outcome = fold.outcome;
-  const folded = Math.max(0, fold.total);
+  // Tabs that went into the list (closed blank pages aren't folded tabs).
+  const folded = outcome ? outcome.savedTabs + outcome.skippedDuplicates : Math.max(0, fold.total);
   const freedSlots = Math.max(0, Math.min(fold.closed || folded, folded));
   const freedBytes = outcome?.freedBytes ?? freedSlots * stats.bytesPerFoldedTab;
   const memory = outcome?.memory;
@@ -321,7 +322,9 @@ function Folded({
           <MemoryStick size={14} strokeWidth={1.75} aria-hidden className="flex-none text-text-3" />
           <span>
             Your computer: <span className="font-semibold text-text">{(memory.freeAfter / GB).toFixed(1)} GB free</span>
-            {memory.freeBefore != null && ` (was ${(memory.freeBefore / GB).toFixed(1)})`}
+            {memory.freeBefore != null &&
+              (memory.freeBefore / GB).toFixed(1) !== (memory.freeAfter / GB).toFixed(1) &&
+              ` (was ${(memory.freeBefore / GB).toFixed(1)})`}
           </span>
         </p>
       )}

@@ -1,25 +1,21 @@
 # Tabfold
 
-A Chrome extension that saves and restores tabs and whole windows, frees memory, and finds any tab by title, address or keyword. Promise: *free your memory without losing your place.*
+A minimal Chrome extension that takes the load off your browser: **fold** your tabs to free memory, find them again in **one list** sorted by kind of site, and see the **same list on your other computers**. Promise: *fold your tabs, find them later.*
 
-This is **v1: Free, local only**, from the build spec. Everything runs on the user's machine: no account, no server, no network requests.
+Design: [Tabfold design canvas](https://claude.ai/artifact/MGqcUEKEqHvcmZdSboDKP3) (the minimal design: popup, full list, settings, welcome, the memory bar and small states, light and dark). The earlier, fuller design is kept in the canvas project files for reference.
 
-Design: [Tabfold design canvas](https://claude.ai/artifact/MGqcUEKEqHvcmZdSboDKP3): every screen, flow, dialog and edge case (52 boards, light and dark), plus the Chrome Web Store assets. v1 implements all of the Free boards; the Pro and Pro AI boards are the plan for v2 and v3.
+## What it does
 
-## What's in v1
-
-- **Save**: all tabs in every window, the current window, selected tabs (⌘/Ctrl-click or Shift-click a range in the popup, or Chrome's highlighted tabs), or a single tab from the right-click menu or a shortcut. Each window is saved as its own named group, with pinned state and tab groups (name, colour, collapsed). Tabs close only after the save is confirmed written to IndexedDB. Undo for 10 seconds, also from a popup reopened in that time.
-- **Before closing**: tabs playing audio can stay open, addresses too long to store in full are flagged, and tabs already saved in another session can be skipped, saved again, or asked about (Settings › General). Tabs that refuse to close ("Leave site?") are listed with "Show tab"; nothing closes if the save fails.
-- **Keywords**: pick keywords for a tab when you save it (suggested from its title and address, or typed, or reused) and edit them later in the library. Search ranks keyword matches first; `#keyword` matches keywords only.
-- **Restore**: as the original windows (with tab groups and pinned tabs), into the current window, or one new window (the choice is remembered). Lazy restore: background tabs open muted, 10 at a time, load once (so they keep their real title, icon and address), then sleep with Chrome's native discard until clicked; per-window progress and Cancel in the popup and the library. A tab is never put to sleep before its page exists, which would leave a blank tab. Offers "Switch to it" when a session is already open. Failed pages (for example `chrome://` ones) are listed with "Copy links"; local files explain how to allow file access. Never restores into Incognito.
-- **Memory**: suspend inactive tabs with Chrome's native discard (the real address stays on the tab), by hand or automatically after a set idle time. Pinned, audible, active and protected sites (video-call sites by default) are skipped, and the popup lists each tab kept awake and why. The banner shows tabs open and an estimated memory figure.
-- **Library**: sessions as cards or a list (virtualised) with multi-select and bulk actions, pinned and recent views, tags (5 on Free; rename and delete from Manage tags), session detail with drag and drop between windows and onto other sessions, rename, duplicate, export, Trash with 30-day recovery, keyboard shortcuts (press ?), and a compact layout down to 1024px.
-- **Search**: instant search over open and saved tabs in a web worker (MiniSearch), in the popup and the library: prefix and typo-tolerant, non-Latin scripts, highlighted matches, keyboard navigation, and a Trash scope.
-- **Safety**: a rolling background snapshot (debounced on tab changes plus a 5-minute alarm), safety snapshots before bulk closes, restores and imports, and a "Restore your last session?" offer after a browser restart.
-- **Import / export**: OneTab export text, Session Buddy JSON, browser bookmark HTML files: drop or paste, preview (including how the Free session limit applies), progress with Cancel (which takes back what was added), and a result listing skipped lines. Export as a standalone UTF-8 HTML file, plus a monthly backup reminder.
-- **Data safety**: a copy of the latest snapshot and a count of what was saved live outside IndexedDB, so if Chrome's data for Tabfold is erased the library says so and can recover the last session. Storage-nearly-full warning at 80%. When Chrome downloads an update, open pages offer "Reload" instead of breaking.
-- **Plans**: Free is complete on one device. The Free cap is 50 named sessions and 5 tags, never tabs. Past 50 sessions, new saves go into one "Unsorted" session, so nothing is ever blocked. Pro features show a small "Pro" lock that explains what Pro adds.
-- **Onboarding** (3 steps, skippable), **settings**, light/dark/system themes, full keyboard use, screen-reader labels.
+- **Fold**: one button saves every tab in every normal window, then closes it. Pinned tabs (setting) and tabs playing sound stay open; Incognito is never touched; tabs already in the list aren't saved twice. Tabs close only after the save is written, in batches, with live progress in the popup and the full list (a popup closed mid-fold picks it back up). Pages that show Chrome's "Leave site?" are named with "Show tab" and are saved either way. Undo for 10 seconds. Shortcut: Ctrl/⌘+Shift+S.
+- **Memory**: the popup shows the estimated memory in use (about 48 MB per loaded tab; Chrome doesn't tell extensions per-tab memory) as a bar with one segment per open tab, and after a fold the real change in the computer's free memory (chrome.system.memory). Idle tabs go to sleep after 30 minutes with Chrome's own discard; pinned, playing and active tabs never do. A "How Tabfold frees memory" page explains it.
+- **One list**: every folded tab, grouped automatically by kind of site (Dev, Docs, Mail & chat, Social, Video, AI, Shopping, Reading, Other) from built-in site rules, newest first. Click a tab to open it (it stays in the list), × removes it (Undo), "Open all" opens a group as a Chrome tab group with the same name and colour. The full-list page adds "Recent folds", which reopens a fold as its original windows.
+- **Search**: open and folded tabs by title, address or keyword (MiniSearch in a web worker), with `#keyword` for keywords only.
+- **Keywords**, hidden until wanted: right-click › "Fold this tab with keywords…" (suggested from the title and address).
+- **Same list on every computer**: the newest folded tabs (up to 500, within Chrome's sync quota) are shared through `chrome.storage.sync`, so they appear wherever the person is signed in to Chrome. No account, no server. Removals travel as tombstones; an emptied store never deletes anything; quota errors back off and retry. Can be turned off in Settings.
+- **Restore**: lazy (background tabs load once, muted, then sleep, so they keep their real title, icon and address), with tab groups and pinned tabs rebuilt; failures listed with "Copy links".
+- **Safety**: background snapshots and a "Chrome closed unexpectedly. Reopen your tabs?" line after a crash; a record outside IndexedDB detects wiped data and can recover the last snapshot; updates install cleanly; every message to the background must come from Tabfold itself.
+- **Settings** (five things): keep pinned tabs open, idle sleep time, Chrome sync, theme, import from OneTab and export to HTML, plus "Clear everything".
+- **Welcome tab** on install, light and dark themes, keyboard use, screen-reader labels.
 
 ## Develop
 
@@ -56,15 +52,16 @@ Load the build by hand: `chrome://extensions` → Developer mode → Load unpack
 ## Measured
 
 - Search over 10,000 saved tabs: about 19 ms per query, 190 ms to build the index (unit test, Node).
-- Popup: first paint in about 120 to 145 ms (headless Chromium); about 138 KB of JavaScript gzipped (budget 250 KB).
-- 135 unit tests and a 31-check end-to-end smoke test pass.
+- Popup: first paint in about 60 to 150 ms in headless Chromium, with thousands of folded tabs.
+- 189 unit tests and a 36-check end-to-end smoke test pass.
 
 ## Decisions and known limits
 
-- **Save window shortcut is Alt+Shift+W**, not Ctrl/Cmd+Shift+W: Chrome already uses that to close the window. Save all is Ctrl/Cmd+Shift+S, save tab is Alt+Shift+S, open Tabfold is Alt+Shift+F. All can be changed at `chrome://extensions/shortcuts`.
-- **Tabs already saved default to "Ask"**: the popup asks before saving duplicates (with "Remember my choice"). Saves with no page to ask in (shortcuts, the right-click menu) save them again, so nothing is dropped silently.
-- **Incognito**: never saved by "Save all" or snapshots. From an Incognito window (when Tabfold is allowed there) the popup can save that window after a confirmation; undo reopens it in Incognito.
-- **No `sessions` permission**: crash recovery uses Tabfold's own snapshots, so it isn't needed.
-- **Camera, microphone and unsaved form text can't be detected** without reading pages, which Tabfold never does. Video-call sites are on the never-suspend list by default, and audio-playing tabs are kept open on "Save all" unless you choose otherwise.
-- **Memory figures are estimates** (about 48 MB per loaded tab); Chrome doesn't give extensions per-tab memory.
-- **Pro, sync and AI are not in v1**, per the build order. The data model already carries device id and version fields for sync.
+- **Shortcuts**: Fold all tabs is Ctrl/⌘+Shift+S, fold this tab is Alt+Shift+S, open Tabfold is Alt+Shift+F. All can be changed at `chrome://extensions/shortcuts`.
+- **Folding never saves a tab twice**: tabs already in the list are closed but not added again (undo reopens them too).
+- **Incognito** is never folded, snapshotted or synced.
+- **Chrome sync status**: Chrome doesn't tell extensions whether the person is signed in to Chrome, so "Synced with Chrome" means written to Chrome's sync storage; it reaches other computers when Chrome sync is on. Sync carries the newest 500 folded tabs (Chrome's quota is about 100 KB); older ones stay on the computer that folded them.
+- **Unsaved typing can't be detected** without reading pages, which Tabfold never does. Sites that ask "Leave site?" are reported during a fold; others close normally.
+- **Memory in use is an estimate** (about 48 MB per loaded tab); the "Your computer" figure after a fold is a real reading of free memory (`system.memory`, which adds no install warning).
+- **No `sessions` permission**: crash recovery uses Tabfold's own snapshots.
+- **Pro (account sync without the 500-tab limit, backup) and Pro AI** are designed for later; nothing in this build talks to a server.
