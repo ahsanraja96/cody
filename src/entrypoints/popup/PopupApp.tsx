@@ -5,6 +5,7 @@ import type { CategoryGroup } from '@/lib/categories';
 import { send } from '@/lib/messages';
 import { openLibrary } from '@/lib/openLibrary';
 import { extUrl } from '@/lib/extUrl';
+import { hasPro } from '@/lib/pro/tiers';
 import { pendingFoldAsk, pendingKeywordSave } from '@/lib/state';
 import type { TabRecord } from '@/lib/types';
 import { FoldedList, useRemoveWithUndo } from '@/ui/components/FoldedList';
@@ -12,8 +13,10 @@ import { Logo } from '@/ui/components/Logo';
 import { cx } from '@/ui/cx';
 import { describeWindows, foldChoice, type WindowInfo } from '@/ui/windows';
 import {
+  useCloudSyncStatus,
   useFoldedTabs,
   useFoldWindows,
+  useLoadedPlan,
   useRecoveryOffer,
   useSettings,
   useSyncStatus,
@@ -24,6 +27,7 @@ import {
 import { FirstRun } from './FirstRun';
 import { Hero } from './Hero';
 import { KeywordFold } from './KeywordFold';
+import { MilestoneCard, useFoldMilestone } from './Milestone';
 import { OpenWindows } from './OpenWindows';
 import { CrashLine, OpenProblem, PopupFooter, SectionLabel } from './parts';
 import { useFold, useFoldShortcut, useOpenTabStats } from './popupHooks';
@@ -149,6 +153,9 @@ function Home({
   const folded = useFoldedTabs();
   const offer = useRecoveryOffer();
   const sync = useSyncStatus();
+  const plan = useLoadedPlan();
+  const cloud = useCloudSyncStatus();
+  const milestone = useFoldMilestone(view);
   const shortcut = useFoldShortcut();
   const removal = useRemoveWithUndo();
 
@@ -310,6 +317,7 @@ function Home({
             onFold={onFold}
             windowCount={infos.filter((w) => w.folds).length}
             currentWindowId={currentWindowId}
+            milestone={milestone && <MilestoneCard freedBytes={milestone.freedBytes} onDismiss={milestone.dismiss} />}
             ask={{
               available: choice.ask,
               open: asking,
@@ -343,7 +351,7 @@ function Home({
               )}
             </div>
           )}
-          <PopupFooter sync={sync} />
+          <PopupFooter sync={sync} cloud={cloud} pro={plan ? hasPro(plan) : undefined} />
         </>
       )}
     </div>

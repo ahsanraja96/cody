@@ -5,6 +5,7 @@ import { openLibrary } from '@/lib/openLibrary';
 import type { RecoveryOffer, SyncStatus } from '@/lib/state';
 import { cx } from '@/ui/cx';
 import { currentScreen } from '@/ui/hooks';
+import { PLANS_HASH } from '@/ui/pro';
 
 export function Kbd({ children }: { children: ReactNode }) {
   return (
@@ -87,16 +88,28 @@ export function OpenProblem({ text, onDismiss }: { text: string; onDismiss: () =
   );
 }
 
-/** One quiet line about Chrome sync; nothing when it is off or before the first sync. */
-export function SyncLine({ status }: { status: SyncStatus | undefined }) {
+/**
+ * One quiet line about sync; nothing when it is off or before the first sync. Chrome sync on Free
+ * ("Latest 500 synced · Sync all" when it's full, Pro-States), the Tabfold account on Pro.
+ */
+export function SyncLine({ status, cloud = false }: { status: SyncStatus | undefined; cloud?: boolean }) {
   if (!status || status.state === 'off' || status.state === 'error') return null;
   const base = 'inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-small text-text-3';
   const check = <Check size={14} strokeWidth={2.2} aria-hidden className="flex-none text-green" />;
+  const where = cloud ? 'Tabfold' : 'Chrome';
   if (status.state === 'syncing') {
     return (
       <span role="status" className={base}>
         <RefreshCw size={14} strokeWidth={1.75} aria-hidden className="flex-none animate-spin [animation-duration:1.2s]" />
-        Syncing with Chrome…
+        Syncing with {where}…
+      </span>
+    );
+  }
+  if (cloud) {
+    return (
+      <span role="status" className={base}>
+        {check}
+        Synced with Tabfold
       </span>
     );
   }
@@ -105,10 +118,19 @@ export function SyncLine({ status }: { status: SyncStatus | undefined }) {
     return (
       <span role="status" className={base}>
         {check}
-        Latest {status.syncedTabs.toLocaleString()} synced
-        <span title={tip} aria-label={tip} role="img" tabIndex={0} className="inline-flex rounded-full">
-          <Info size={14} strokeWidth={1.75} aria-hidden className="flex-none" />
-        </span>
+        <span title={tip}>Latest {status.syncedTabs.toLocaleString()} synced</span>
+        <span aria-hidden>·</span>
+        <a
+          href={PLANS_HASH}
+          title={`${tip}. Pro syncs every folded tab.`}
+          onClick={(e) => {
+            e.preventDefault();
+            void openLibrary(PLANS_HASH).finally(() => window.close());
+          }}
+          className="font-semibold no-underline hover:underline"
+        >
+          Sync all
+        </a>
       </span>
     );
   }
@@ -120,7 +142,19 @@ export function SyncLine({ status }: { status: SyncStatus | undefined }) {
   );
 }
 
-export function PopupFooter({ sync, className }: { sync: SyncStatus | undefined; className?: string }) {
+export function PopupFooter({
+  sync,
+  cloud,
+  pro,
+  className,
+}: {
+  sync: SyncStatus | undefined;
+  /** Sync with the Tabfold account, shown instead of Chrome's on Pro. */
+  cloud?: SyncStatus;
+  /** On Pro; undefined while the plan is being read (no line yet). */
+  pro?: boolean;
+  className?: string;
+}) {
   return (
     <footer
       className={cx(
@@ -138,7 +172,7 @@ export function PopupFooter({ sync, className }: { sync: SyncStatus | undefined;
         <Layers size={16} strokeWidth={1.75} aria-hidden />
         Open full list
       </button>
-      <SyncLine status={sync} />
+      {pro === undefined ? null : pro ? <SyncLine status={cloud} cloud /> : <SyncLine status={sync} />}
     </footer>
   );
 }

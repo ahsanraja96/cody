@@ -1,12 +1,15 @@
 import { forwardRef, useEffect, useRef, useState } from 'react';
 import { AppWindow, Archive, Layers, Search, Settings, X } from 'lucide-react';
+import { hasPro } from '@/lib/pro/tiers';
+import type { PlanState } from '@/lib/pro/types';
 import type { ActiveFold, SyncStatus } from '@/lib/state';
 import { Kbd } from '@/ui/components/Chips';
 import { Logo } from '@/ui/components/Logo';
+import { PlanChip } from '@/ui/components/ProBits';
 import { cx } from '@/ui/cx';
 import { isFolding } from './fold';
 import { approxBytes, count } from './format';
-import { SyncLine } from './SyncLine';
+import { CloudSyncLine, SyncLine } from './SyncLine';
 
 /** What Fold offers (Min-Windows-States "Full list › Fold tabs"). */
 export interface FoldMenuChoice {
@@ -34,6 +37,12 @@ export const TopBar = forwardRef<
     onQuery: (query: string) => void;
     syncStatus: SyncStatus | undefined;
     syncEnabled: boolean;
+    /** The plan: a chip by the name, and on Pro the Tabfold account's sync line instead of Chrome's. */
+    /** Undefined while it is being read: no chip and no sync line yet. */
+    plan: PlanState | undefined;
+    cloudStatus: SyncStatus | undefined;
+    /** Free, over Chrome sync's 500: "Latest 500 synced · Sync all" opens the plans page. */
+    onSyncAll: () => void;
     onSettings: () => void;
     onFold: () => void;
     fold: ActiveFold | undefined;
@@ -43,7 +52,10 @@ export const TopBar = forwardRef<
     /** The highlighted search result, for screen readers (↑↓ move it while typing). */
     activeDescendant?: string;
   }
->(function TopBar({ query, onQuery, syncStatus, syncEnabled, onSettings, onFold, fold, candidates, choice, shortcut, activeDescendant }, searchRef) {
+>(function TopBar(
+  { query, onQuery, syncStatus, syncEnabled, plan, cloudStatus, onSyncAll, onSettings, onFold, fold, candidates, choice, shortcut, activeDescendant },
+  searchRef,
+) {
   const [menuOpen, setMenuOpen] = useState(false);
   const folding = isFolding(fold);
   const progress = folding && fold ? (fold.phase === 'saving' ? 'Folding…' : `Folding ${Math.min(fold.closed, fold.total)} of ${fold.total}…`) : '';
@@ -57,6 +69,7 @@ export const TopBar = forwardRef<
       <div className="flex shrink-0 items-center gap-2.5 min-[1320px]:w-[236px]">
         <Logo size={28} />
         <span className="text-section font-semibold max-[720px]:sr-only">Tabfold</span>
+        {plan && <PlanChip plan={plan} className="max-[720px]:hidden" />}
       </div>
       <label
         className={cx(
@@ -98,7 +111,11 @@ export const TopBar = forwardRef<
         )}
       </label>
       <span className="min-w-0 flex-1" />
-      <SyncLine status={syncStatus} enabled={syncEnabled} compact className="shrink-0 max-[860px]:hidden" />
+      {!plan ? null : hasPro(plan) ? (
+        <CloudSyncLine status={cloudStatus} className="shrink-0 max-[860px]:hidden" />
+      ) : (
+        <SyncLine status={syncStatus} enabled={syncEnabled} compact onSyncAll={onSyncAll} className="shrink-0 max-[860px]:hidden" />
+      )}
       <span className="w-1 shrink-0" />
       <button
         type="button"

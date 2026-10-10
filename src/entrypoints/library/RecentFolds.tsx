@@ -101,13 +101,20 @@ export function RecentFolds({ folds, tabs }: { folds: SessionRecord[]; tabs: Tab
         {folds.map((fold) => {
           const running = active?.sessionId === fold.id ? active : undefined;
           const working = busy === fold.id || !!running;
+          // A smart name (Pro AI) is the title; the time moves to the second line.
+          const smart = fold.smartName?.trim();
+          const when = foldTime(fold.createdAt);
+          const label = smart ? `“${smart}” (${when})` : when;
           return (
             <div key={fold.id} className="flex items-center gap-3 rounded-card border border-border bg-surface py-3 pr-3 pl-4">
               <div className="min-w-0 flex-1">
-                <div className="truncate font-semibold">{foldTime(fold.createdAt)}</div>
+                <div dir={smart ? 'auto' : undefined} className="truncate font-semibold" title={smart ? `${smart} · ${when}` : undefined}>
+                  {smart || when}
+                </div>
                 <div className="flex items-center gap-1.5 text-small text-text-3">
-                  <span className="truncate">
-                    {count(fold.tabCount, 'tab')} · {count(fold.windowCount, 'window')}
+                  {/* With a smart name the time takes the second line; the window count moves to the tooltip. */}
+                  <span className="truncate" title={smart ? `${when} · ${count(fold.tabCount, 'tab')} · ${count(fold.windowCount, 'window')}` : undefined}>
+                    {smart ? `${when} · ${count(fold.tabCount, 'tab')}` : `${count(fold.tabCount, 'tab')} · ${count(fold.windowCount, 'window')}`}
                   </span>
                   {tabs.some((t) => t.sessionId === fold.id && t.incognito) && <IncognitoMark size={13} />}
                 </div>
@@ -115,7 +122,7 @@ export function RecentFolds({ folds, tabs }: { folds: SessionRecord[]; tabs: Tab
               <button
                 type="button"
                 title="Reopens these tabs as the original windows"
-                aria-label={`Reopen the fold from ${foldTime(fold.createdAt)}, ${count(fold.tabCount, 'tab')} in ${count(fold.windowCount, 'window')}`}
+                aria-label={`Reopen the fold ${smart ? label : `from ${when}`}, ${count(fold.tabCount, 'tab')} in ${count(fold.windowCount, 'window')}`}
                 disabled={working}
                 onClick={() => void reopen(fold)}
                 className={SECONDARY_SM}
@@ -126,7 +133,7 @@ export function RecentFolds({ folds, tabs }: { folds: SessionRecord[]; tabs: Tab
               <button
                 type="button"
                 title="Delete this fold and its tabs from the list"
-                aria-label={`Delete the fold from ${foldTime(fold.createdAt)} and its ${count(fold.tabCount, 'tab')}`}
+                aria-label={`Delete the fold ${smart ? label : `from ${when}`} and its ${count(fold.tabCount, 'tab')}`}
                 disabled={working}
                 onClick={() => void deleteFold(fold, tabs)}
                 className="-mr-1 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-text-2 hover:bg-hover hover:text-text disabled:text-text-3"

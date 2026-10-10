@@ -1,16 +1,24 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { browser } from 'wxt/browser';
-import { ChevronDown, Download, TriangleAlert, Trash, Upload, X } from 'lucide-react';
+import { ChevronDown, CirclePause, LoaderCircle, TriangleAlert, Trash, Upload, X } from 'lucide-react';
+import { send } from '@/lib/messages';
+import { hasPro } from '@/lib/pro/tiers';
 import type { SyncStatus } from '@/lib/state';
 import { Kbd } from '@/ui/components/Chips';
 import { Segmented, Switch } from '@/ui/components/Controls';
 import { confirmAction } from '@/ui/components/Dialog';
-import { toast } from '@/ui/components/Toast';
+import { toast, ToastViewport } from '@/ui/components/Toast';
 import { cx } from '@/ui/cx';
-import { useIncognitoAccess, useSettings } from '@/ui/hooks';
-import { clearEverything, errorText, exportAll } from './actions';
+import { useCloudSyncStatus, useIncognitoAccess, usePlan, useSettings } from '@/ui/hooks';
+import { proErrorText } from '@/ui/pro';
+import { clearEverything, errorText } from './actions';
+import { BackupDialog } from './BackupDialog';
+import { ExportMenu } from './ExportMenu';
 import { count } from './format';
-import { SyncLine } from './SyncLine';
+import { RemoveDialog } from './RemoveDialog';
+import { goToPlans } from './router';
+import { CloudSyncLine, SyncLine } from './SyncLine';
+import { YourPlan } from './YourPlan';
 
 const SLEEP_CHOICES: Array<{ value: number; label: string }> = [
   { value: 15, label: '15 min' },
@@ -109,6 +117,30 @@ function IncognitoHelp({ warn }: { warn: boolean }) {
 const SECONDARY =
   'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control border border-border-strong bg-surface px-3.5 text-text hover:bg-hover';
 
+/** "Sync now" for the Tabfold account (Pro). */
+function SyncNowButton() {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => {
+        setBusy(true);
+        send({ type: 'cloud-sync-now' })
+          .then(({ ok }) => {
+            if (!ok) toast('Couldn’t sync with Tabfold. Try again in a moment.', { tone: 'error' });
+          })
+          .catch((error) => toast(proErrorText(error), { tone: 'error' }))
+          .finally(() => setBusy(false));
+      }}
+      className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-border-strong bg-surface px-2.5 text-small font-semibold text-text hover:bg-hover disabled:opacity-60"
+    >
+      {busy && <LoaderCircle size={12} aria-hidden className="tf-spin" />}
+      Sync now
+    </button>
+  );
+}
+
 /**
  * Settings (Min-Settings), over the list: the few choices the minimal Tabfold has. Everything
  * else keeps its default.
@@ -133,6 +165,11 @@ export function SettingsDialog({
   const shortcut = useFoldShortcut();
   const incognitoAccess = useIncognitoAccess();
   const [clearing, setClearing] = useState(false);
+  const plan = usePlan();
+  const cloudStatus = useCloudSyncStatus();
+  const pro = hasPro(plan);
+  const [backups, setBackups] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   useEffect(() => {
     const dialog = ref.current;
@@ -170,9 +207,11 @@ export function SettingsDialog({
   };
 
   return (
+    <>
     <dialog
       ref={ref}
       tabIndex={-1}
+      data-toasts
       aria-labelledby="settings-title"
       onClose={onClose}
       onClick={(e) => {
@@ -199,6 +238,7 @@ export function SettingsDialog({
           </header>
 
           <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-10 py-1 max-[560px]:px-5">
+            <YourPlan open={open} onRestore={() => setBackups(true)} />
             <SettingRow
               title="Keep pinned tabs open"
               description="Fold skips them. Tabs playing sound always stay open too."
@@ -243,21 +283,42 @@ export function SettingsDialog({
               }
               control={<Switch checked={settings.autoSuspend} onChange={(v) => update({ autoSuspend: v })} label="Put idle tabs to sleep" />}
             />
-            <SettingRow
-              title="Sync folded tabs with Chrome"
-              description={
-                <>
-                  Uses Chrome’s own sync, no account needed. Your latest ~500 folded tabs show up on your other computers; older ones stay on
-                  this one.
-                  {settings.syncWithChrome && syncStatus && (
-                    <div className="mt-2.5">
-                      <SyncLine status={syncStatus} enabled />
+            {pro ? (
+              <SettingRow
+                title="Sync with your Tabfold account"
+                description={
+                  <>
+                    Every folded tab, on every computer where you use Tabfold. No Chrome sign-in needed. Incognito tabs stay on this computer.
+                    {cloudStatus && (
+                      <div className="mt-2.5">
+                        <CloudSyncLine status={cloudStatus} className="whitespace-normal" />
+                      </div>
+                    )}
+                    <div className="mt-1.5 flex items-center gap-1.5">
+                      <CirclePause size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
+                      Chrome sync is paused while your Tabfold account syncs.
                     </div>
-                  )}
-                </>
-              }
-              control={<Switch checked={settings.syncWithChrome} onChange={(v) => update({ syncWithChrome: v })} label="Sync folded tabs with Chrome" />}
-            />
+                  </>
+                }
+                control={<SyncNowButton />}
+              />
+            ) : (
+              <SettingRow
+                title="Sync folded tabs with Chrome"
+                description={
+                  <>
+                    Uses Chrome’s own sync, no account needed. Your latest ~500 folded tabs show up on your other computers; older ones stay on
+                    this one.
+                    {settings.syncWithChrome && syncStatus && (
+                      <div className="mt-2.5">
+                        <SyncLine status={syncStatus} enabled onSyncAll={goToPlans} />
+                      </div>
+                    )}
+                  </>
+                }
+                control={<Switch checked={settings.syncWithChrome} onChange={(v) => update({ syncWithChrome: v })} label="Sync folded tabs with Chrome" />}
+              />
+            )}
             <SettingRow
               title="Fold Incognito windows too"
               description={
@@ -295,10 +356,7 @@ export function SettingsDialog({
                     <Upload size={14} strokeWidth={1.75} aria-hidden className="text-text-2" />
                     Import from OneTab…
                   </button>
-                  <button type="button" className={SECONDARY} onClick={() => void exportAll()}>
-                    <Download size={14} strokeWidth={1.75} aria-hidden className="text-text-2" />
-                    Export…
-                  </button>
+                  <ExportMenu pro={pro} className={SECONDARY} />
                 </>
               }
             />
@@ -340,12 +398,24 @@ export function SettingsDialog({
               <Trash size={16} strokeWidth={1.75} aria-hidden />
               Clear everything…
             </button>
+            <button
+              type="button"
+              onClick={() => setRemoving(true)}
+              title="Take your folded tabs with you, then remove Tabfold from Chrome"
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control px-2.5 font-semibold text-text-2 hover:bg-hover hover:text-text"
+            >
+              Remove Tabfold…
+            </button>
             <span className="text-small text-text-3">
-              Removes {foldedCount > 0 ? `all ${count(foldedCount, 'folded tab')}` : 'everything'} here and from Chrome sync. Asks first.
+              Clear everything removes {foldedCount > 0 ? `all ${count(foldedCount, 'folded tab')}` : 'everything'} here and from Chrome sync. Asks first.
             </span>
           </footer>
+          <ToastViewport inDialog />
         </div>
       )}
     </dialog>
+    <BackupDialog open={open && backups} onClose={() => setBackups(false)} />
+    <RemoveDialog open={open && removing} onClose={() => setRemoving(false)} foldedCount={foldedCount} pro={pro} />
+    </>
   );
 }

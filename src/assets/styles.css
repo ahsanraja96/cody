@@ -275,3 +275,8 @@ body {
 html {
   font-size: 16px;
 }
+
+/* Pro screens: while a modal dialog with its own toasts is open, the page's toasts (under its backdrop) hide. */
+body:has(dialog[open][data-toasts]) .tf-toasts-page {
+  visibility: hidden;
+}

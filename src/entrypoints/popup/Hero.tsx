@@ -165,6 +165,7 @@ export function Hero({
   ask,
   windowCount,
   currentWindowId,
+  milestone,
 }: {
   view: FoldView;
   stats: OpenTabStats;
@@ -174,6 +175,8 @@ export function Hero({
   ask: FoldAskProps;
   windowCount: number;
   currentWindowId?: number;
+  /** The occasional "You've freed 12.4 GB this month" card after a fold (Pro-Popup-Milestone). */
+  milestone?: ReactNode;
 }) {
   // The last "freed so far" shown, so the finished number rolls up from it.
   const freedSoFar = useRef(0);
@@ -200,16 +203,20 @@ export function Hero({
         stats={stats}
         currentWindowId={currentWindowId}
         rollFrom={view.seenRunning ? freedSoFar.current : undefined}
+        milestone={milestone}
         button={
-          <FoldButton
-            className="mt-3.5"
-            count={foldCount}
-            ready={ready}
-            shortcut={shortcut}
-            onFold={onFold}
-            noted={!!stayedLine(view.fold)}
-            asks={asks}
-          />
+          // With the milestone card, a "Nothing to fold" button would only crowd it out.
+          milestone && ready && foldCount === 0 ? null : (
+            <FoldButton
+              className="mt-3.5"
+              count={foldCount}
+              ready={ready}
+              shortcut={shortcut}
+              onFold={onFold}
+              noted={!!stayedLine(view.fold) && !milestone}
+              asks={asks}
+            />
+          )
         }
       />
     );
@@ -415,12 +422,14 @@ function Folded({
   currentWindowId,
   rollFrom,
   button,
+  milestone,
 }: {
   fold: ActiveFold;
   stats: OpenTabStats;
   currentWindowId?: number;
   rollFrom?: number;
   button: ReactNode;
+  milestone?: ReactNode;
 }) {
   const outcome = fold.outcome;
   // Tabs that went into the list (closed blank pages aren't folded tabs).
@@ -450,7 +459,8 @@ function Folded({
         fill={1}
         label={`Memory: ${plural(freedSlots, 'tab')} freed, ${plural(stats.tabs.length, 'tab')} still open`}
       />
-      {memory?.freeAfter != null && (
+      {milestone}
+      {!milestone && memory?.freeAfter != null && (
         <p className="mt-3 flex items-center gap-2 text-small text-text-2 tabular-nums">
           <MemoryStick size={14} strokeWidth={1.75} aria-hidden className="flex-none text-text-3" />
           <span>
@@ -462,7 +472,7 @@ function Folded({
         </p>
       )}
       {button}
-      {note && <FoldNote>{note}</FoldNote>}
+      {note && !milestone && <FoldNote>{note}</FoldNote>}
     </section>
   );
 }

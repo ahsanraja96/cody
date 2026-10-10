@@ -424,3 +424,8 @@ export function useMilestoneState(): MilestoneState | undefined {
 export function usePlanEnded() {
   return useStored(planEndedState.get, planEndedState.watch);
 }
+
+/** The plan, or undefined until it has been read, so a page doesn't flash Free-only lines on Pro. */
+export function useLoadedPlan(): PlanState | undefined {
+  return useStored(planState.get, planState.watch);
+}

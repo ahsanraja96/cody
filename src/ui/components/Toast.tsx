@@ -145,13 +145,18 @@ function ToastView({ item }: { item: ToastItem }) {
   );
 }
 
-export function ToastViewport({ className }: { className?: string }) {
+/**
+ * Where toasts show. A modal <dialog> covers the page (and makes it inert), so a dialog that
+ * toasts renders its own viewport (`inDialog`) and marks itself `data-toasts`; the page's viewport
+ * hides while such a dialog is open (styles.css).
+ */
+export function ToastViewport({ className, inDialog = false }: { className?: string; inDialog?: boolean }) {
   const toasts = useToasts((s) => s.toasts);
   return (
     <div
       role="status"
       aria-live="polite"
-      className={cx('pointer-events-none fixed inset-x-0 bottom-5 z-50 flex flex-col items-center gap-2 px-4', className)}
+      className={cx('pointer-events-none fixed inset-x-0 bottom-5 z-50 flex flex-col items-center gap-2 px-4', !inDialog && 'tf-toasts-page', className)}
     >
       {toasts.map((item) => (
         <ToastView key={item.id} item={item} />

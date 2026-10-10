@@ -1,15 +1,18 @@
 import { useState, type ReactNode } from 'react';
 import { browser } from 'wxt/browser';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { CircleAlert, RefreshCw, RotateCcw, TriangleAlert, X } from 'lucide-react';
+import { CircleAlert, Info, RefreshCw, RotateCcw, TriangleAlert, X } from 'lucide-react';
 import { acknowledgeWipe, checkWiped } from '@/lib/dataGuard';
 import { send } from '@/lib/messages';
+import { planEnded } from '@/lib/pro/state';
 import type { ActiveFold } from '@/lib/state';
 import { toast } from '@/ui/components/Toast';
-import { currentScreen, useRecoveryOffer, useUpdateReady } from '@/ui/hooks';
+import { currentScreen, useLoadedPlan, usePlanEnded, useRecoveryOffer, useUpdateReady } from '@/ui/hooks';
+import { tierName } from '@/ui/pro';
 import { errorText } from './actions';
 import { startFold, useFoldError } from './fold';
 import { count, foldTime } from './format';
+import { goToPlans } from './router';
 
 const PRIMARY_SM =
   'inline-flex h-7 shrink-0 items-center justify-center rounded-control bg-accent px-3 text-small font-semibold text-on-accent hover:bg-accent-hover disabled:opacity-60';
@@ -223,6 +226,37 @@ function FoldFailedLine() {
   );
 }
 
+/**
+ * "Your Pro AI trial has ended" (Pro-States "Plan ended"): once, at the top of the list. Nothing is
+ * deleted or locked; only new AI runs and syncing past 500 stop.
+ */
+const TIER_RANK = { free: 0, pro: 1, 'pro-ai': 2 } as const;
+
+function PlanEndedLine() {
+  const ended = usePlanEnded();
+  const plan = useLoadedPlan();
+  // Nothing until the plan is read, and nothing once a plan at least as good is back.
+  if (!ended || !plan || TIER_RANK[plan.tier] >= TIER_RANK[ended.tier]) return null;
+  const title = ended.wasTrial ? 'Your Pro AI trial has ended' : `Your ${tierName(ended.tier)} plan has ended`;
+  const detail =
+    ended.tier === 'pro-ai' || ended.wasTrial
+      ? 'Your list, projects and backups stay. Organising with AI and syncing more than 500 tabs are paused.'
+      : 'Your list and backups stay. Syncing more than 500 tabs is paused.';
+  return (
+    <div role="status" className="flex items-start gap-2.5 rounded-card border border-border bg-bg-subtle py-3 pr-2 pl-3.5">
+      <Info size={16} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0 text-text-2" />
+      <div className="min-w-0 flex-1">
+        <div className="font-semibold">{title}</div>
+        <div className="text-small text-text-2">{detail}</div>
+      </div>
+      <button type="button" className={PRIMARY_SM} onClick={goToPlans}>
+        Choose a plan
+      </button>
+      <DismissButton onClick={() => void planEnded.set(null).catch(() => undefined)} />
+    </div>
+  );
+}
+
 /** The small states at the top of the full list, newest concern first. Nothing when all is well. */
 export function Notices({ fold, onImport }: { fold: ActiveFold | undefined; onImport: () => void }) {
   return (
@@ -232,6 +266,7 @@ export function Notices({ fold, onImport }: { fold: ActiveFold | undefined; onIm
       <LeaveSiteLine fold={fold} />
       <CrashLine />
       <WipedLine onImport={onImport} />
+      <PlanEndedLine />
     </div>
   );
 }
