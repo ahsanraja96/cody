@@ -7,7 +7,7 @@ import { send } from '@/lib/messages';
 import { planEnded } from '@/lib/pro/state';
 import type { ActiveFold } from '@/lib/state';
 import { toast } from '@/ui/components/Toast';
-import { currentScreen, usePlanEnded, useRecoveryOffer, useUpdateReady } from '@/ui/hooks';
+import { currentScreen, useLoadedPlan, usePlanEnded, useRecoveryOffer, useUpdateReady } from '@/ui/hooks';
 import { tierName } from '@/ui/pro';
 import { errorText } from './actions';
 import { startFold, useFoldError } from './fold';
@@ -230,9 +230,13 @@ function FoldFailedLine() {
  * "Your Pro AI trial has ended" (Pro-States "Plan ended"): once, at the top of the list. Nothing is
  * deleted or locked; only new AI runs and syncing past 500 stop.
  */
+const TIER_RANK = { free: 0, pro: 1, 'pro-ai': 2 } as const;
+
 function PlanEndedLine() {
   const ended = usePlanEnded();
-  if (!ended) return null;
+  const plan = useLoadedPlan();
+  // Nothing until the plan is read, and nothing once a plan at least as good is back.
+  if (!ended || !plan || TIER_RANK[plan.tier] >= TIER_RANK[ended.tier]) return null;
   const title = ended.wasTrial ? 'Your Pro AI trial has ended' : `Your ${tierName(ended.tier)} plan has ended`;
   const detail =
     ended.tier === 'pro-ai' || ended.wasTrial

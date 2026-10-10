@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { browser } from 'wxt/browser';
-import { ChevronDown, LoaderCircle, Pause, TriangleAlert, Trash, Upload, X } from 'lucide-react';
+import { ChevronDown, CirclePause, LoaderCircle, TriangleAlert, Trash, Upload, X } from 'lucide-react';
 import { send } from '@/lib/messages';
 import { hasPro } from '@/lib/pro/tiers';
 import type { SyncStatus } from '@/lib/state';
@@ -295,7 +295,7 @@ export function SettingsDialog({
                       </div>
                     )}
                     <div className="mt-1.5 flex items-center gap-1.5">
-                      <Pause size={12} strokeWidth={2} aria-hidden className="shrink-0" />
+                      <CirclePause size={14} strokeWidth={1.75} aria-hidden className="shrink-0" />
                       Chrome sync is paused while your Tabfold account syncs.
                     </div>
                   </>

@@ -112,9 +112,9 @@ export function RecentFolds({ folds, tabs }: { folds: SessionRecord[]; tabs: Tab
                   {smart || when}
                 </div>
                 <div className="flex items-center gap-1.5 text-small text-text-3">
-                  <span className="truncate">
-                    {smart && `${when} · `}
-                    {count(fold.tabCount, 'tab')} · {count(fold.windowCount, 'window')}
+                  {/* With a smart name the time takes the second line; the window count moves to the tooltip. */}
+                  <span className="truncate" title={smart ? `${when} · ${count(fold.tabCount, 'tab')} · ${count(fold.windowCount, 'window')}` : undefined}>
+                    {smart ? `${when} · ${count(fold.tabCount, 'tab')}` : `${count(fold.tabCount, 'tab')} · ${count(fold.windowCount, 'window')}`}
                   </span>
                   {tabs.some((t) => t.sessionId === fold.id && t.incognito) && <IncognitoMark size={13} />}
                 </div>

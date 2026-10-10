@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Check, ChevronLeft, Info, LoaderCircle, LogIn, ShieldCheck, Sparkles } from 'lucide-react';
+import { Check, ChevronLeft, Info, LoaderCircle, ShieldCheck, Sparkles } from 'lucide-react';
 import { send } from '@/lib/messages';
 import { proConfigured } from '@/lib/pro/config';
 import { AI_RUNS_PER_MONTH, PRICES, TRIAL_DAYS, type BillingInterval, type Tier } from '@/lib/pro/types';
@@ -93,7 +93,7 @@ function PlanCard({
       </div>
       <p className="mt-1 mb-0 text-text-2">{tagline}</p>
       <div className="mt-[18px] flex items-baseline gap-1.5">
-        <span className="text-[32px] leading-[1.2] font-semibold tracking-[-0.01em] tabular-nums">{price}</span>
+        <span className="text-[32px] leading-[1.45] font-semibold tracking-[-0.01em] tabular-nums">{price}</span>
         <span className="text-text-2">{unit}</span>
       </div>
       <p className="mt-0.5 mb-0 min-h-[17px] text-small text-text-3 tabular-nums">{sub}</p>
@@ -243,7 +243,7 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
             Pro isn’t switched on in this build yet.
           </p>
         )}
-        <h1 ref={headingRef} tabIndex={-1} className="m-0 text-hero font-semibold outline-none">
+        <h1 ref={headingRef} tabIndex={-1} className="m-0 text-hero leading-[1.45] font-semibold outline-none">
           Tabfold Pro
         </h1>
         <p className="mt-2 mb-[18px] text-text-2">Free stays complete. Pro keeps every tab in sync and backed up. Pro AI sorts them into projects.</p>
@@ -298,7 +298,11 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
                 </button>
               </div>
             ) : (
-              <div aria-hidden className={cx('h-10', reserve)} />
+              <div className={reserve}>
+                <button type="button" disabled className={BUTTONS.off}>
+                  Included in your plan
+                </button>
+              </div>
             )
           }
           lead={plan.tier === 'free' ? 'What you have now' : 'Always included'}
@@ -370,7 +374,7 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
             onClick={() => void open('login', { page: 'login' })}
             className="inline-flex items-center gap-1.5 text-accent-text hover:underline disabled:opacity-50 disabled:hover:no-underline"
           >
-            {busy === 'login' ? <LoaderCircle size={12} aria-hidden className="tf-spin" /> : <LogIn size={12} strokeWidth={2} aria-hidden />}
+            {busy === 'login' && <LoaderCircle size={12} aria-hidden className="tf-spin" />}
             Already paid? Sign in
           </button>
         )}

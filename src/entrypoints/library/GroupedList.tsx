@@ -111,6 +111,8 @@ export function GroupedList({
   const [showAll, setShowAll] = useState<Partial<Record<string, boolean>>>({});
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const by: GroupBy = groupBy === 'project' && projects.length > 0 ? 'project' : 'site';
+  // By site the projects don't matter: a stable empty list keeps the grouping memoised.
+  const used = by === 'project' ? projects : NO_PROJECTS;
   // Times ("2 min ago") refresh every minute.
   const now = useNow(true, 60_000);
 
@@ -118,8 +120,8 @@ export function GroupedList({
   const { groups, liveIds } = useMemo(() => {
     const live = new Set(tabs.map((t) => t.id));
     const ghosts = [...removals.values()].filter((r) => !live.has(r.tab.id)).map((r) => r.tab);
-    return { groups: groupTabs([...tabs, ...ghosts], by, projects), liveIds: live };
-  }, [tabs, removals, by, projects]);
+    return { groups: groupTabs([...tabs, ...ghosts], by, used), liveIds: live };
+  }, [tabs, removals, by, used]);
 
   const { items, heads } = useMemo(() => {
     const out: Item[] = [];

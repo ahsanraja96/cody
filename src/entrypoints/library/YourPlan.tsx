@@ -2,11 +2,11 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { LoaderCircle, Sparkles } from 'lucide-react';
 import { send } from '@/lib/messages';
 import { hasPro, hasProAi } from '@/lib/pro/tiers';
-import type { BackupInfo } from '@/lib/pro/types';
+import { FREE_PLAN, type BackupInfo } from '@/lib/pro/types';
 import type { SyncStatus } from '@/lib/state';
 import { Chip } from '@/ui/components/ProBits';
 import { toast } from '@/ui/components/Toast';
-import { useAiRuns, useCloudSyncStatus, usePlan } from '@/ui/hooks';
+import { useAiRuns, useCloudSyncStatus, useLoadedPlan } from '@/ui/hooks';
 import { daysLeftLabel, intervalName, isTrialing, longDate, openPlanPage, paidTier, runsLine, tierName, trialDaysLeft } from '@/ui/pro';
 import { backupLabel } from './BackupDialog';
 import { goToPlans } from './router';
@@ -43,7 +43,8 @@ function Box({ title, sub, actions }: { title: ReactNode; sub: ReactNode; action
  * latest backup, "Manage subscription" and "Restore a backup…".
  */
 export function YourPlan({ open, onRestore }: { open: boolean; onRestore: () => void }) {
-  const plan = usePlan();
+  const loaded = useLoadedPlan();
+  const plan = loaded ?? FREE_PLAN;
   const runs = useAiRuns();
   const cloud = useCloudSyncStatus();
   const [backup, setBackup] = useState<BackupInfo | null>(null);
@@ -70,7 +71,10 @@ export function YourPlan({ open, onRestore }: { open: boolean; onRestore: () => 
   };
 
   let box: ReactNode;
-  if (!pro) {
+  if (!loaded) {
+    // Until the plan is read: the box's place, so nothing jumps.
+    box = <div aria-hidden className="h-[78px] rounded-card border border-border bg-bg-subtle" />;
+  } else if (!pro) {
     box = (
       <Box
         title={

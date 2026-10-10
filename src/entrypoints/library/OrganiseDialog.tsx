@@ -8,7 +8,7 @@ import type { TabGroupColor, TabRecord } from '@/lib/types';
 import { displayHost } from '@/lib/urls';
 import { Favicon } from '@/ui/components/Favicon';
 import { FaviconStrip } from '@/ui/components/FoldedList';
-import { toast } from '@/ui/components/Toast';
+import { toast, ToastViewport } from '@/ui/components/Toast';
 import { cx } from '@/ui/cx';
 import { useAiRuns, usePlan, usePlanEnded, useSettings } from '@/ui/hooks';
 import { errorCode, openPlanPage, proErrorText, runsLine, shortDate, trialUsed } from '@/ui/pro';
@@ -136,11 +136,18 @@ export function OrganiseDialog({ open, onClose, tabs }: { open: boolean; onClose
     if (!open && dialog.open) dialog.close();
   }, [open]);
 
+  // When the part that had focus goes away (loading → preview), keep focus in the dialog.
+  useEffect(() => {
+    const dialog = ref.current;
+    if (dialog?.open && (!document.activeElement || document.activeElement === document.body)) dialog.focus();
+  }, [phase.kind]);
+
   const teaser = phase.kind === 'teaser';
   return (
     <dialog
       ref={ref}
       tabIndex={-1}
+      data-toasts
       aria-labelledby="org-h"
       onClose={onClose}
       onClick={(e) => {
@@ -179,6 +186,7 @@ export function OrganiseDialog({ open, onClose, tabs }: { open: boolean; onClose
             )}
           </div>
         ))}
+      {open && <ToastViewport inDialog />}
     </dialog>
   );
 }
@@ -331,7 +339,7 @@ function Preview({ result, tabs, onClose }: { result: OrganiseResult; tabs: TabR
         <ShieldCheck size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-text-3" />
         <span>
           Only titles and addresses were sent, never page content.
-          {result.notSent > 0 && ` ${count(result.notSent, 'older or Incognito tab')} weren’t sent and stay sorted by site.`}
+          {result.notSent > 0 && ` ${count(result.notSent, 'older or Incognito tab')} ${result.notSent === 1 ? 'wasn’t' : 'weren’t'} sent.`}
         </span>
       </div>
       <div className="scroll-thin flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-6 py-3.5">

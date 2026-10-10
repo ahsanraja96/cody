@@ -19,7 +19,7 @@ import { OpenWindows } from './OpenWindows';
 import { OrganiseDialog } from './OrganiseDialog';
 import { PlansPage } from './PlansPage';
 import { RecentFolds } from './RecentFolds';
-import { goToPlans, useRoute } from './router';
+import { goToPlans, parseHash, useRoute, type Route } from './router';
 import { SearchResults } from './SearchResults';
 import { SettingsDialog, useFoldShortcut } from './SettingsDialog';
 import { TopBar } from './TopBar';
@@ -122,19 +122,24 @@ export function LibraryApp() {
   }, [searching]);
 
   const onActiveResult = useCallback((id: string | undefined) => setActiveResult(id), []);
+  // A dialog closes (and fires "close") when the route moves on, for example Settings › See Pro and
+  // Pro AI: only a dialog that is still the current route goes back to the list.
+  const closeRoute = (from: Route) => {
+    if (parseHash(location.hash) === from) navigate('list', { replace: true });
+  };
   const openImport = () => navigate('import');
 
   const hosts = (
     <>
       <SettingsDialog
         open={route === 'settings'}
-        onClose={() => navigate('list', { replace: true })}
+        onClose={() => closeRoute('settings')}
         onHow={() => navigate('how')}
         onImport={() => navigate('import', { replace: true })}
         syncStatus={syncStatus}
         foldedCount={tabs.length}
       />
-      <ImportDialog open={route === 'import'} onClose={() => navigate('list', { replace: true })} />
+      <ImportDialog open={route === 'import'} onClose={() => closeRoute('import')} />
       <OrganiseDialog open={organising && route === 'list'} onClose={() => setOrganising(false)} tabs={tabs} />
       <ToastViewport />
       <ConfirmHost />
