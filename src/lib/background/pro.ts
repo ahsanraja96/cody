@@ -12,6 +12,7 @@ import { hasPro, hasProAi } from '../pro/tiers';
 import { AI_MAX_TABS, type AiGroup, type AiRuns, type BackupInfo, type OrganiseResult, type PlanState } from '../pro/types';
 import { getSessionGraph, listFoldedTabs, listLiveSessions, restoreRecords, setProjects, setSmartName } from '../repo';
 import { updateSettings } from '../settings';
+import { cloudSyncActive } from '../sync/cloud';
 import { cloudSyncNow } from '../sync/engine';
 import { CLOUD_LIMITS, unpack } from '../sync/records';
 import { restoreWindows } from './restore';
@@ -56,7 +57,7 @@ export async function handleProCommand(command: ProCommand): Promise<CommandResu
     case 'backup-restore':
       return restoreBackup(command.day);
     case 'cloud-sync-now':
-      return (await cloudSyncActiveNow()) ? cloudSyncNow() : { ok: false };
+      return (await cloudSyncActive()) ? cloudSyncNow() : { ok: false };
     case 'milestone-dismiss':
       return dismissMilestoneNow();
     case 'reopen-everything':
@@ -72,10 +73,6 @@ async function requirePlan(need: 'pro' | 'pro-ai'): Promise<PlanState> {
   if (!includes(plan)) plan = await refreshPlan({ force: true });
   if (!includes(plan)) throw new ProError(need === 'pro' ? 'needs-pro' : 'needs-pro-ai');
   return plan;
-}
-
-async function cloudSyncActiveNow(): Promise<boolean> {
-  return proConfigured() && hasPro(await planState.get());
 }
 
 // ---------------------------------------------------------------------------------------------

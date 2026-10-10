@@ -33,6 +33,7 @@ export function resetPlanRuntime(): void {
   inFlight = null;
   clearTimeout(pollTimer);
   pollTimer = undefined;
+  cachedWatch = undefined;
 }
 
 /**
@@ -110,11 +111,18 @@ const WATCH_KEY = 'planPageWatch';
 export const WATCH_POLL_MS = 5_000;
 export const WATCH_MAX_MS = 15 * 60_000;
 
+/** The watch, kept in memory too: tabs.onRemoved asks on every closed tab (hundreds during a fold). */
+let cachedWatch: PageWatch | null | undefined;
+
 export async function getPageWatch(): Promise<PageWatch | undefined> {
-  return (await browser.storage.session.get(WATCH_KEY))[WATCH_KEY] as PageWatch | undefined;
+  if (cachedWatch === undefined) {
+    cachedWatch = ((await browser.storage.session.get(WATCH_KEY))[WATCH_KEY] as PageWatch | undefined) ?? null;
+  }
+  return cachedWatch ?? undefined;
 }
 
 async function setPageWatch(watch: PageWatch | null): Promise<void> {
+  cachedWatch = watch;
   if (watch) await browser.storage.session.set({ [WATCH_KEY]: watch });
   else await browser.storage.session.remove(WATCH_KEY);
 }
