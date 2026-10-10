@@ -1,14 +1,19 @@
 import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
+import { ArrowDown, ChevronRight } from 'lucide-react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import type { ImportSource } from '@/lib/importers';
 import { openLibrary } from '@/lib/openLibrary';
+import { listLiveSessions } from '@/lib/repo';
 import { Button } from '@/ui/components/Button';
 import { Kbd } from '@/ui/components/Chips';
-import { Logo } from '@/ui/components/Logo';
-import { ImportPanel } from '@/ui/ImportPanel';
+import { ProInfoHost } from '@/ui/components/ProDialog';
+import { ToastViewport } from '@/ui/components/Toast';
+import { ImportDialog, SourceTile } from '@/ui/ImportPanel';
 import { cx } from '@/ui/cx';
-import type { ImportSource } from '@/lib/importers';
+import { isMac } from '@/ui/hooks';
 
-function Steps({ step }: { step: number }) {
+function Steps({ step, onSkip }: { step: number; onSkip?: () => void }) {
   return (
     <div className="flex items-center gap-2.5">
       <span className="text-meta text-text-3">Step {step} of 3</span>
@@ -17,6 +22,12 @@ function Steps({ step }: { step: number }) {
           <span key={n} className={cx('h-1 w-[18px] rounded-sm', n <= step ? 'bg-accent' : 'bg-border-strong')} />
         ))}
       </span>
+      <span className="flex-1" />
+      {onSkip && (
+        <button type="button" className="h-7 rounded-md px-2 text-text-2 hover:bg-hover hover:text-text" onClick={onSkip}>
+          Skip
+        </button>
+      )}
     </div>
   );
 }
@@ -58,10 +69,15 @@ function FoldIllustration() {
 }
 
 function WindowsIllustration() {
+  const windows: Array<[string, string[]]> = [
+    ['Docs', ['80%', '60%', '70%']],
+    ['Dashboards', ['70%', '85%', '50%']],
+    ['AI chats', ['60%', '75%', '65%']],
+  ];
   return (
     <div aria-hidden className="flex h-[220px] flex-col justify-center gap-3.5 rounded-card border border-border bg-bg-subtle p-5">
       <div className="flex gap-2.5">
-        {['Docs', 'Dashboards', 'AI chats'].map((name) => (
+        {windows.map(([name, widths]) => (
           <div key={name} className="flex-1 overflow-hidden rounded-control border border-border bg-surface">
             <div className="flex h-[22px] items-center gap-1 border-b border-border bg-hover px-2">
               <span className="size-1.5 rounded-full bg-border-strong" />
@@ -69,18 +85,19 @@ function WindowsIllustration() {
               <span className="ml-1.5 text-[10px] font-semibold text-text-2">{name}</span>
             </div>
             <div className="flex flex-col gap-1.5 p-2.5">
-              <span className="h-1.5 w-4/5 rounded bg-hover" />
-              <span className="h-1.5 w-3/5 rounded bg-hover" />
-              <span className="h-1.5 w-2/3 rounded bg-hover" />
+              {widths.map((width, i) => (
+                <span key={i} className="h-1.5 rounded bg-hover" style={{ width }} />
+              ))}
             </div>
           </div>
         ))}
       </div>
+      <ArrowDown size={16} className="self-center text-accent" />
       <div className="flex flex-col gap-1.5 rounded-card border border-accent-line bg-surface px-3 py-2.5">
         <span className="text-meta font-semibold">Checkout app</span>
         <span className="flex flex-wrap gap-1.5">
           {['Docs · 9', 'Dashboards · 6', 'AI chats · 9'].map((label) => (
-            <span key={label} className="inline-flex h-5 items-center rounded-full border border-border px-2 text-[10px] text-text-2">
+            <span key={label} className="inline-flex h-5 items-center rounded-full border border-border px-[7px] text-[10px] text-text-2">
               {label}
             </span>
           ))}
@@ -90,17 +107,27 @@ function WindowsIllustration() {
   );
 }
 
+/** Chrome gives "⇧⌘S" on a Mac and "Ctrl+Shift+S" elsewhere; the board shows "⌘⇧S". */
+function prettyShortcut(shortcut: string): string {
+  if (!isMac || shortcut.includes('+')) return shortcut;
+  const order = ['⌃', '⌥', '⌘', '⇧'];
+  const mods = [...shortcut].filter((c) => order.includes(c));
+  const rest = [...shortcut].filter((c) => !order.includes(c)).join('');
+  return `${mods.sort((a, b) => order.indexOf(a) - order.indexOf(b)).join('')}${rest}`;
+}
+
 export function Onboarding() {
   const [step, setStep] = useState(1);
   const [importSource, setImportSource] = useState<ImportSource | null>(null);
-  const [saveShortcut, setSaveShortcut] = useState('Ctrl+Shift+S');
+  const [saveShortcut, setSaveShortcut] = useState(isMac ? '⌘⇧S' : 'Ctrl+Shift+S');
+  const imported = useLiveQuery(async () => (await listLiveSessions()).filter((s) => s.source === 'import').length, []) ?? 0;
 
   useEffect(() => {
     browser.commands
       .getAll()
       .then((commands) => {
         const shortcut = commands.find((c) => c.name === 'save-all')?.shortcut;
-        if (shortcut) setSaveShortcut(shortcut);
+        if (shortcut) setSaveShortcut(prettyShortcut(shortcut));
       })
       .catch(() => undefined);
   }, []);
@@ -113,30 +140,24 @@ export function Onboarding() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg-subtle px-4 py-10">
-      <main className="flex w-full max-w-[480px] flex-col gap-4 rounded-card border border-border bg-bg p-6 shadow-pop">
-        <div className="flex items-center gap-2.5">
-          <Logo size={28} />
-          <span className="text-section font-semibold">Tabfold</span>
-          <span className="flex-1" />
-          {step < 3 && (
-            <Button size="sm" variant="ghost" onClick={finish}>
-              Skip
-            </Button>
-          )}
-        </div>
-        <Steps step={step} />
+      <main
+        aria-label={`Step ${step} of 3`}
+        className="flex min-h-[534px] w-full max-w-[480px] flex-col gap-4 rounded-card border border-border bg-bg p-6 shadow-pop"
+      >
+        <Steps step={step} onSkip={step < 3 ? finish : undefined} />
 
         {step === 1 && (
           <>
             <FoldIllustration />
             <h1 className="text-hero font-semibold">Save everything in one click</h1>
             <p className="text-text-2">
-              Your tabs fold into a saved session and close, so Chrome gets its memory back. Pinned tabs stay open. Changed your mind?
-              Undo for 10 seconds.
+              Your tabs fold into a saved session and close, so Chrome gets its memory back. Pinned tabs stay open. Changed your mind? Undo
+              for 10 seconds.
             </p>
             <p className="flex items-center gap-1.5 text-small text-text-3">
-              Shortcut <Kbd className="h-5 px-1.5">{saveShortcut}</Kbd> from any tab
+              Shortcut <Kbd className="h-5 rounded-[5px] px-1.5">{saveShortcut}</Kbd> from any tab
             </p>
+            <span className="flex-1" />
             <div className="flex justify-end">
               <Button variant="primary" onClick={() => setStep(2)}>
                 Next
@@ -150,18 +171,15 @@ export function Onboarding() {
             <WindowsIllustration />
             <h1 className="text-hero font-semibold">Your windows stay separate</h1>
             <p className="text-text-2">
-              Each window is saved as its own named group, with tab groups and pinned tabs. Restoring brings back the same windows,
-              and tabs only load when you click them.
+              Each window is saved as its own named group, with tab groups and pinned tabs. Restore brings back the same windows, and tabs
+              only load when you click them.
             </p>
-            <p className="text-text-2">
-              Saving a single tab? Pick a few <span className="font-semibold text-text">keywords</span> and find it later by any of
-              them.
-            </p>
+            <span className="flex-1" />
             <div className="flex justify-between">
               <Button variant="ghost" onClick={() => setStep(1)}>
                 Back
               </Button>
-              <Button variant="primary" onClick={() => setStep(3)}>
+              <Button variant="primary" onClick={() => setStep(3)} autoFocus>
                 Next
               </Button>
             </div>
@@ -172,43 +190,54 @@ export function Onboarding() {
           <>
             <h1 className="text-hero font-semibold">Bring your tabs with you</h1>
             <p className="text-text-2">Import what you already saved. Nothing is uploaded; it all stays on this device.</p>
-            {importSource ? (
-              <ImportPanel initialSource={importSource} />
-            ) : (
-              <div className="flex flex-col gap-2">
-                {[
-                  { source: 'onetab' as const, title: 'OneTab', hint: 'Paste the text from OneTab’s “Export URLs”', letter: '1', color: '#2F80ED' },
-                  { source: 'session-buddy' as const, title: 'Session Buddy', hint: 'Choose its JSON backup file', letter: 'S', color: '#3B82F6' },
-                  { source: 'bookmarks' as const, title: 'Browser bookmarks', hint: 'Turn an exported bookmarks file into sessions', letter: 'B', color: '#6B6B75' },
-                ].map((option) => (
-                  <button
-                    key={option.source}
-                    type="button"
-                    onClick={() => setImportSource(option.source)}
-                    className="flex h-[52px] items-center gap-3 rounded-card border border-border-strong bg-surface px-3.5 text-left hover:bg-hover"
-                  >
-                    <span aria-hidden className="inline-flex size-7 items-center justify-center rounded-[7px] text-small font-semibold text-white" style={{ background: option.color }}>
-                      {option.letter}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block font-semibold">{option.title}</span>
-                      <span className="block text-meta text-text-3">{option.hint}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
+            <div className="flex flex-col gap-2">
+              {(
+                [
+                  { source: 'onetab', title: 'OneTab', hint: 'Paste the text from OneTab\'s "Export URLs"' },
+                  { source: 'session-buddy', title: 'Session Buddy', hint: 'Choose its JSON backup file' },
+                  { source: 'bookmarks', title: 'Chrome bookmarks', hint: 'Turn a bookmark folder into a session' },
+                ] as const
+              ).map((option) => (
+                <button
+                  key={option.source}
+                  type="button"
+                  onClick={() => setImportSource(option.source)}
+                  className="flex h-[52px] items-center gap-3 rounded-card border border-border-strong bg-surface px-3.5 text-left hover:bg-hover"
+                >
+                  <SourceTile source={option.source} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-semibold">{option.title}</span>
+                    <span className="block truncate text-meta text-text-3">{option.hint}</span>
+                  </span>
+                  <ChevronRight size={16} aria-hidden className="shrink-0 text-text-3" />
+                </button>
+              ))}
+            </div>
+            {imported > 0 && (
+              <p role="status" className="text-small text-green">
+                {imported === 1 ? '1 session is ready in your library.' : `${imported.toLocaleString()} sessions are ready in your library.`}
+              </p>
             )}
+            <span className="flex-1" />
             <div className="flex justify-between">
               <Button variant="ghost" onClick={finish}>
                 Skip for now
               </Button>
-              <Button variant="primary" onClick={finish}>
+              <Button variant="primary" onClick={finish} autoFocus>
                 Start using Tabfold
               </Button>
             </div>
           </>
         )}
       </main>
+      <ImportDialog
+        open={importSource !== null}
+        initialSource={importSource ?? undefined}
+        onClose={() => setImportSource(null)}
+        onOpenSession={(id) => void openLibrary(`#/session/${encodeURIComponent(id)}`)}
+      />
+      <ToastViewport />
+      <ProInfoHost />
     </div>
   );
 }
