@@ -2,7 +2,7 @@ import { isQuotaError } from '../db';
 import { CommandError, type Command, type CommandResponse, type CommandResults } from '../messages';
 import { cancelRestore, handleOpenSavedTab, handleRestore, handleRestoreSnapshot, handleSnapshotToSession } from './restore';
 import { handleSave, handleUndo, preflightSave } from './save';
-import { dismissRecovery, takeSnapshot } from './snapshots';
+import { dismissRecovery, recoverFromMirror, takeSnapshot } from './snapshots';
 import { suspendInactive, suspendTab } from './suspend';
 
 async function dispatch(command: Command): Promise<CommandResults[Command['type']]> {
@@ -33,8 +33,7 @@ async function dispatch(command: Command): Promise<CommandResults[Command['type'
       await dismissRecovery();
       return { ok: true };
     case 'recover-from-mirror':
-      // Contract stub: implemented by the background work.
-      return { sessionId: null };
+      return recoverFromMirror();
   }
 }
 

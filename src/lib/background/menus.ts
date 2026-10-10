@@ -41,13 +41,25 @@ export async function askForKeywords(tabIds: number[]): Promise<void> {
   }
 }
 
+/** Shortcuts and menus have no page to ask in, so a duplicates setting of "ask" saves them again. */
+async function duplicatesWithoutPage(): Promise<'skip' | 'keep'> {
+  return (await getSettings()).duplicates === 'skip' ? 'skip' : 'keep';
+}
+
 async function saveSingleTab(tab: Browser.tabs.Tab | undefined, withKeywords: boolean): Promise<void> {
   if (tab?.id === undefined || tab.incognito) return;
   if (withKeywords) {
     await askForKeywords([tab.id]);
     return;
   }
-  await handleSave({ type: 'save', scope: 'tabs', tabIds: [tab.id], close: true, windowId: tab.windowId });
+  await handleSave({
+    type: 'save',
+    scope: 'tabs',
+    tabIds: [tab.id],
+    close: true,
+    windowId: tab.windowId,
+    duplicates: await duplicatesWithoutPage(),
+  });
 }
 
 export async function onMenuClicked(info: Browser.contextMenus.OnClickData, tab?: Browser.tabs.Tab): Promise<void> {
@@ -58,7 +70,7 @@ export async function onMenuClicked(info: Browser.contextMenus.OnClickData, tab?
       return saveSingleTab(tab, true);
     case MENU.saveWindow:
       if (tab?.windowId !== undefined && !tab.incognito) {
-        await handleSave({ type: 'save', scope: 'window', windowId: tab.windowId, close: true });
+        await handleSave({ type: 'save', scope: 'window', windowId: tab.windowId, close: true, duplicates: await duplicatesWithoutPage() });
       }
       return;
     case MENU.openLibrary:
@@ -71,11 +83,18 @@ export async function onCommand(command: string, tab?: Browser.tabs.Tab): Promis
     tab ?? (await browser.tabs.query({ active: true, lastFocusedWindow: true }))[0] ?? undefined;
   switch (command) {
     case 'save-all':
-      await handleSave({ type: 'save', scope: 'all', close: true, windowId: activeTab?.windowId ?? (await currentNormalWindowId()) });
+      await handleSave({
+        type: 'save',
+        scope: 'all',
+        close: true,
+        // From an Incognito window, "Save all" means the normal windows.
+        windowId: (activeTab && !activeTab.incognito ? activeTab.windowId : undefined) ?? (await currentNormalWindowId()),
+        duplicates: await duplicatesWithoutPage(),
+      });
       return;
     case 'save-window':
       if (activeTab?.windowId !== undefined && !activeTab.incognito) {
-        await handleSave({ type: 'save', scope: 'window', windowId: activeTab.windowId, close: true });
+        await handleSave({ type: 'save', scope: 'window', windowId: activeTab.windowId, close: true, duplicates: await duplicatesWithoutPage() });
       }
       return;
     case 'save-tab': {

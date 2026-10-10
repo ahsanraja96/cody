@@ -1,7 +1,7 @@
 import { browser } from 'wxt/browser';
 import type { TabLike } from '../capture';
 import { estimateBytes } from '../format';
-import type { SuspendOutcome } from '../messages';
+import type { KeptAwakeReason, SuspendOutcome, TabRef } from '../messages';
 import { getSettings, hostMatchesDomain, type Settings } from '../settings';
 import { classifyUrl, displayHost } from '../urls';
 
@@ -33,6 +33,11 @@ function emptyOutcome(): SuspendOutcome {
   return { suspended: 0, skipped: { active: 0, pinned: 0, audible: 0, protectedSite: 0, already: 0, failed: 0 }, freedBytes: 0, keptAwake: [] };
 }
 
+function keptAwake(tab: TabLike, reason: KeptAwakeReason): TabRef & { reason: KeptAwakeReason } {
+  const url = tab.url || tab.pendingUrl || '';
+  return { tabId: tab.id ?? -1, windowId: tab.windowId ?? -1, title: tab.title?.trim() || displayHost(url) || url, url, reason };
+}
+
 async function discardTabs(tabs: TabLike[], idleBefore?: number): Promise<SuspendOutcome> {
   const settings = await getSettings();
   const outcome = emptyOutcome();
@@ -46,9 +51,14 @@ async function discardTabs(tabs: TabLike[], idleBefore?: number): Promise<Suspen
       } catch {
         // Chrome refuses some tabs (for example ones it is about to show); skip and report.
         outcome.skipped.failed += 1;
+        outcome.keptAwake.push(keptAwake(tab, 'failed'));
       }
     } else if (decision !== 'not-web' && decision !== 'recent') {
       outcome.skipped[decision] += 1;
+      // Tabs Chrome already unloaded are left alone and not shown, nor are active pages that aren't
+      // web pages (a New Tab, the Tabfold library): those could never be suspended anyway.
+      const web = classifyUrl(tab.url || tab.pendingUrl || '') === 'web';
+      if (decision !== 'already' && (decision !== 'active' || web)) outcome.keptAwake.push(keptAwake(tab, decision));
     }
   }
   outcome.freedBytes = estimateBytes(outcome.suspended);
@@ -66,6 +76,7 @@ export async function suspendTab(tabId: number): Promise<SuspendOutcome> {
   const outcome = emptyOutcome();
   if (tab.active) {
     outcome.skipped.active = 1;
+    outcome.keptAwake.push(keptAwake(tab, 'active'));
     return outcome;
   }
   if (tab.discarded) {
@@ -78,6 +89,7 @@ export async function suspendTab(tabId: number): Promise<SuspendOutcome> {
     outcome.freedBytes = estimateBytes(1);
   } catch {
     outcome.skipped.failed = 1;
+    outcome.keptAwake.push(keptAwake(tab, 'failed'));
   }
   return outcome;
 }
