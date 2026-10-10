@@ -267,3 +267,11 @@ body {
     transition: none !important;
   }
 }
+
+/*
+ * Tailwind's spacing, radii and breakpoints are in rem. Keep 1rem = 16px so `w-60` is the design's
+ * 240px and `h-9` its 36px; body text stays 13px from the rule above. (Added by the library views work.)
+ */
+html {
+  font-size: 16px;
+}
