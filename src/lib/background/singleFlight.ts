@@ -8,7 +8,8 @@ export function singleFlight<T>(settleMs = 800) {
   const recent = new Map<string, Promise<T>>();
   let queue: Promise<unknown> = Promise.resolve();
 
-  return (key: string, run: () => Promise<T>): Promise<T> => {
+  /** `settle` overrides settleMs for this request (0: share only while it runs). */
+  return (key: string, run: () => Promise<T>, settle = settleMs): Promise<T> => {
     const existing = recent.get(key);
     if (existing) return existing;
 
@@ -19,7 +20,7 @@ export function singleFlight<T>(settleMs = 800) {
       if (recent.get(key) === promise) recent.delete(key);
     };
     promise.then(
-      () => setTimeout(forget, settleMs),
+      () => (settle > 0 ? setTimeout(forget, settle) : forget()),
       () => forget(),
     );
     return promise;

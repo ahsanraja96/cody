@@ -103,14 +103,16 @@ describe('saving', () => {
     expect(await fillTabTitle('missing', 'x')).toBe(false);
   });
 
-  it('after 50 named sessions, new saves go into Unsorted and nothing is blocked', async () => {
+  it('every save gets its own session; only with a plan given do saves past its cap go into Unsorted', async () => {
     for (let i = 0; i < 50; i += 1) await save([[`https://site${i}.com`]]);
     expect(await countNamedSessions()).toBe(50);
-    const overflow = await save([['https://overflow.com']]);
+    expect((await save([['https://uncapped.com']])).intoUnsorted).toBe(false);
+    expect(await countNamedSessions()).toBe(51);
+    const overflow = await save([['https://overflow.com']], { plan: 'free' });
     expect(overflow.intoUnsorted).toBe(true);
-    const again = await save([['https://overflow2.com']]);
+    const again = await save([['https://overflow2.com']], { plan: 'free' });
     expect(again.sessionId).toBe(overflow.sessionId);
-    expect(await countNamedSessions()).toBe(50);
+    expect(await countNamedSessions()).toBe(51);
     const unsorted = (await listLiveSessions()).find((s) => s.kind === 'unsorted');
     expect(unsorted?.tabCount).toBe(2);
   });
@@ -217,10 +219,10 @@ describe('trash', () => {
 });
 
 describe('import', () => {
-  it('creates one session per imported group, overflowing into Unsorted past the Free limit', async () => {
+  it('creates one session per imported group, never capped', async () => {
     const sessions = Array.from({ length: 52 }, (_, i) => ({ name: `Group ${i}`, createdAt: null, windows: [capturedWindow([`https://g${i}.com`])] }));
     const result = await importSessions(sessions, 'd1');
-    expect(result).toEqual({ sessions: 50, tabs: 52, intoUnsorted: 2 });
+    expect(result).toEqual({ sessions: 52, tabs: 52, intoUnsorted: 0 });
   });
 });
 

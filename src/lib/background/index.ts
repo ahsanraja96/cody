@@ -5,7 +5,9 @@ import { extUrl } from '../extUrl';
 import { countNamedSessions, pruneSnapshots, purgeTrash } from '../repo';
 import { getSettings } from '../settings';
 import { activeRestore, backup, getDeviceId, windowNames } from '../state';
-import type { Command } from '../messages';
+import type { Command, CommandResponse } from '../messages';
+import { setupSync, syncTick } from '../sync/engine';
+import { forgetUnfinishedFold } from './fold';
 import { createMenus, onCommand, onMenuClicked } from './menus';
 import { route } from './router';
 import { checkRecovery, promoteShutdownSnapshot, scheduleSnapshot, takeSnapshot } from './snapshots';
@@ -23,6 +25,8 @@ const ALARMS = {
   snapshot: { name: 'tabfold-snapshot', periodInMinutes: 5 },
   autoSuspend: { name: 'tabfold-auto-suspend', periodInMinutes: 1 },
   daily: { name: 'tabfold-daily', periodInMinutes: 24 * 60 },
+  /** Catches folded-tab changes made while the worker slept; cheap when nothing changed. */
+  sync: { name: 'tabfold-sync', periodInMinutes: 1 },
 } as const;
 
 const INSTALLED_AT = 'installedAt';
@@ -71,6 +75,19 @@ function ensureStartup(): Promise<void> {
   return startup;
 }
 
+/**
+ * A command from a Tabfold page. Only this extension's own pages may send them: anything else
+ * (another extension, a web page) is ignored. Returns undefined for messages that aren't ours.
+ */
+export function handleMessage(
+  message: unknown,
+  sender: { id?: string },
+): Promise<CommandResponse<unknown>> | undefined {
+  if (sender.id !== browser.runtime.id) return undefined;
+  if (!message || typeof message !== 'object' || !(message as { __tabfold?: boolean }).__tabfold) return undefined;
+  return route((message as { command: Command }).command);
+}
+
 export function setupBackground(): void {
   browser.runtime.onInstalled.addListener((details) => {
     safely('install', async () => {
@@ -100,9 +117,10 @@ export function setupBackground(): void {
     });
   });
 
-  browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (!message || typeof message !== 'object' || !(message as { __tabfold?: boolean }).__tabfold) return false;
-    route((message as { command: Command }).command).then(sendResponse);
+  browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    const response = handleMessage(message, sender);
+    if (!response) return false;
+    response.then(sendResponse);
     return true;
   });
 
@@ -120,6 +138,7 @@ export function setupBackground(): void {
     }
     else if (alarm.name === ALARMS.autoSuspend.name) safely('auto-suspend', () => autoSuspendTick());
     else if (alarm.name === ALARMS.daily.name) safely('daily', dailyMaintenance);
+    else if (alarm.name === ALARMS.sync.name) safely('sync', syncTick);
   });
 
   // Snapshots follow tab changes, debounced. Events fired while a window is closing are ignored so a
@@ -145,6 +164,9 @@ export function setupBackground(): void {
 
   safely('startup', ensureStartup);
   safely('alarms', ensureAlarms);
-  // A restore runs inside one worker life; a fresh worker means any recorded one is over.
+  // A restore or a fold runs inside one worker life; a fresh worker means any recorded one is over.
   safely('restore state', () => activeRestore.set(null));
+  safely('fold state', forgetUnfinishedFold);
+  // Chrome sync of folded tabs: listeners now, and a first run shortly after start.
+  setupSync();
 }

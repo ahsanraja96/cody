@@ -98,6 +98,18 @@ describe('singleFlight', () => {
     expect(order).toEqual(['start a', 'end a', 'start b', 'end b']);
   });
 
+  it('with no settle time, shares a run only while it runs', async () => {
+    const once = singleFlight<number>(500);
+    let n = 0;
+    const run = async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return ++n;
+    };
+    const [a, b] = await Promise.all([once('fold', run, 0), once('fold', run, 0)]);
+    expect([a, b]).toEqual([1, 1]);
+    expect(await once('fold', run, 0)).toBe(2);
+  });
+
   it('forgets a failed run so a retry works', async () => {
     const once = singleFlight<number>(500);
     await expect(once('k', async () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');

@@ -6,6 +6,7 @@ import { cleanKeywords } from './keywords';
 import { CURRENT_PLAN, sessionLimitReached, tagsAllowed, UNSORTED_NAME, type Plan } from './limits';
 import { newId } from './format';
 import { snapshotMirror } from './state';
+import { clearSyncedData } from './sync/clear';
 import { dedupeKey, displayHost } from './urls';
 import type {
   CapturedWindow,
@@ -112,6 +113,11 @@ export interface SaveOptions {
    * picked for a skipped tab are added to the copy already saved.
    */
   dedupe: boolean;
+  /**
+   * Only with a plan given are named sessions capped (past the cap, saves go into Unsorted).
+   * Tabfold has no plans now and sessions are not shown as such, so every fold, import and save
+   * gets its own session.
+   */
   plan?: Plan;
 }
 
@@ -176,7 +182,8 @@ export async function findSavedCopies(
   return found;
 }
 
-async function recomputeSession(sessionId: string, database: TabfoldDB, now: number): Promise<SessionRecord | null> {
+/** Refresh a session's counts and favicon strip. `touch` moves it up the list (an edit by the user). */
+async function recomputeSession(sessionId: string, database: TabfoldDB, now: number, touch = true): Promise<SessionRecord | null> {
   const session = await database.sessions.get(sessionId);
   if (!session) return null;
   const [windows, tabs] = await Promise.all([
@@ -189,7 +196,7 @@ async function recomputeSession(sessionId: string, database: TabfoldDB, now: num
   const next: SessionRecord = {
     ...session,
     ...aggregates(windows.filter((w) => used.has(w.id)), tabs),
-    updatedAt: now,
+    updatedAt: touch ? now : session.updatedAt,
     version: session.version + 1,
   };
   await database.sessions.put(next);
@@ -291,7 +298,7 @@ export async function saveCapture(
     let intoUnsorted = false;
     if (!target) {
       const named = (await liveRange(database.sessions).toArray()).filter((s) => s.kind !== 'unsorted').length;
-      if (sessionLimitReached(named, options.plan ?? CURRENT_PLAN)) {
+      if (options.plan && sessionLimitReached(named, options.plan)) {
         target = await findOrCreateUnsorted(database, meta.deviceId, meta.now);
         intoUnsorted = true;
       }
@@ -387,10 +394,7 @@ export async function addDrafts(drafts: SessionDraft[], database: TabfoldDB = db
   });
 }
 
-/**
- * Import whole sessions. Each becomes its own session while the plan allows; past the Free limit
- * the rest land in Unsorted, so an import never fails for being too big.
- */
+/** Import whole sessions: each becomes its own session. */
 export async function importSessions(
   sessions: Array<{ name: string; createdAt: number | null; windows: CapturedWindow[] }>,
   deviceId: string,
@@ -649,6 +653,166 @@ export async function moveTab(
 }
 
 // ---------------------------------------------------------------------------------------------
+// Chrome sync
+
+/** Tabs folded on the person's other computers arrive in one fold with this name. */
+export const SYNC_INBOX_NAME = 'From your other computers';
+
+/** The fold that holds tabs from other computers (it isn't a fold of windows from this one). */
+export function isSyncInbox(session: Pick<SessionRecord, 'deviceId'>): boolean {
+  return session.deviceId.startsWith('sync:');
+}
+
+/** Every tab in a live fold. */
+export async function listFoldedTabs(database: TabfoldDB = db): Promise<TabRecord[]> {
+  const live = new Set((await listLiveSessions(database)).map((s) => s.id));
+  if (live.size === 0) return [];
+  return database.tabs.where('sessionId').anyOf([...live]).toArray();
+}
+
+/** A tab as it comes from Chrome sync. */
+export interface SyncedTab {
+  id: string;
+  url: string;
+  title: string;
+  savedAt: number;
+  keywords: string[];
+}
+
+export interface SyncChanges {
+  /** Removed on another computer. */
+  remove: string[];
+  update: Array<{ id: string; title?: string; keywords?: string[] }>;
+  /** Replace this computer's copy of an address with the newer one from another computer. */
+  adopt: Array<{ localId: string; tab: SyncedTab }>;
+  /** New from other computers: added to the "From your other computers" fold. */
+  insert: SyncedTab[];
+}
+
+async function findOrCreateInbox(
+  database: TabfoldDB,
+  inboxId: string | null,
+  deviceId: string,
+  now: number,
+): Promise<{ session: SessionRecord; windowId: string; nextOrder: number }> {
+  let session = inboxId ? await database.sessions.get(inboxId) : undefined;
+  if (!session || session.deletedAt) {
+    session = (await liveRange(database.sessions).toArray()).find((s) => isSyncInbox(s));
+  }
+  if (!session) {
+    session = {
+      id: newId(),
+      name: SYNC_INBOX_NAME,
+      tags: [],
+      pinned: 0,
+      color: null,
+      kind: 'session',
+      source: 'import',
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: 0,
+      deviceId: `sync:${deviceId}`,
+      version: 1,
+      tabCount: 0,
+      windowCount: 0,
+      preview: [],
+    };
+    await database.sessions.add(session);
+  }
+  const window = (await database.windows.where('sessionId').equals(session.id).sortBy('order'))[0];
+  if (window) {
+    const siblings = await database.tabs.where('windowId').equals(window.id).toArray();
+    return { session, windowId: window.id, nextOrder: siblings.reduce((max, t) => Math.max(max, t.order + 1), 0) };
+  }
+  const windowId = newId();
+  await database.windows.add({ id: windowId, sessionId: session.id, name: '', order: 0, wasFocused: false, bounds: null, state: null });
+  return { session, windowId, nextOrder: 0 };
+}
+
+/**
+ * Apply what Chrome sync brought, in one transaction. Folds that lose their last tab go to Trash,
+ * as with any removal. Returns the id of the "From your other computers" fold when tabs went in.
+ */
+export async function applySyncChanges(
+  changes: SyncChanges,
+  options: { inboxId: string | null; deviceId: string; now?: number },
+  database: TabfoldDB = db,
+): Promise<{ inboxId: string | null }> {
+  const now = options.now ?? Date.now();
+  return database.transaction('rw', [database.sessions, database.windows, database.tabs, database.meta], async () => {
+    const touched = new Set<string>();
+    let inboxId = options.inboxId;
+    let changed = false;
+
+    if (changes.remove.length) {
+      const rows = (await database.tabs.bulkGet(changes.remove)).filter((t): t is TabRecord => !!t);
+      await database.tabs.bulkDelete(rows.map((t) => t.id));
+      for (const row of rows) touched.add(row.sessionId);
+      changed ||= rows.length > 0;
+    }
+    for (const update of changes.update) {
+      const row = await database.tabs.get(update.id);
+      if (!row) continue;
+      await database.tabs.put({
+        ...row,
+        ...(update.title !== undefined ? { title: update.title } : {}),
+        ...(update.keywords ? { keywords: update.keywords } : {}),
+      });
+      touched.add(row.sessionId);
+      changed = true;
+    }
+    for (const { localId, tab } of changes.adopt) {
+      const row = await database.tabs.get(localId);
+      if (!row) continue;
+      const clash = await database.tabs.get(tab.id);
+      if (clash) touched.add(clash.sessionId);
+      await database.tabs.delete(localId);
+      await database.tabs.put({ ...row, id: tab.id, url: tab.url, title: tab.title, savedAt: tab.savedAt, keywords: tab.keywords });
+      touched.add(row.sessionId);
+      changed = true;
+    }
+    if (changes.insert.length) {
+      const inbox = await findOrCreateInbox(database, inboxId, options.deviceId, now);
+      inboxId = inbox.session.id;
+      touched.add(inboxId);
+      let order = inbox.nextOrder;
+      for (const tab of changes.insert) {
+        // A copy still sitting in a fold in Trash moves here.
+        const clash = await database.tabs.get(tab.id);
+        if (clash) touched.add(clash.sessionId);
+        await database.tabs.put({
+          id: tab.id,
+          sessionId: inbox.session.id,
+          windowId: inbox.windowId,
+          url: tab.url,
+          title: tab.title,
+          favIconUrl: '',
+          pinned: false,
+          groupName: null,
+          groupColor: null,
+          groupCollapsed: false,
+          order: order++,
+          savedAt: tab.savedAt,
+          keywords: tab.keywords,
+          urlTruncated: false,
+        });
+      }
+      changed = true;
+    }
+
+    for (const sessionId of touched) {
+      // Changes from another computer don't move a fold up the list; new tabs arriving do.
+      const updated = await recomputeSession(sessionId, database, now, sessionId === inboxId && changes.insert.length > 0);
+      if (updated && updated.tabCount === 0 && updated.kind !== 'unsorted' && !updated.deletedAt) {
+        await database.sessions.put({ ...updated, deletedAt: now });
+      }
+    }
+    if (changed) await bumpSearchVersion(database);
+    return { inboxId };
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
 // Snapshots
 
 export interface SnapshotPolicy {
@@ -729,4 +893,6 @@ export async function clearAllData(database: TabfoldDB = db): Promise<void> {
   });
   // The user asked for this: nothing to recover from, and no copy of the last snapshot kept.
   await Promise.all([resetDataGuard(database), snapshotMirror.set(null)]).catch(() => undefined);
+  // Gone from Chrome sync too ("Removes all folded tabs here and from Chrome sync").
+  await clearSyncedData();
 }
