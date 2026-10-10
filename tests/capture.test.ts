@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregates, buildDraft, captureHash, planCapture, wouldCloseEverything, type CaptureOptions } from '@/lib/capture';
+import { aggregates, buildDraft, captureHash, isPlaceholderTitle, planCapture, wouldCloseEverything, type CaptureOptions } from '@/lib/capture';
 import { capturedWindow, OWN, tab, win } from './fixtures';
 
 const base: CaptureOptions = {
@@ -94,6 +94,26 @@ describe('planCapture', () => {
     expect(plan.windows[0]!.bounds).toEqual({ left: 10, top: 20, width: 900, height: 700 });
   });
 
+  it('treats the address Chrome shows as a title while loading as no title', () => {
+    const shown = tab('http://127.0.0.1:8080/slow', { title: '127.0.0.1:8080/slow' });
+    const www = tab('https://www.example.com/a/b', { title: 'www.example.com/a/b' });
+    const real = tab('https://example.com/', { title: 'Example Domain' });
+    const plan = planCapture([win(1, [shown, www, real])], new Map(), base);
+    expect(plan.windows[0]!.tabs.map((t) => t.title)).toEqual(['127.0.0.1', 'example.com', 'Example Domain']);
+    expect(isPlaceholderTitle('', 'https://a.com')).toBe(true);
+    expect(isPlaceholderTitle('a.com/x', 'https://a.com/x')).toBe(true);
+    expect(isPlaceholderTitle('A page', 'https://a.com/x')).toBe(false);
+  });
+
+  it('saves an Incognito window only for scope "window" or "tabs" with includeIncognito', () => {
+    const secret = tab('https://secret.com', { incognito: true });
+    const windows = [win(1, [tab('https://ok.com')]), win(2, [secret], { incognito: true })];
+    expect(planCapture(windows, new Map(), { ...base, scope: 'window', windowId: 2 }).windows).toHaveLength(0);
+    expect(planCapture(windows, new Map(), { ...base, scope: 'window', windowId: 2, includeIncognito: true }).windows[0]!.tabs[0]!.url).toBe('https://secret.com');
+    expect(planCapture(windows, new Map(), { ...base, scope: 'tabs', tabIds: [secret.id!], includeIncognito: true }).closeTabIds).toEqual([secret.id]);
+    expect(planCapture(windows, new Map(), { ...base, includeIncognito: true }).windows).toHaveLength(1);
+  });
+
   it('unknown group colours become grey', () => {
     const plan = planCapture([win(1, [tab('https://a.com', { groupId: 3 })])], new Map([[3, { id: 3, color: 'mauve', collapsed: false }]]), base);
     expect(plan.windows[0]!.tabs[0]!.groupColor).toBe('grey');
@@ -107,6 +127,15 @@ describe('wouldCloseEverything', () => {
     const windows = [win(1, [a]), win(2, [b])];
     expect(wouldCloseEverything(windows, [a.id!, b.id!])).toBe(true);
     expect(wouldCloseEverything(windows, [a.id!])).toBe(false);
+  });
+
+  it('ignores Incognito windows unless they are the only ones open', () => {
+    const a = tab('https://a.com');
+    const p = tab('https://p.com', { incognito: true });
+    const q = tab('https://q.com', { incognito: true });
+    expect(wouldCloseEverything([win(1, [a]), win(2, [p], { incognito: true })], [a.id!])).toBe(true);
+    expect(wouldCloseEverything([win(2, [p, q], { incognito: true })], [p.id!])).toBe(false);
+    expect(wouldCloseEverything([win(2, [p, q], { incognito: true })], [p.id!, q.id!])).toBe(true);
   });
 });
 

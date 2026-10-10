@@ -34,12 +34,22 @@ function glyph(x, y) {
   return line(7, 17, 5.5) || line(9.5, 14.5, 2.5);
 }
 
+/**
+ * Chrome's guidelines: the 128px icon is 96x96 artwork inside 16px of transparent padding (it is
+ * shown in the Web Store and on the extensions page). The small toolbar sizes fill their canvas.
+ */
+function paddingFor(size) {
+  return size === 128 ? 16 : 0;
+}
+
 function render(size) {
   const pixels = Buffer.alloc(size * size * 4);
   const ss = 4;
-  const radius = size * 0.22;
-  const glyphScale = 0.62; // glyph box relative to icon
-  const offset = (size - size * glyphScale) / 2;
+  const pad = paddingFor(size);
+  const art = size - pad * 2;
+  const radius = art * 0.22;
+  const glyphScale = 0.62; // glyph box relative to the artwork
+  const offset = pad + (art - art * glyphScale) / 2;
   for (let py = 0; py < size; py += 1) {
     for (let px = 0; px < size; px += 1) {
       let bg = 0;
@@ -48,10 +58,10 @@ function render(size) {
         for (let sx = 0; sx < ss; sx += 1) {
           const x = px + (sx + 0.5) / ss;
           const y = py + (sy + 0.5) / ss;
-          if (!roundedRectContains(x, y, 0, 0, size, size, radius)) continue;
+          if (!roundedRectContains(x, y, pad, pad, art, art, radius)) continue;
           bg += 1;
-          const gx = ((x - offset) / (size * glyphScale)) * 24;
-          const gy = ((y - offset) / (size * glyphScale)) * 24 + 0.6;
+          const gx = ((x - offset) / (art * glyphScale)) * 24;
+          const gy = ((y - offset) / (art * glyphScale)) * 24 + 0.6;
           if (glyph(gx, gy)) fg += 1;
         }
       }

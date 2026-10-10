@@ -1,5 +1,6 @@
 import { browser, type Browser } from 'wxt/browser';
 import type { GroupLike } from '../capture';
+import { groupsUnavailable } from '../state';
 
 export function ownOrigin(): string {
   return browser.runtime.getURL('/');
@@ -10,14 +11,36 @@ export async function getNormalWindows(): Promise<Browser.windows.Window[]> {
   return browser.windows.getAll({ populate: true, windowTypes: ['normal'] });
 }
 
-export async function getGroups(): Promise<Map<number, GroupLike>> {
+/** Last known value of the groupsUnavailable flag in this worker's life, so it is written only when it changes. */
+let groupsBlocked: boolean | undefined;
+
+async function noteGroupsAvailable(available: boolean): Promise<void> {
   try {
-    const groups = await browser.tabGroups.query({});
-    return new Map(groups.map((g) => [g.id, { id: g.id, title: g.title, color: g.color, collapsed: g.collapsed }]));
+    groupsBlocked ??= await groupsUnavailable.get();
+    if (groupsBlocked === !available) return;
+    groupsBlocked = !available;
+    await groupsUnavailable.set(!available);
   } catch {
-    // Enterprise policy or older browsers without tab groups.
+    // The flag only drives a notice.
+  }
+}
+
+export async function getGroups(): Promise<Map<number, GroupLike>> {
+  let groups: Browser.tabGroups.TabGroup[];
+  try {
+    groups = await browser.tabGroups.query({});
+  } catch {
+    // Enterprise policy or older browsers without tab groups: tabs are saved without their groups.
+    await noteGroupsAvailable(false);
     return new Map();
   }
+  await noteGroupsAvailable(true);
+  return new Map(groups.map((g) => [g.id, { id: g.id, title: g.title, color: g.color, collapsed: g.collapsed }]));
+}
+
+/** For tests: forget the cached flag. */
+export function resetGroupsFlagCache(): void {
+  groupsBlocked = undefined;
 }
 
 /** The window the user is working in (popups and devtools windows don't count). */
