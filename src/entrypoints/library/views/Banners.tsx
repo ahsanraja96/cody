@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
 import { Download, HardDriveDownload } from 'lucide-react';
-import { backup, limitBanner } from '@/lib/state';
+import { backup, BACKUP_SNOOZED_UNTIL, limitBanner } from '@/lib/state';
 import { Button } from '@/ui/components/Button';
 import { showProInfo } from '@/ui/components/ProDialog';
 import { openExportDialog } from '../flows';
@@ -9,7 +9,7 @@ import { openExportDialog } from '../flows';
 const DAY = 24 * 60 * 60 * 1000;
 const MONTH = 30 * DAY;
 /** "Remind me next month" hides the reminder until this time (the worker's daily check should honour it too). */
-export const BACKUP_SNOOZE_KEY = 'backupReminderSnoozedUntil';
+export const BACKUP_SNOOZE_KEY = BACKUP_SNOOZED_UNTIL;
 const INSTALLED_AT = 'installedAt';
 
 /** Monthly backup reminder (Library-List): days since the last HTML export, Export now, or snooze a month. */

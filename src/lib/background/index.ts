@@ -43,6 +43,7 @@ async function dailyMaintenance(): Promise<void> {
   if (!settings.backupReminder) return;
   const stored = await browser.storage.local.get(INSTALLED_AT);
   const since = (await backup.lastAt()) ?? (stored[INSTALLED_AT] as number | undefined) ?? Date.now();
+  if (Date.now() < (await backup.snoozedUntil())) return;
   if (Date.now() - since > BACKUP_INTERVAL_MS && (await countNamedSessions()) > 0) await backup.setDue(true);
 }
 

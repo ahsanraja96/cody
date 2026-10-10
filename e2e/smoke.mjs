@@ -236,7 +236,7 @@ await sleep(300);
 await library.screenshot(path.join(SHOTS, 'library-dark.png'));
 await library.colorScheme('light');
 await library.goto(ext('library.html#/search/payments'));
-const librarySearch = await library.waitFor(() => [...document.querySelectorAll('[role=listitem]')].map((e) => e.innerText).join('\n'), undefined, 8000);
+const librarySearch = await library.waitFor(() => [...document.querySelectorAll('[role=option], [role=listitem]')].map((e) => e.innerText).join('\n'), undefined, 8000);
 check('library search finds the tab by keyword', /Stripe Documentation/.test(librarySearch ?? ''));
 await library.screenshot(path.join(SHOTS, 'library-search.png'));
 await library.viewport(1280, 1900);

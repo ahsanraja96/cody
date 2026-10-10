@@ -2,6 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Clock, Info, Trash2, Undo2 } from 'lucide-react';
 import { plural } from '@/lib/format';
 import { deleteSessionsForever, listTrash, restoreFromTrash, TRASH_RETENTION_MS } from '@/lib/repo';
+import { emptyTrash } from './actions';
 import type { SessionRecord } from '@/lib/types';
 import { Button } from '@/ui/components/Button';
 import { confirmAction } from '@/ui/components/Dialog';
@@ -24,17 +25,8 @@ export function TrashView({ selectedId, onSelect }: { selectedId?: string; onSel
   const now = Date.now();
   const tabs = (trash ?? []).reduce((n, s) => n + s.tabCount, 0);
 
-  const emptyTrash = async () => {
-    if (!trash?.length) return;
-    const ok = await confirmAction({
-      title: 'Empty Trash?',
-      body: `${plural(trash.length, 'session')} and ${plural(tabs, 'tab')} will be deleted for good.`,
-      confirmLabel: 'Empty Trash',
-      danger: true,
-    });
-    if (!ok) return;
-    await deleteSessionsForever(trash.map((s) => s.id));
-    onSelect(undefined);
+  const emptyAll = async () => {
+    if (await emptyTrash()) onSelect(undefined);
   };
 
   const deleteOne = async (session: SessionRecord) => {
@@ -73,7 +65,7 @@ export function TrashView({ selectedId, onSelect }: { selectedId?: string; onSel
           </p>
         </div>
         {trash && trash.length > 0 && (
-          <Button variant="danger-soft" icon={<Trash2 size={16} aria-hidden />} onClick={() => void emptyTrash()}>
+          <Button variant="danger-soft" icon={<Trash2 size={16} aria-hidden />} onClick={() => void emptyAll()}>
             Empty Trash
           </Button>
         )}

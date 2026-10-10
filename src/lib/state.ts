@@ -95,6 +95,7 @@ const RECOVERY = 'recoveryOffer';
 const DEVICE_ID = 'deviceId';
 const LAST_BACKUP = 'lastBackupAt';
 const BACKUP_DUE = 'backupReminderDue';
+export const BACKUP_SNOOZED_UNTIL = 'backupReminderSnoozedUntil';
 const LIMIT_BANNER_DISMISSED = 'limitBannerDismissedAt';
 const ACTIVE_RESTORE = 'activeRestore';
 const UPDATE_READY = 'updateReady';
@@ -163,6 +164,8 @@ export const backup = {
   isDue: async () => (await getKey<boolean>('local', BACKUP_DUE)) === true,
   setDue: (due: boolean) => browser.storage.local.set({ [BACKUP_DUE]: due }),
   watchDue: (callback: (value: boolean | undefined) => void) => watchKey('local', BACKUP_DUE, callback),
+  /** "Remind me next month" pushes the reminder back until this time. */
+  snoozedUntil: async () => (await getKey<number>('local', BACKUP_SNOOZED_UNTIL)) ?? 0,
 };
 
 export const limitBanner = {

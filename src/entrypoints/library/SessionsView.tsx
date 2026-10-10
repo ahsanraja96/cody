@@ -11,9 +11,8 @@ import { tagColor } from '@/ui/components/Chips';
 import { Menu } from '@/ui/components/Menu';
 import { showProInfo } from '@/ui/components/ProDialog';
 import { useOpenWindows } from '@/ui/hooks';
-import { ImportPanel } from '@/ui/ImportPanel';
 import { duplicate, restoreSession, togglePin, trashWithUndo } from './actions';
-import { openExportDialog, openRestoreDialog } from './flows';
+import { openExportDialog, openImportDialog, openRestoreDialog } from './flows';
 import type { Route } from './router';
 import { SessionCard, SessionListRow, sessionMenuItems } from './SessionCard';
 import { TagsDialog } from './TagsDialog';
@@ -473,7 +472,6 @@ export function SessionsView({
 
 /** First run: nothing saved yet (States board). */
 function EmptyLibrary({ onSaveAll }: { onSaveAll: () => void }) {
-  const [importing, setImporting] = useState(false);
   const { windows } = useOpenWindows();
   const openTabs = windows.flatMap((w) => w.tabs).filter((t) => /^(https?|file):/.test(t.url || t.pendingUrl || '')).length;
   return (
@@ -495,15 +493,10 @@ function EmptyLibrary({ onSaveAll }: { onSaveAll: () => void }) {
       </Button>
       <p className="mt-1 text-small text-text-3">
         Coming from OneTab or Session Buddy?{' '}
-        <button type="button" className="font-semibold text-accent-text hover:underline" onClick={() => setImporting(true)}>
+        <button type="button" className="font-semibold text-accent-text hover:underline" onClick={() => openImportDialog()}>
           Import your tabs
         </button>
       </p>
-      {importing && (
-        <div className="mt-4 w-full max-w-[560px] text-left">
-          <ImportPanel onDone={() => setImporting(false)} />
-        </div>
-      )}
     </div>
   );
 }
