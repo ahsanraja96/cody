@@ -1,9 +1,10 @@
 import { browser, type Browser } from 'wxt/browser';
 import { db } from '../db';
-import type { Command, RestoreFailure, RestoreMode, RestoreOutcome, ScreenArea } from '../messages';
+import { refreshDataGuard } from '../dataGuard';
+import type { Command, RestoreFailure, RestoreMode, RestoreOutcome, ScreenArea, WorkerEvent } from '../messages';
 import { getSessionGraph, saveCapture, trashSessions } from '../repo';
 import { getSettings } from '../settings';
-import { getDeviceId, recoveryOffer } from '../state';
+import { activeRestore, getDeviceId, recoveryOffer, type ActiveRestore } from '../state';
 import { classifyUrl } from '../urls';
 import { formatDateTime } from '../format';
 import {
@@ -17,7 +18,7 @@ import {
 } from './browserState';
 import {
   chunk,
-  findOpenCopy,
+  describeOpenCopy,
   fitBounds,
   fromCaptured,
   groupKey,
@@ -59,6 +60,10 @@ interface RestoreOptions {
   restoreId?: string;
   /** Per window: reopen into this existing browser window instead of a new one (used by undo). */
   targetWindowIds?: Array<number | undefined>;
+  /** Open new windows without focusing them, and focus the first one at the end. */
+  background?: boolean;
+  /** Show this restore to pages (activeRestore and restore-progress events). Undo doesn't. */
+  progress?: { sessionId: string | null; snapshotId?: number; name: string };
 }
 
 interface RestoreResult {
@@ -81,21 +86,57 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
     fileAccess = false;
   }
 
+  // Into the current window or one new window, everything lands in a single window.
+  const windowCount = options.mode === 'original' ? windows.length : 1;
+  const startedAt = Date.now();
+  const report = async (windowIndex: number) => {
+    if (!options.progress) return;
+    const index = Math.min(options.mode === 'original' ? windowIndex : 0, Math.max(0, windowCount - 1));
+    const state: ActiveRestore = {
+      restoreId,
+      sessionId: options.progress.sessionId,
+      ...(options.progress.snapshotId !== undefined ? { snapshotId: options.progress.snapshotId } : {}),
+      name: options.progress.name,
+      done,
+      total,
+      windowIndex: index,
+      windowCount,
+      startedAt,
+    };
+    await activeRestore.set(state).catch(() => undefined);
+    const event: WorkerEvent = {
+      type: 'restore-progress',
+      restoreId,
+      done,
+      total,
+      windowIndex: index,
+      windowCount,
+      sessionId: options.progress.sessionId,
+    };
+    broadcast(event);
+  };
+  await report(0);
+
   let sharedWindowId: number | undefined;
   if (options.mode === 'current') {
     const current = options.currentWindowId ?? (await currentNormalWindowId());
     if (await windowExists(current)) sharedWindowId = current;
   }
+  let firstCreated: number | undefined;
 
   for (const [windowIndex, plan] of windows.entries()) {
     if (cancelled.has(restoreId)) break;
     const tabs = plan.tabs.filter((tab) => {
-      const blocked = refuseToOpen(tab.url, origin) || (classifyUrl(tab.url) === 'file' && !fileAccess);
-      if (blocked) {
-        failed.push({ url: tab.url, title: tab.title });
+      const reason: RestoreFailure['reason'] = refuseToOpen(tab.url, origin)
+        ? 'blocked'
+        : classifyUrl(tab.url) === 'file' && !fileAccess
+          ? 'file-access'
+          : undefined;
+      if (reason) {
+        failed.push({ url: tab.url, title: tab.title, reason });
         done += 1;
       }
-      return !blocked;
+      return !reason;
     });
     if (tabs.length === 0) continue;
 
@@ -103,22 +144,24 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
     let placeholderTabId: number | undefined;
     let activateFirst = false;
     const target = options.targetWindowIds?.[windowIndex];
+    // windowExists only accepts normal, non-Incognito windows: restores never land in Incognito.
     if (await windowExists(target)) {
       windowId = target;
     } else if ((options.mode === 'current' || options.mode === 'new-window') && sharedWindowId !== undefined) {
       windowId = sharedWindowId;
     } else {
       const bounds = fitBounds(plan.bounds, options.screen);
-      const focused = plan.focused || windowIndex === 0;
+      const focused = !options.background && (plan.focused || windowIndex === 0);
       let created: Browser.windows.Window | undefined;
       try {
-        created = await browser.windows.create({ focused, ...(bounds ?? {}) });
+        created = await browser.windows.create({ focused, incognito: false, ...(bounds ?? {}) });
       } catch {
         // Chrome refuses bounds it thinks are off-screen (its idea of the screens can differ from
         // the page's). Open at the default size instead of failing the restore.
-        created = await browser.windows.create({ focused }).catch(() => undefined);
+        created = await browser.windows.create({ focused, incognito: false }).catch(() => undefined);
       }
       windowId = created?.id;
+      firstCreated ??= windowId;
       placeholderTabId = created?.tabs?.[0]?.id;
       activateFirst = true;
       if (windowId !== undefined && (plan.state === 'maximized' || plan.state === 'fullscreen')) {
@@ -127,7 +170,8 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
       if (options.mode === 'new-window') sharedWindowId = windowId;
     }
     if (windowId === undefined) {
-      for (const tab of tabs) failed.push({ url: tab.url, title: tab.title });
+      for (const tab of tabs) failed.push({ url: tab.url, title: tab.title, reason: 'error' });
+      done += tabs.length;
       continue;
     }
 
@@ -144,7 +188,7 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
             if (id !== undefined && options.lazy && !active) id = await discardQuietly(id);
             return { tab, id };
           } catch {
-            failed.push({ url: tab.url, title: tab.title });
+            failed.push({ url: tab.url, title: tab.title, reason: 'error' });
             return { tab, id: undefined };
           }
         }),
@@ -161,7 +205,7 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
           groups.set(key, entry);
         }
       }
-      broadcast({ type: 'restore-progress', restoreId, done, total });
+      await report(windowIndex);
     }
 
     for (const { tab, ids } of groups.values()) {
@@ -179,8 +223,39 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
     if (placeholderTabId !== undefined) await browser.tabs.remove(placeholderTabId).catch(() => undefined);
   }
 
+  if (options.background && firstCreated !== undefined) {
+    await browser.windows.update(firstCreated, { focused: true }).catch(() => undefined);
+  }
   const wasCancelled = cancelled.delete(restoreId);
   return { opened, failed, cancelled: wasCancelled };
+}
+
+function emptyOutcome(restoreId: string): RestoreOutcome {
+  return { restoreId, opened: 0, failed: [], cancelled: false, needsFileAccess: 0, trashed: false };
+}
+
+function needsFileAccess(failed: RestoreFailure[]): number {
+  return failed.filter((f) => f.reason === 'file-access').length;
+}
+
+/**
+ * Run a restore that pages can follow: activeRestore is kept up to date while it runs and cleared
+ * when it ends (finished, cancelled or failed), then restore-done carries the outcome.
+ */
+async function tracked(restoreId: string, run: () => Promise<RestoreOutcome>): Promise<RestoreOutcome> {
+  let outcome: RestoreOutcome | undefined;
+  try {
+    outcome = await run();
+    return outcome;
+  } finally {
+    const current = await activeRestore.get().catch(() => undefined);
+    if (current?.restoreId === restoreId) await activeRestore.set(null).catch(() => undefined);
+    cancelled.delete(restoreId);
+    if (outcome) {
+      const event: WorkerEvent = { type: 'restore-done', restoreId, outcome };
+      broadcast(event);
+    }
+  }
 }
 
 type RestoreCommand = Extract<Command, { type: 'restore' }>;
@@ -188,37 +263,40 @@ type RestoreCommand = Extract<Command, { type: 'restore' }>;
 export async function handleRestore(command: RestoreCommand): Promise<RestoreOutcome> {
   const restoreId = crypto.randomUUID();
   const graph = await getSessionGraph(command.sessionId);
-  if (!graph) return { restoreId, opened: 0, failed: [], cancelled: false, needsFileAccess: 0, trashed: false };
+  if (!graph) return emptyOutcome(restoreId);
   const windows = command.windowRecordId ? graph.windows.filter((w) => w.id === command.windowRecordId) : graph.windows;
 
   if (!command.force && command.mode === 'original') {
     const urls = windows.flatMap((w) => w.tabs.map((t) => t.url));
-    const openCopy = findOpenCopy(urls, await getNormalWindows());
-    if (openCopy !== undefined) {
-      return { restoreId, opened: 0, failed: [], cancelled: false, alreadyOpenWindowId: openCopy, needsFileAccess: 0, trashed: false };
+    // An Incognito copy doesn't count: restores and "Switch to it" only use normal windows.
+    const copy = describeOpenCopy(urls, (await getNormalWindows()).filter((w) => !w.incognito));
+    if (copy) return { ...emptyOutcome(restoreId), alreadyOpenWindowId: copy.windowIds[0], alreadyOpen: copy };
+  }
+
+  return tracked(restoreId, async () => {
+    await takeSnapshot('before-restore').catch(() => undefined);
+    const settings = await getSettings();
+    const result = await restoreWindows(
+      windows.map((w) => ({ name: w.name, bounds: w.bounds, state: w.state, focused: w.wasFocused, tabs: w.tabs })),
+      {
+        mode: command.mode,
+        lazy: settings.lazyRestore,
+        currentWindowId: command.currentWindowId,
+        screen: command.screen,
+        restoreId,
+        background: command.background,
+        progress: { sessionId: graph.session.id, name: graph.session.name },
+      },
+    );
+
+    let trashed = false;
+    const wholeSession = !command.windowRecordId;
+    if (wholeSession && settings.afterRestore === 'trash' && !result.cancelled && result.failed.length === 0) {
+      await trashSessions([graph.session.id]);
+      trashed = true;
     }
-  }
-
-  await takeSnapshot('before-restore').catch(() => undefined);
-  const settings = await getSettings();
-  const result = await restoreWindows(
-    windows.map((w) => ({ name: w.name, bounds: w.bounds, state: w.state, focused: w.wasFocused, tabs: w.tabs })),
-    {
-      mode: command.mode,
-      lazy: settings.lazyRestore,
-      currentWindowId: command.currentWindowId,
-      screen: command.screen,
-      restoreId,
-    },
-  );
-
-  let trashed = false;
-  const wholeSession = !command.windowRecordId;
-  if (wholeSession && settings.afterRestore === 'trash' && !result.cancelled && result.failed.length === 0) {
-    await trashSessions([graph.session.id]);
-    trashed = true;
-  }
-  return { restoreId, ...result, needsFileAccess: result.failed.filter((f) => f.reason === 'file-access').length, trashed };
+    return { restoreId, ...result, needsFileAccess: needsFileAccess(result.failed), trashed };
+  });
 }
 
 type SnapshotRestoreCommand = Extract<Command, { type: 'restore-snapshot' }>;
@@ -226,21 +304,24 @@ type SnapshotRestoreCommand = Extract<Command, { type: 'restore-snapshot' }>;
 export async function handleRestoreSnapshot(command: SnapshotRestoreCommand): Promise<RestoreOutcome> {
   const restoreId = crypto.randomUUID();
   const snapshot = await db.snapshots.get(command.snapshotId);
-  if (!snapshot) return { restoreId, opened: 0, failed: [], cancelled: false, needsFileAccess: 0, trashed: false };
-  const settings = await getSettings();
-  const result = await restoreWindows(fromCaptured(snapshot.windows), {
-    mode: command.mode,
-    lazy: settings.lazyRestore,
-    currentWindowId: command.currentWindowId,
-    screen: command.screen,
-    restoreId,
+  if (!snapshot) return emptyOutcome(restoreId);
+  return tracked(restoreId, async () => {
+    const settings = await getSettings();
+    const result = await restoreWindows(fromCaptured(snapshot.windows), {
+      mode: command.mode,
+      lazy: settings.lazyRestore,
+      currentWindowId: command.currentWindowId,
+      screen: command.screen,
+      restoreId,
+      progress: { sessionId: null, snapshotId: command.snapshotId, name: `Snapshot · ${formatDateTime(snapshot.createdAt)}` },
+    });
+    const offer = await recoveryOffer.get();
+    if (offer?.snapshotId === command.snapshotId) {
+      await recoveryOffer.set(null);
+      await setAttentionBadge(false);
+    }
+    return { restoreId, ...result, needsFileAccess: needsFileAccess(result.failed), trashed: false };
   });
-  const offer = await recoveryOffer.get();
-  if (offer?.snapshotId === command.snapshotId) {
-    await recoveryOffer.set(null);
-    await setAttentionBadge(false);
-  }
-  return { restoreId, ...result, needsFileAccess: result.failed.filter((f) => f.reason === 'file-access').length, trashed: false };
 }
 
 export async function handleSnapshotToSession(snapshotId: number): Promise<{ sessionId: string | null }> {
@@ -256,7 +337,8 @@ export async function handleSnapshotToSession(snapshotId: number): Promise<{ ses
     },
     { dedupe: false },
   );
-  return { sessionId: result.sessionId };
+  await refreshDataGuard().catch(() => undefined);
+  return { sessionId: result.savedTabIds.length ? result.sessionId : null };
 }
 
 export async function handleOpenSavedTab(

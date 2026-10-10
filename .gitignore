@@ -7,3 +7,4 @@ dist
 coverage
 e2e/.profile*
 e2e/screenshots
+.claude/worktrees/

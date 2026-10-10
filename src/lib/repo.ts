@@ -1,9 +1,11 @@
 import Dexie from 'dexie';
-import { aggregates, buildDraft, type DraftMeta } from './capture';
+import { aggregates, buildDraft, type DraftMeta, type SkippedTab } from './capture';
+import { refreshDataGuard, resetDataGuard } from './dataGuard';
 import { bumpSearchVersion, db, type TabfoldDB } from './db';
 import { cleanKeywords } from './keywords';
 import { CURRENT_PLAN, sessionLimitReached, tagsAllowed, UNSORTED_NAME, type Plan } from './limits';
 import { newId } from './format';
+import { snapshotMirror } from './state';
 import { dedupeKey, displayHost } from './urls';
 import type {
   CapturedWindow,
@@ -105,21 +107,73 @@ export async function keywordVocabulary(
 export interface SaveOptions {
   /** Add to this session instead of creating a new one. */
   targetSessionId?: string | null;
+  /**
+   * Skip tabs whose address is already saved in any live session (or earlier in this save). Keywords
+   * picked for a skipped tab are added to the copy already saved.
+   */
   dedupe: boolean;
   plan?: Plan;
 }
 
 export interface SaveResult {
+  /** The session written to. When every tab was a skipped duplicate, the session holding the first one. */
   sessionId: string;
   sessionName: string;
   createdSession: boolean;
   intoUnsorted: boolean;
   savedTabIds: string[];
   skippedDuplicates: number;
+  /** Duplicates that were not written, with the browser window they came from. */
+  skippedTabs: SkippedTab[];
   /** Browser tab id -> saved tab id, for tabs that were written. */
   tabIdMap: Map<number, string>;
   /** Saved window id -> browser window id it came from. */
   windowSources: Map<string, number>;
+}
+
+export interface SavedCopy {
+  /** The saved tab with this address. */
+  tab: TabRecord;
+  /** The live session it is in. */
+  session: SessionRecord;
+}
+
+/**
+ * Where each address is already saved, among live sessions. Keyed by `dedupeKey`. When an address
+ * is saved more than once, the copy in `preferSessionId` wins, then the most recently updated session.
+ */
+export async function findSavedCopies(
+  urls: Iterable<string>,
+  preferSessionId?: string | null,
+  database: TabfoldDB = db,
+): Promise<Map<string, SavedCopy>> {
+  const keys = new Set([...urls].map(dedupeKey));
+  const found = new Map<string, SavedCopy>();
+  if (keys.size === 0) return found;
+  // Stored addresses may or may not end in a slash; dedupeKey ignores one.
+  const rows = await database.tabs
+    .where('url')
+    .anyOf([...keys].flatMap((key) => [key, `${key}/`]))
+    .toArray();
+  if (rows.length === 0) return found;
+  const sessionIds = [...new Set(rows.map((t) => t.sessionId))];
+  const sessions = new Map(
+    (await database.sessions.bulkGet(sessionIds))
+      .filter((s): s is SessionRecord => !!s && s.deletedAt === 0)
+      .map((s) => [s.id, s]),
+  );
+  for (const tab of rows) {
+    const session = sessions.get(tab.sessionId);
+    const key = dedupeKey(tab.url);
+    if (!session || !keys.has(key)) continue;
+    const current = found.get(key);
+    const better =
+      !current ||
+      (current.session.id !== preferSessionId &&
+        (session.id === preferSessionId || session.updatedAt > current.session.updatedAt));
+    if (better) found.set(key, { tab, session });
+  }
+  return found;
 }
 
 async function recomputeSession(sessionId: string, database: TabfoldDB, now: number): Promise<SessionRecord | null> {
@@ -178,11 +232,63 @@ export async function saveCapture(
 ): Promise<SaveResult> {
   return database.transaction('rw', [database.sessions, database.windows, database.tabs, database.meta], async () => {
     let target: SessionRecord | null = null;
-    let intoUnsorted = false;
     if (options.targetSessionId) {
       const found = await database.sessions.get(options.targetSessionId);
       if (found && !found.deletedAt) target = found;
     }
+    const captured = windows.flatMap((w) => w.tabs);
+
+    // Tabs restored lazily and never opened have no title yet; reuse the title saved for that address.
+    for (const tab of captured) {
+      if (tab.title !== displayHost(tab.url) && tab.title !== tab.url) continue;
+      const known = await database.tabs.where('url').equals(tab.url).first();
+      if (known && known.title !== tab.title && known.title !== displayHost(known.url)) tab.title = known.title;
+    }
+
+    const copies = options.dedupe
+      ? await findSavedCopies(
+          captured.map((t) => t.url),
+          target?.id,
+          database,
+        )
+      : new Map<string, SavedCopy>();
+    // A duplicate is skipped, but keywords picked for it still land on the tab already saved.
+    const merged = new Map<string, TabRecord>();
+    for (const tab of captured) {
+      const copy = copies.get(dedupeKey(tab.url));
+      if (!copy || tab.keywords.length === 0) continue;
+      const existing = merged.get(copy.tab.id) ?? copy.tab;
+      const keywords = cleanKeywords([...existing.keywords, ...tab.keywords]);
+      if (keywords.join('\u0001') !== existing.keywords.join('\u0001')) merged.set(existing.id, { ...existing, keywords });
+    }
+    if (merged.size) await database.tabs.bulkPut([...merged.values()]);
+
+    const { draft, skippedDuplicates, skippedTabs, tabIdMap, windowIdMap } = buildDraft(windows, {
+      ...meta,
+      dedupe: options.dedupe,
+      existingUrls: [...copies.values()].map((c) => c.tab.url),
+    });
+    const windowSources = new Map<string, number>([...windowIdMap.entries()].map(([source, id]) => [id, source]));
+
+    if (draft.tabs.length === 0) {
+      // Nothing new to write (every tab is saved already): no empty session, no Unsorted.
+      if (merged.size) await bumpSearchVersion(database);
+      const first = skippedTabs[0] ? copies.get(dedupeKey(skippedTabs[0].tab.url))?.session : undefined;
+      const holder = target ?? first;
+      return {
+        sessionId: holder?.id ?? '',
+        sessionName: holder?.name ?? '',
+        createdSession: false,
+        intoUnsorted: false,
+        savedTabIds: [],
+        skippedDuplicates,
+        skippedTabs,
+        tabIdMap,
+        windowSources: new Map(),
+      };
+    }
+
+    let intoUnsorted = false;
     if (!target) {
       const named = (await liveRange(database.sessions).toArray()).filter((s) => s.kind !== 'unsorted').length;
       if (sessionLimitReached(named, options.plan ?? CURRENT_PLAN)) {
@@ -190,35 +296,6 @@ export async function saveCapture(
         intoUnsorted = true;
       }
     }
-
-    // Tabs restored lazily and never opened have no title yet; reuse the title saved for that address.
-    for (const tab of windows.flatMap((w) => w.tabs)) {
-      if (tab.title !== displayHost(tab.url) && tab.title !== tab.url) continue;
-      const known = await database.tabs.where('url').equals(tab.url).first();
-      if (known && known.title !== tab.title && known.title !== displayHost(known.url)) tab.title = known.title;
-    }
-    const existingTabs = target ? await database.tabs.where('sessionId').equals(target.id).toArray() : [];
-    if (options.dedupe && existingTabs.length) {
-      // A duplicate is skipped, but keywords picked for it still land on the tab already saved.
-      const byUrl = new Map(existingTabs.map((t) => [dedupeKey(t.url), t]));
-      const updated = new Map<string, TabRecord>();
-      for (const tab of windows.flatMap((w) => w.tabs)) {
-        const existing = byUrl.get(dedupeKey(tab.url));
-        if (!existing || tab.keywords.length === 0) continue;
-        const merged = cleanKeywords([...existing.keywords, ...tab.keywords]);
-        if (merged.length !== existing.keywords.length) {
-          existing.keywords = merged;
-          updated.set(existing.id, existing);
-        }
-      }
-      if (updated.size) await database.tabs.bulkPut([...updated.values()]);
-    }
-    const { draft, skippedDuplicates, tabIdMap, windowIdMap } = buildDraft(windows, {
-      ...meta,
-      dedupe: options.dedupe,
-      existingUrls: existingTabs.map((t) => t.url),
-    });
-    const windowSources = new Map<string, number>([...windowIdMap.entries()].map(([source, id]) => [id, source]));
 
     if (!target) {
       await database.sessions.add(draft.session);
@@ -232,6 +309,7 @@ export async function saveCapture(
         intoUnsorted: false,
         savedTabIds: draft.tabs.map((t) => t.id),
         skippedDuplicates,
+        skippedTabs,
         tabIdMap,
         windowSources,
       };
@@ -243,7 +321,8 @@ export async function saveCapture(
     if (meta.source === 'save-tabs' && targetWindows.length > 0) {
       // Single tabs join the session's first window, after its last tab.
       const first = targetWindows[0]!;
-      let order = existingTabs.filter((t) => t.windowId === first.id).reduce((max, t) => Math.max(max, t.order + 1), 0);
+      const siblings = await database.tabs.where('windowId').equals(first.id).toArray();
+      let order = siblings.reduce((max, t) => Math.max(max, t.order + 1), 0);
       for (const tab of draft.tabs) tabs.push({ ...tab, sessionId: target.id, windowId: first.id, order: order++ });
       for (const [source, draftWindowId] of windowIdMap) {
         windowSources.delete(draftWindowId);
@@ -265,9 +344,35 @@ export async function saveCapture(
       intoUnsorted,
       savedTabIds: tabs.map((t) => t.id),
       skippedDuplicates,
+      skippedTabs,
       tabIdMap,
       windowSources,
     };
+  });
+}
+
+/**
+ * A tab saved while its page was still loading was given its host as a title. Once Chrome reports
+ * the real title, store it (and in the session's favicon strip). The session keeps its place in
+ * the list: this is not an edit by the user.
+ */
+export async function fillTabTitle(tabId: string, title: string, database: TabfoldDB = db): Promise<boolean> {
+  const clean = title.trim();
+  if (!clean) return false;
+  return database.transaction('rw', [database.sessions, database.tabs, database.meta], async () => {
+    const tab = await database.tabs.get(tabId);
+    if (!tab || tab.title === clean) return false;
+    await database.tabs.update(tabId, { title: clean });
+    const session = await database.sessions.get(tab.sessionId);
+    if (session?.preview.some((p) => p.url === tab.url && p.title === tab.title)) {
+      await database.sessions.put({
+        ...session,
+        preview: session.preview.map((p) => (p.url === tab.url && p.title === tab.title ? { ...p, title: clean } : p)),
+        version: session.version + 1,
+      });
+    }
+    await bumpSearchVersion(database);
+    return true;
   });
 }
 
@@ -305,6 +410,7 @@ export async function importSessions(
     if (result.intoUnsorted) intoUnsorted += 1;
     else created += 1;
   }
+  await refreshDataGuard(database).catch(() => undefined);
   return { sessions: created, tabs, intoUnsorted };
 }
 
@@ -418,12 +524,17 @@ export async function restoreFromTrash(ids: string[], database: TabfoldDB = db):
 
 export async function deleteSessionsForever(ids: string[], database: TabfoldDB = db): Promise<void> {
   if (ids.length === 0) return;
-  await database.transaction('rw', [database.sessions, database.windows, database.tabs, database.meta], async () => {
+  const left = await database.transaction('rw', [database.sessions, database.windows, database.tabs, database.meta], async () => {
+    const existing = (await database.sessions.bulkGet(ids)).filter(Boolean).length;
+    if (existing === 0) return -1;
     await database.tabs.where('sessionId').anyOf(ids).delete();
     await database.windows.where('sessionId').anyOf(ids).delete();
     await database.sessions.bulkDelete(ids);
     await bumpSearchVersion(database);
+    return database.sessions.count();
   });
+  // Tabfold itself emptied the library: an empty database is expected now, not a sign of a wipe.
+  if (left === 0) await resetDataGuard(database).catch(() => undefined);
 }
 
 /** Hard-delete sessions that have been in Trash longer than 30 days. */
@@ -531,8 +642,9 @@ export async function latestSnapshot(reason: SnapshotReason, database: TabfoldDB
   return rows.at(-1);
 }
 
+/** Every snapshot, newest first, including the rolling automatic ('timer') one. */
 export async function listSnapshots(database: TabfoldDB = db): Promise<SnapshotRecord[]> {
-  return (await database.snapshots.orderBy('createdAt').reverse().toArray()).filter((s) => s.reason !== 'timer');
+  return database.snapshots.orderBy('createdAt').reverse().toArray();
 }
 
 export async function pruneSnapshots(
@@ -583,4 +695,6 @@ export async function clearAllData(database: TabfoldDB = db): Promise<void> {
     ]);
     await bumpSearchVersion(database);
   });
+  // The user asked for this: nothing to recover from, and no copy of the last snapshot kept.
+  await Promise.all([resetDataGuard(database), snapshotMirror.set(null)]).catch(() => undefined);
 }

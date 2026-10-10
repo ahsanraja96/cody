@@ -1,14 +1,17 @@
 import { browser } from 'wxt/browser';
+import { refreshDataGuard } from '../dataGuard';
 import { db } from '../db';
 import { extUrl } from '../extUrl';
 import { countNamedSessions, pruneSnapshots, purgeTrash } from '../repo';
 import { getSettings } from '../settings';
-import { backup, getDeviceId, windowNames } from '../state';
+import { activeRestore, backup, getDeviceId, windowNames } from '../state';
 import type { Command } from '../messages';
 import { createMenus, onCommand, onMenuClicked } from './menus';
 import { route } from './router';
 import { checkRecovery, promoteShutdownSnapshot, scheduleSnapshot, takeSnapshot } from './snapshots';
 import { autoSuspendTick } from './suspend';
+import { forgetPendingTitle, onTabUpdated } from './titles';
+import { onUpdateAvailable, onUpdated } from './update';
 
 /**
  * The service worker. It keeps no state in memory between wake-ups: everything lives in
@@ -35,6 +38,7 @@ async function ensureAlarms(): Promise<void> {
 async function dailyMaintenance(): Promise<void> {
   await purgeTrash();
   await pruneSnapshots();
+  await refreshDataGuard();
   const settings = await getSettings();
   if (!settings.backupReminder) return;
   const stored = await browser.storage.local.get(INSTALLED_AT);
@@ -77,9 +81,15 @@ export function setupBackground(): void {
         await browser.storage.local.set({ [INSTALLED_AT]: Date.now() });
         await browser.tabs.create({ url: extUrl('/onboarding.html') });
       }
+      if (details.reason === 'update') await onUpdated();
       await ensureStartup();
       await takeSnapshot('timer');
+      await refreshDataGuard();
     });
+  });
+
+  browser.runtime.onUpdateAvailable.addListener((details) => {
+    safely('update available', () => onUpdateAvailable(details.version));
   });
 
   browser.runtime.onStartup.addListener(() => {
@@ -103,6 +113,8 @@ export function setupBackground(): void {
       safely('snapshot', async () => {
         await ensureStartup();
         await takeSnapshot('timer');
+        // A cheap count, kept outside IndexedDB, so a wiped database can be noticed.
+        await refreshDataGuard();
       });
     }
     else if (alarm.name === ALARMS.autoSuspend.name) safely('auto-suspend', () => autoSuspendTick());
@@ -112,11 +124,14 @@ export function setupBackground(): void {
   // Snapshots follow tab changes, debounced. Events fired while a window is closing are ignored so a
   // quitting browser never overwrites the last good snapshot with an empty one.
   browser.tabs.onCreated.addListener(() => scheduleSnapshot());
-  browser.tabs.onRemoved.addListener((_id, info) => {
+  browser.tabs.onRemoved.addListener((id, info) => {
     if (!info.isWindowClosing) scheduleSnapshot();
+    safely('pending title', () => forgetPendingTitle(id));
   });
-  browser.tabs.onUpdated.addListener((_id, change) => {
+  browser.tabs.onUpdated.addListener((id, change, tab) => {
     if (change.url || change.pinned !== undefined || change.groupId !== undefined) scheduleSnapshot();
+    // A tab saved (kept open) before its title arrived gets its real title.
+    if (change.title !== undefined || change.status === 'complete') safely('title fill-in', () => onTabUpdated(id, change, tab));
   });
   browser.tabs.onMoved.addListener(() => scheduleSnapshot());
   browser.tabs.onAttached.addListener(() => scheduleSnapshot());
@@ -129,4 +144,6 @@ export function setupBackground(): void {
 
   safely('startup', ensureStartup);
   safely('alarms', ensureAlarms);
+  // A restore runs inside one worker life; a fresh worker means any recorded one is over.
+  safely('restore state', () => activeRestore.set(null));
 }

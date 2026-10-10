@@ -21,6 +21,9 @@ import {
   setTabKeywords,
   trashSessions,
   TRASH_RETENTION_MS,
+  findSavedCopies,
+  fillTabTitle,
+  listSnapshots,
 } from '@/lib/repo';
 import { capturedTab, capturedWindow } from './fixtures';
 
@@ -60,8 +63,44 @@ describe('saving', () => {
     await db.tabs.toCollection().modify({ title: 'The real guide' });
     const window = capturedWindow([]);
     window.tabs = [capturedTab('https://docs.example.com/guide', { title: 'docs.example.com' })];
-    const again = await saveCapture([window], meta, { dedupe: true });
+    const again = await saveCapture([window], meta, { dedupe: false });
     expect((await db.tabs.get(again.savedTabIds[0]!))!.title).toBe('The real guide');
+  });
+
+  it('skips an address saved in any live session, not only the target, and never writes an empty session', async () => {
+    const first = await save([['https://a.com/', 'https://b.com']]);
+    const trashed = await save([['https://t.com']]);
+    await trashSessions([trashed.sessionId]);
+    const again = await save([['https://a.com', 'https://c.com', 'https://c.com/', 'https://t.com']]);
+    expect(again.skippedDuplicates).toBe(2);
+    expect(again.skippedTabs.map((s) => s.tab.url)).toEqual(['https://a.com', 'https://c.com/']);
+    expect((await getSessionGraph(again.sessionId))!.windows[0]!.tabs.map((t) => t.url)).toEqual(['https://c.com', 'https://t.com']);
+
+    const sessions = await db.sessions.count();
+    const none = await save([['https://b.com']]);
+    expect(none).toMatchObject({ savedTabIds: [], skippedDuplicates: 1, sessionId: first.sessionId, createdSession: false });
+    expect(await db.sessions.count()).toBe(sessions);
+  });
+
+  it('finds where an address is saved, preferring the given session, then the most recently updated', async () => {
+    const old = await saveCapture([capturedWindow(['https://x.com/'])], { ...meta, now: 1 }, { dedupe: false });
+    const recent = await saveCapture([capturedWindow(['https://x.com'])], { ...meta, now: 2 }, { dedupe: false });
+    expect((await findSavedCopies(['https://x.com/'])).get('https://x.com')!.session.id).toBe(recent.sessionId);
+    expect((await findSavedCopies(['https://x.com'], old.sessionId)).get('https://x.com')!.session.id).toBe(old.sessionId);
+    expect((await findSavedCopies(['https://y.com'])).size).toBe(0);
+  });
+
+  it('fills in a title that arrived after saving, in the row and the favicon strip, without moving the session', async () => {
+    const window = capturedWindow([]);
+    window.tabs = [capturedTab('https://docs.example.com/guide', { title: 'docs.example.com' })];
+    const result = await saveCapture([window], meta, { dedupe: false });
+    const before = (await db.sessions.get(result.sessionId))!;
+    expect(await fillTabTitle(result.savedTabIds[0]!, '  The real guide ')).toBe(true);
+    expect((await db.tabs.get(result.savedTabIds[0]!))!.title).toBe('The real guide');
+    const after = (await db.sessions.get(result.sessionId))!;
+    expect(after.preview[0]!.title).toBe('The real guide');
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(await fillTabTitle('missing', 'x')).toBe(false);
   });
 
   it('after 50 named sessions, new saves go into Unsorted and nothing is blocked', async () => {
@@ -199,5 +238,14 @@ describe('snapshots', () => {
     expect(left.filter((s) => s.reason === 'timer').map((s) => s.createdAt)).toEqual([2]);
     expect(left.filter((s) => s.reason === 'shutdown').map((s) => s.createdAt)).toEqual([4]);
     expect(left.filter((s) => s.reason === 'before-restore')).toHaveLength(5);
+  });
+
+  it('lists every snapshot newest first, including the automatic one', async () => {
+    const add = (reason: 'timer' | 'shutdown' | 'manual', createdAt: number) =>
+      db.snapshots.add({ reason, createdAt, hash: String(createdAt), tabCount: 1, windowCount: 1, windows: [] });
+    await add('shutdown', 1);
+    await add('timer', 3);
+    await add('manual', 2);
+    expect((await listSnapshots()).map((s) => s.reason)).toEqual(['timer', 'manual', 'shutdown']);
   });
 });
