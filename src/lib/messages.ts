@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser';
+import type { AiGroup, BackupInfo, OrganiseResult, PlanState } from './pro/types';
 import type { ActiveFold } from './state';
 import type { TabGroupColor } from './types';
 
@@ -92,7 +93,26 @@ export type Command =
   /** Open folded tabs ("Open all" on a group). With `asGroup`, they open as one Chrome tab group. */
   | { type: 'open-tabs'; tabRecordIds: string[]; asGroup?: { name: string; color: TabGroupColor }; windowId?: number }
   /** Push folded tabs to Chrome sync now (normally it runs a few seconds after each change). */
-  | { type: 'sync-now' };
+  | { type: 'sync-now' }
+  // ---- Pro and Pro AI (src/lib/pro) ----
+  /** Read the plan from ExtensionPay now. */
+  | { type: 'plan-refresh' }
+  /** Open ExtensionPay: checkout for a plan, the trial page, sign-in, or managing a subscription. */
+  | { type: 'plan-open'; page: 'payment' | 'trial' | 'login' | 'manage'; tier?: 'pro' | 'pro-ai'; interval?: 'month' | 'year' }
+  /** Ask the AI for projects for the folded tabs (a preview; nothing changes). */
+  | { type: 'ai-organise' }
+  /** Put tabs in the projects the person kept (after the preview) and switch to By project. */
+  | { type: 'ai-apply'; groups: AiGroup[] }
+  /** A group's tabs as Markdown context for Claude, ChatGPT or Cursor, with a short AI summary. */
+  | { type: 'ai-context'; tabRecordIds: string[]; name: string }
+  | { type: 'backups-list' }
+  /** Bring back tabs from a daily backup that aren't in the list now (nothing is deleted). */
+  | { type: 'backup-restore'; day: string }
+  /** Sync with the Tabfold account now. */
+  | { type: 'cloud-sync-now' }
+  | { type: 'milestone-dismiss' }
+  /** Before removing Tabfold: reopen every folded tab, lazily, one window per fold. */
+  | { type: 'reopen-everything' };
 
 export interface DuplicateTab extends TabRef {
   sessionId: string;
@@ -209,6 +229,16 @@ export interface CommandResults {
   fold: FoldOutcome;
   'open-tabs': { opened: number; reason?: string };
   'sync-now': { ok: boolean };
+  'plan-refresh': PlanState;
+  'plan-open': { opened: boolean; reason?: string };
+  'ai-organise': OrganiseResult;
+  'ai-apply': { applied: number };
+  'ai-context': { markdown: string };
+  'backups-list': BackupInfo[];
+  'backup-restore': { restored: number; sessionId: string | null };
+  'cloud-sync-now': { ok: boolean };
+  'milestone-dismiss': { ok: boolean };
+  'reopen-everything': { opened: number; failed: number };
 }
 
 export type CommandResponse<T> = { ok: true; data: T } | { ok: false; error: string; code?: string };

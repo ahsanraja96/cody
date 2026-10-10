@@ -36,6 +36,8 @@ export interface Settings {
    * computer (never in Chrome sync) and reopen only in Incognito.
    */
   foldIncognito: boolean;
+  /** The full list groups folded tabs by kind of site, or (Pro AI, after organising) by project. */
+  groupBy: 'site' | 'project';
 }
 
 /** Calls and meeting sites are never suspended; tabs using a camera or mic can't be detected without reading pages. */
@@ -68,6 +70,7 @@ export const DEFAULT_SETTINGS: Settings = {
   backupReminder: true,
   syncWithChrome: true,
   foldIncognito: false,
+  groupBy: 'site',
 };
 
 export const AUTO_SUSPEND_CHOICES = [5, 10, 15, 30, 60, 120, 240];

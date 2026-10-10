@@ -79,3 +79,26 @@ ${sessions}
 export function exportFileName(exportedAt = Date.now()): string {
   return `tabfold-export-${new Date(exportedAt).toISOString().slice(0, 10)}.html`;
 }
+
+// ---- Pro export formats (Pro-Plans: "Export to Markdown, CSV and JSON") ----
+// Placeholders until the Pro build lands.
+
+/** Every fold as Markdown: a heading per fold, a link per tab. */
+export function exportMarkdown(graphs: SessionGraph[], exportedAt = Date.now()): string {
+  void graphs;
+  void exportedAt;
+  throw new Error('Not built yet');
+}
+
+/** One row per tab: fold, window, title, address, saved at, keywords. */
+export function exportCsv(graphs: SessionGraph[]): string {
+  void graphs;
+  throw new Error('Not built yet');
+}
+
+/** Folds, windows and tabs as JSON (Tabfold's own format, importable later). */
+export function exportJson(graphs: SessionGraph[], exportedAt = Date.now()): string {
+  void graphs;
+  void exportedAt;
+  throw new Error('Not built yet');
+}

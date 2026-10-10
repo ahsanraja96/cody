@@ -3,6 +3,8 @@ import { browser, type Browser } from 'wxt/browser';
 import { getSettings, updateSettings, watchSettings, DEFAULT_SETTINGS, type Settings } from '@/lib/settings';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/db';
+import { aiRuns as aiRunsState, cloudSyncStatus, milestoneState, planEnded as planEndedState, planState, projectsState } from '@/lib/pro/state';
+import { FREE_PLAN, type AiRuns, type MilestoneState, type PlanState, type ProjectsState } from '@/lib/pro/types';
 import { listLiveSessions } from '@/lib/repo';
 import type { SessionRecord, TabRecord } from '@/lib/types';
 import {
@@ -375,4 +377,50 @@ export async function copyText(text: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** A stored value that pages follow live (initial read, then storage changes). */
+function useStored<T>(read: () => Promise<T | undefined>, watch: (cb: (value: T | undefined) => void) => () => void): T | undefined {
+  const [value, setValue] = useState<T>();
+  useEffect(() => {
+    let alive = true;
+    read()
+      .then((v) => alive && setValue(v))
+      .catch(() => undefined);
+    const stop = watch((v) => setValue(v));
+    return () => {
+      alive = false;
+      stop();
+    };
+    // read and watch are module-level functions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return value;
+}
+
+/** The plan (Free until ExtensionPay has been read). */
+export function usePlan(): PlanState {
+  return useStored(planState.get, planState.watch) ?? FREE_PLAN;
+}
+
+/** Sync with the Tabfold account (Pro). Undefined while it has never run. */
+export function useCloudSyncStatus() {
+  return useStored(cloudSyncStatus.get, cloudSyncStatus.watch);
+}
+
+export function useProjects(): ProjectsState {
+  return useStored(projectsState.get, projectsState.watch) ?? { projects: [], organisedAt: 0 };
+}
+
+export function useAiRuns(): AiRuns | undefined {
+  return useStored(aiRunsState.get, aiRunsState.watch);
+}
+
+export function useMilestoneState(): MilestoneState | undefined {
+  return useStored(milestoneState.get, milestoneState.watch);
+}
+
+/** Set once when a trial or paid plan ends (cleared when its notice is dismissed). */
+export function usePlanEnded() {
+  return useStored(planEndedState.get, planEndedState.watch);
 }

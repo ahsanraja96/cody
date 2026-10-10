@@ -2,6 +2,7 @@ import { isQuotaError } from '../db';
 import { CommandError, type Command, type CommandResponse, type CommandResults } from '../messages';
 import { syncNow } from '../sync/engine';
 import { handleFold } from './fold';
+import { handleProCommand } from './pro';
 import {
   cancelRestore,
   handleOpenSavedTab,
@@ -55,6 +56,17 @@ async function dispatch(command: Command, source: CommandSource): Promise<Comman
       return syncNow();
     case 'recover-from-mirror':
       return recoverFromMirror();
+    case 'plan-refresh':
+    case 'plan-open':
+    case 'ai-organise':
+    case 'ai-apply':
+    case 'ai-context':
+    case 'backups-list':
+    case 'backup-restore':
+    case 'cloud-sync-now':
+    case 'milestone-dismiss':
+    case 'reopen-everything':
+      return handleProCommand(command);
   }
 }
 

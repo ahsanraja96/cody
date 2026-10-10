@@ -82,6 +82,8 @@ export interface SessionRecord {
   tabCount: number;
   windowCount: number;
   preview: TabPreview[];
+  /** A name the AI gave the fold (Pro AI), shown instead of its time. */
+  smartName?: string;
 }
 
 export interface WindowRecord {
@@ -116,6 +118,8 @@ export interface TabRecord {
    * reopened only in Incognito.
    */
   incognito?: true;
+  /** The AI project it was put in (Pro AI, By project view). */
+  project?: string;
 }
 
 export type SnapshotReason =
