@@ -79,25 +79,52 @@ export function refuseToOpen(url: string, ownOrigin: string): boolean {
   return url.toLowerCase().startsWith('javascript:') || kind === 'own';
 }
 
+export interface OpenCopy {
+  /** Windows holding the open copy, the one with most of it first. */
+  windowIds: number[];
+  /** Session tabs whose address is open. */
+  openTabs: number;
+  totalTabs: number;
+}
+
 /**
  * Is (most of) this session already open? Counts addresses open in any window (a session saved
- * from two windows is restored into two). Returns the window holding most of them, so the user
- * can switch to it instead of opening a copy.
+ * from two windows is restored into two). Returns the windows holding them, most first, so the
+ * user can switch to the copy instead of opening another.
  */
+export function describeOpenCopy(
+  sessionUrls: string[],
+  openWindows: Array<{ id?: number; tabs?: Array<{ url?: string; pendingUrl?: string }> }>,
+): OpenCopy | undefined {
+  const unique = [...new Set(sessionUrls)];
+  if (unique.length < 2) return undefined;
+  const hitsByWindow: Array<{ id: number; hits: Set<string> }> = [];
+  const openAnywhere = new Set<string>();
+  for (const window of openWindows) {
+    // Tabs restored lazily have no committed address yet; theirs is in pendingUrl.
+    const open = new Set((window.tabs ?? []).map((t) => t.url || t.pendingUrl));
+    const hits = new Set(unique.filter((url) => open.has(url)));
+    for (const url of hits) openAnywhere.add(url);
+    if (window.id !== undefined && hits.size) hitsByWindow.push({ id: window.id, hits });
+  }
+  if (openAnywhere.size / unique.length < 0.8) return undefined;
+  // Windows that add something to the copy, biggest share first.
+  hitsByWindow.sort((a, b) => b.hits.size - a.hits.size);
+  const covered = new Set<string>();
+  const windowIds: number[] = [];
+  for (const { id, hits } of hitsByWindow) {
+    if (![...hits].some((url) => !covered.has(url))) continue;
+    for (const url of hits) covered.add(url);
+    windowIds.push(id);
+    if (covered.size === openAnywhere.size) break;
+  }
+  return { windowIds, openTabs: sessionUrls.filter((url) => openAnywhere.has(url)).length, totalTabs: sessionUrls.length };
+}
+
+/** The window holding most of an open copy of this session, if there is one. */
 export function findOpenCopy(
   sessionUrls: string[],
   openWindows: Array<{ id?: number; tabs?: Array<{ url?: string; pendingUrl?: string }> }>,
 ): number | undefined {
-  const unique = [...new Set(sessionUrls)];
-  if (unique.length < 2) return undefined;
-  const openAnywhere = new Set<string>();
-  let best: { id: number; hits: number } | undefined;
-  for (const window of openWindows) {
-    // Tabs restored lazily have no committed address yet; theirs is in pendingUrl.
-    const open = new Set((window.tabs ?? []).map((t) => t.url || t.pendingUrl));
-    const hits = unique.filter((url) => open.has(url));
-    for (const url of hits) openAnywhere.add(url);
-    if (window.id !== undefined && hits.length && (!best || hits.length > best.hits)) best = { id: window.id, hits: hits.length };
-  }
-  return openAnywhere.size / unique.length >= 0.8 ? best?.id : undefined;
+  return describeOpenCopy(sessionUrls, openWindows)?.windowIds[0];
 }

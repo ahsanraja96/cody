@@ -1,6 +1,6 @@
 import { cleanKeywords } from './keywords';
 import { defaultSessionName, newId } from './format';
-import { capFavicon, capUrl, classifyUrl, dedupeKey, displayHost, unwrapViewerUrl } from './urls';
+import { capFavicon, capUrl, classifyUrl, dedupeKey, displayHost, displayUrl, unwrapViewerUrl } from './urls';
 import {
   TAB_GROUP_COLORS,
   type CapturedTab,
@@ -67,6 +67,11 @@ export interface CaptureOptions {
   ownOrigin: string;
   windowNames?: Record<number, string>;
   keywordsByTabId?: Record<number, string[]>;
+  /**
+   * Only with scope 'window' or 'tabs', after the user confirmed: save that Incognito window or
+   * those Incognito tabs. "Save all" and snapshots never include Incognito.
+   */
+  includeIncognito?: boolean;
 }
 
 export interface CapturePlan {
@@ -77,9 +82,28 @@ export interface CapturePlan {
   skipped: { blank: number; own: number };
 }
 
-/** Only normal, non-incognito windows are ever captured. */
-export function isCapturableWindow(window: WindowLike): boolean {
-  return !window.incognito && (window.type === undefined || window.type === 'normal');
+function isNormalWindow(window: WindowLike): boolean {
+  return window.type === undefined || window.type === 'normal';
+}
+
+/** Only normal windows are captured, and Incognito ones only when the user chose to save one. */
+export function isCapturableWindow(window: WindowLike, includeIncognito = false): boolean {
+  return (includeIncognito || !window.incognito) && isNormalWindow(window);
+}
+
+/**
+ * Chrome shows a page's address as its title (without the scheme) until the real title arrives,
+ * and keeps it for pages that have none.
+ */
+export function isPlaceholderTitle(title: string | undefined, url: string): boolean {
+  const clean = (title ?? '').trim();
+  if (!clean) return true;
+  return clean === url || clean === url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '') || clean === displayUrl(url);
+}
+
+/** The address Tabfold saves for a tab, before capping (the PDF viewer's address unwrapped). */
+export function rawTabUrl(tab: Pick<TabLike, 'url' | 'pendingUrl'>): string {
+  return unwrapViewerUrl(tab.url || tab.pendingUrl || '');
 }
 
 function toGroupColor(color: string | undefined): TabGroupColor | null {
@@ -98,14 +122,14 @@ export function captureTab(
   groups: Map<number, GroupLike>,
   keywords: string[] = [],
 ): CapturedTab {
-  const rawUrl = unwrapViewerUrl(tab.url || tab.pendingUrl || '');
+  const rawUrl = rawTabUrl(tab);
   const { url, truncated } = capUrl(rawUrl);
   const title = (tab.title ?? '').trim();
   const group = tab.groupId !== undefined && tab.groupId >= 0 ? groups.get(tab.groupId) : undefined;
   return {
     url,
     // Tabs still loading have no title yet: fall back to the host so the row stays readable.
-    title: title && title !== url ? title : displayHost(url) || url,
+    title: isPlaceholderTitle(title, rawUrl) || title === url ? displayHost(url) || url : title,
     favIconUrl: capFavicon(tab.favIconUrl),
     pinned: tab.pinned,
     groupName: group ? (group.title ?? '') : null,
@@ -134,17 +158,18 @@ export function planCapture(
       ? options.windowId
       : undefined;
   const explicit = options.scope === 'tabs';
+  const incognito = options.scope !== 'all' && options.includeIncognito === true;
 
   for (const window of windows) {
-    if (!isCapturableWindow(window)) continue;
+    if (!isCapturableWindow(window, incognito)) continue;
     if (onlyWindow !== undefined && window.id !== onlyWindow) continue;
     const tabs = [...(window.tabs ?? [])].sort((a, b) => a.index - b.index);
     const captured: CapturedTab[] = [];
 
     for (const tab of tabs) {
-      if (tab.incognito) continue;
+      if (tab.incognito && !incognito) continue;
       if (wanted && (tab.id === undefined || !wanted.has(tab.id))) continue;
-      const url = unwrapViewerUrl(tab.url || tab.pendingUrl || '');
+      const url = rawTabUrl(tab);
       const kind = classifyUrl(url, options.ownOrigin);
       if (kind === 'own') {
         plan.skipped.own += 1;
@@ -190,12 +215,16 @@ export function planCapture(
   return plan;
 }
 
-/** Which of the tabs to close would leave no normal window open (Chrome would quit)? */
+/**
+ * Would closing these tabs leave no normal window open? Then Chrome would quit (or, with only an
+ * Incognito window left, the user would lose their normal window). With no normal window open at
+ * all (only Incognito), the question is whether any window at all stays open.
+ */
 export function wouldCloseEverything(windows: WindowLike[], closeTabIds: number[]): boolean {
   const closing = new Set(closeTabIds);
-  return !windows
-    .filter(isCapturableWindow)
-    .some((window) => (window.tabs ?? []).some((tab) => tab.id === undefined || !closing.has(tab.id)));
+  const normal = windows.filter((w) => isCapturableWindow(w));
+  const pool = normal.length ? normal : windows.filter(isNormalWindow);
+  return !pool.some((window) => (window.tabs ?? []).some((tab) => tab.id === undefined || !closing.has(tab.id)));
 }
 
 export interface DraftMeta {
@@ -210,9 +239,17 @@ export interface DraftMeta {
   existingUrls?: Iterable<string>;
 }
 
+export interface SkippedTab {
+  tab: CapturedTab;
+  /** Browser window the tab was in. */
+  sourceWindowId?: number;
+}
+
 export interface DraftResult {
   draft: SessionDraft;
   skippedDuplicates: number;
+  /** The duplicates that were not written, in capture order. */
+  skippedTabs: SkippedTab[];
   /** Database tab id for each browser tab id that was saved. */
   tabIdMap: Map<number, string>;
   /** Database window id for each browser window id. */
@@ -222,7 +259,7 @@ export interface DraftResult {
 export function buildDraft(windows: CapturedWindow[], meta: DraftMeta): DraftResult {
   const sessionId = newId();
   const seen = new Set<string>([...(meta.existingUrls ?? [])].map(dedupeKey));
-  let skippedDuplicates = 0;
+  const skippedTabs: SkippedTab[] = [];
   const windowRecords: WindowRecord[] = [];
   const tabRecords: TabRecord[] = [];
   const tabIdMap = new Map<number, string>();
@@ -234,7 +271,7 @@ export function buildDraft(windows: CapturedWindow[], meta: DraftMeta): DraftRes
     for (const tab of window.tabs) {
       const key = dedupeKey(tab.url);
       if (meta.dedupe && seen.has(key)) {
-        skippedDuplicates += 1;
+        skippedTabs.push({ tab, sourceWindowId: window.sourceWindowId });
         continue;
       }
       seen.add(key);
@@ -285,7 +322,13 @@ export function buildDraft(windows: CapturedWindow[], meta: DraftMeta): DraftRes
     version: 1,
     ...aggregates(windowRecords, tabRecords),
   };
-  return { draft: { session, windows: windowRecords, tabs: tabRecords }, skippedDuplicates, tabIdMap, windowIdMap };
+  return {
+    draft: { session, windows: windowRecords, tabs: tabRecords },
+    skippedDuplicates: skippedTabs.length,
+    skippedTabs,
+    tabIdMap,
+    windowIdMap,
+  };
 }
 
 /** Counts and the favicon strip shown on session cards, so cards never load every tab. */

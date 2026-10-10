@@ -32,6 +32,8 @@ export interface LastAction {
    * elsewhere). Undo reopens these too.
    */
   reopenOnly?: Array<{ url: string; title: string; pinned: boolean; sourceWindowId?: number }>;
+  /** Saved tabs whose browser tab refused to close ("Leave site?"). Undo removes them but doesn't reopen them. */
+  notClosedTabIds?: string[];
 }
 
 /** A restore in progress, so a popup opened mid-restore can show it and offer Cancel. */
