@@ -9,6 +9,7 @@ import { Button, IconButton } from '@/ui/components/Button';
 import { Badge } from '@/ui/components/Chips';
 import { cx } from '@/ui/cx';
 import type { OpenWindow } from '@/ui/hooks';
+import { tipHandlers } from './RowTooltip';
 
 export interface RowHandlers {
   onActivate: () => void;
@@ -85,7 +86,7 @@ export function OpenTabRow({
         dir="auto"
         aria-label={state ? `${title}, ${state}` : title}
         aria-pressed={handlers.onSelect ? selected : undefined}
-        title={`${title}\n${url}`}
+        {...tipHandlers(title, url)}
         onClick={onClick}
         onKeyDown={onKey}
         onKeyUp={onKey}

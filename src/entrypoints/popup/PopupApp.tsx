@@ -13,6 +13,7 @@ import { Home } from './Home';
 import { KeywordSave } from './KeywordSave';
 import { useNarrow } from './popupHooks';
 import { SearchResults, type SearchNav } from './SearchResults';
+import { TipHost } from './RowTooltip';
 import { UpdateDialog } from './UpdateDialog';
 
 type View = { kind: 'home' } | { kind: 'keywords'; tabIds: number[] };
@@ -57,6 +58,7 @@ export function PopupApp() {
   const overlays = (
     <>
       <ConfirmHost />
+      <TipHost />
       {update && <UpdateDialog version={update.version} />}
     </>
   );
