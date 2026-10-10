@@ -1,0 +1,57 @@
+/*
+ * Category colours for the folded list: Chrome's own tab group colours, so "Open all" opens a
+ * group that looks the same in the tab strip. Dark values follow Chrome's dark theme.
+ */
+
+.tf-cg-grey { --tf-cg: #5f6368; }
+.tf-cg-blue { --tf-cg: #1a73e8; }
+.tf-cg-red { --tf-cg: #d93025; }
+.tf-cg-yellow { --tf-cg: #f9ab00; }
+.tf-cg-green { --tf-cg: #188038; }
+.tf-cg-pink { --tf-cg: #d01884; }
+.tf-cg-purple { --tf-cg: #a142f4; }
+.tf-cg-cyan { --tf-cg: #007b83; }
+.tf-cg-orange { --tf-cg: #fa903e; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .tf-cg-grey { --tf-cg: #bdc1c6; }
+  :root:not([data-theme='light']) .tf-cg-blue { --tf-cg: #8ab4f8; }
+  :root:not([data-theme='light']) .tf-cg-red { --tf-cg: #f28b82; }
+  :root:not([data-theme='light']) .tf-cg-yellow { --tf-cg: #fdd663; }
+  :root:not([data-theme='light']) .tf-cg-green { --tf-cg: #81c995; }
+  :root:not([data-theme='light']) .tf-cg-pink { --tf-cg: #ff8bcb; }
+  :root:not([data-theme='light']) .tf-cg-purple { --tf-cg: #c58af9; }
+  :root:not([data-theme='light']) .tf-cg-cyan { --tf-cg: #78d9ec; }
+  :root:not([data-theme='light']) .tf-cg-orange { --tf-cg: #fcad70; }
+}
+
+:root[data-theme='dark'] .tf-cg-grey { --tf-cg: #bdc1c6; }
+:root[data-theme='dark'] .tf-cg-blue { --tf-cg: #8ab4f8; }
+:root[data-theme='dark'] .tf-cg-red { --tf-cg: #f28b82; }
+:root[data-theme='dark'] .tf-cg-yellow { --tf-cg: #fdd663; }
+:root[data-theme='dark'] .tf-cg-green { --tf-cg: #81c995; }
+:root[data-theme='dark'] .tf-cg-pink { --tf-cg: #ff8bcb; }
+:root[data-theme='dark'] .tf-cg-purple { --tf-cg: #c58af9; }
+:root[data-theme='dark'] .tf-cg-cyan { --tf-cg: #78d9ec; }
+:root[data-theme='dark'] .tf-cg-orange { --tf-cg: #fcad70; }
+
+.tf-cg-dot {
+  flex: none;
+  border-radius: 50%;
+  background: var(--tf-cg);
+}
+
+/* "+12" on the group that is receiving tabs right now. */
+.tf-pulse {
+  box-shadow: 0 0 0 3px var(--tf-accent-line);
+  animation: tf-pulse 1.4s ease-out infinite;
+}
+
+@keyframes tf-pulse {
+  0% {
+    box-shadow: 0 0 0 3px var(--tf-accent-line);
+  }
+  100% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+}

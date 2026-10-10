@@ -1,99 +1,183 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { browser } from 'wxt/browser';
-import { Layers, Search, Settings as SettingsIcon, X } from 'lucide-react';
-import { CURRENT_PLAN } from '@/lib/limits';
+import { Search, Settings as SettingsIcon, X } from 'lucide-react';
+import type { CategoryGroup } from '@/lib/categories';
+import { send } from '@/lib/messages';
 import { openLibrary } from '@/lib/openLibrary';
 import { pendingKeywordSave } from '@/lib/state';
-import { IconButton } from '@/ui/components/Button';
-import { Kbd, PlanBadge } from '@/ui/components/Chips';
-import { ConfirmHost } from '@/ui/components/Dialog';
+import type { TabRecord } from '@/lib/types';
+import { FoldedList, useRemoveWithUndo } from '@/ui/components/FoldedList';
 import { Logo } from '@/ui/components/Logo';
-import { modKey, useOpenWindows, useUpdateReady } from '@/ui/hooks';
-import { Home } from './Home';
-import { KeywordSave } from './KeywordSave';
-import { useNarrow } from './popupHooks';
-import { SearchResults, type SearchNav } from './SearchResults';
-import { TipHost } from './RowTooltip';
+import { cx } from '@/ui/cx';
+import {
+  useFoldedTabs,
+  useOpenWindows,
+  useRecoveryOffer,
+  useSettings,
+  useSyncStatus,
+  useTabSearch,
+  useUpdateReady,
+  type OpenWindow,
+} from '@/ui/hooks';
+import { FirstRun } from './FirstRun';
+import { Hero } from './Hero';
+import { KeywordFold } from './KeywordFold';
+import { CrashLine, PopupFooter, SectionLabel } from './parts';
+import { useFold, useFoldShortcut, useOpenTabStats } from './popupHooks';
+import { openDocs, RESULTS_ID, SearchResults, type SearchNav } from './SearchResults';
 import { UpdateDialog } from './UpdateDialog';
 
-type View = { kind: 'home' } | { kind: 'keywords'; tabIds: number[] };
+type View = { kind: 'loading' } | { kind: 'home' } | { kind: 'keywords'; tabIds: number[] };
 
+/** A keyword request from the right-click menu is only picked up shortly after it was made. */
 const PENDING_MAX_AGE_MS = 60_000;
+/** Search results listed in the popup (the footer counts them all). */
+const SEARCH_LIMIT = 50;
 
 export function PopupApp() {
-  const [current, setCurrent] = useState<{ id?: number; incognito: boolean }>({ incognito: false });
-  const { windows, loaded } = useOpenWindows({ includeIncognito: current.incognito });
+  const asWindow = document.documentElement.dataset.mode === 'window';
+  // The toolbar popup paints its home right away; a keyword request (right-click) swaps it in. The
+  // small window is only ever opened for keywords, so it waits for the request instead.
+  const [view, setView] = useState<View>({ kind: asWindow ? 'loading' : 'home' });
+  const [currentWindowId, setCurrentWindowId] = useState<number>();
+  const { windows, loaded } = useOpenWindows();
   const update = useUpdateReady();
-  const narrow = useNarrow();
-  const [query, setQuery] = useState('');
-  const [view, setView] = useState<View>({ kind: 'home' });
-  const inputRef = useRef<HTMLInputElement>(null);
-  const navRef = useRef<SearchNav | null>(null);
-  const searching = query.trim().length > 0;
 
   useEffect(() => {
-    const asWindow = document.documentElement.dataset.mode === 'window';
     const lookup = asWindow ? browser.windows.getLastFocused({ windowTypes: ['normal'] }) : browser.windows.getCurrent();
-    lookup.then((w) => setCurrent({ id: w.id, incognito: !!w.incognito })).catch(() => undefined);
-    pendingKeywordSave.get().then((pending) => {
-      if (pending && Date.now() - pending.at < PENDING_MAX_AGE_MS && pending.tabIds.length) {
-        setView({ kind: 'keywords', tabIds: pending.tabIds });
-      }
-      if (pending) pendingKeywordSave.set(null);
-    });
-  }, []);
+    lookup.then((w) => setCurrentWindowId(w.id)).catch(() => undefined);
+    pendingKeywordSave
+      .get()
+      .then((pending) => {
+        const fresh = pending && Date.now() - pending.at < PENDING_MAX_AGE_MS && pending.tabIds.length > 0;
+        if (fresh) setView({ kind: 'keywords', tabIds: pending.tabIds });
+        else setView((v) => (v.kind === 'loading' ? { kind: 'home' } : v));
+        if (pending) void pendingKeywordSave.set(null);
+      })
+      .catch(() => setView((v) => (v.kind === 'loading' ? { kind: 'home' } : v)));
+  }, [asWindow]);
+
+  const overlay = update && <UpdateDialog version={update.version} />;
+  if (view.kind === 'loading') return <div className="h-full bg-bg" />;
+  if (view.kind === 'keywords') {
+    return (
+      <>
+        <KeywordFold
+          tabIds={view.tabIds}
+          windows={windows}
+          loaded={loaded}
+          onCancel={() => (asWindow ? window.close() : setView({ kind: 'home' }))}
+        />
+        {overlay}
+      </>
+    );
+  }
+  return (
+    <>
+      <Home windows={windows} loaded={loaded} currentWindowId={currentWindowId} />
+      {overlay}
+    </>
+  );
+}
+
+function Home({ windows, loaded, currentWindowId }: { windows: OpenWindow[]; loaded: boolean; currentWindowId?: number }) {
+  const [settings, , settingsLoaded] = useSettings();
+  const stats = useOpenTabStats(windows, settings.keepPinnedOpen);
+  const ready = loaded && settingsLoaded;
+  const { view, start } = useFold(stats.foldable.length);
+  const folded = useFoldedTabs();
+  const offer = useRecoveryOffer();
+  const sync = useSyncStatus();
+  const shortcut = useFoldShortcut();
+  const removal = useRemoveWithUndo();
+
+  const [query, setQuery] = useState('');
+  const searching = query.trim().length > 0;
+  const docs = useMemo(() => openDocs(windows, currentWindowId), [windows, currentWindowId]);
+  // The search index builds in its worker once the list is on screen, so the first keystroke is quick.
+  const { result } = useTabSearch(query, docs, { limit: SEARCH_LIMIT, warm: folded !== undefined });
+  const navRef = useRef<SearchNav | null>(null);
+  const [activeId, setActiveId] = useState<string>();
+  const inputRef = useRef<HTMLInputElement>(null);
+  // The search field is focused on open; its focus ring shows once the person focuses it themselves.
+  const [ringed, setRinged] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
       if (e.key === '/' && !typing) {
         e.preventDefault();
+        setRinged(true);
         inputRef.current?.focus();
+      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+        const input = e.target instanceof HTMLInputElement ? e.target : null;
+        if ((!input || !input.value) && removal.undoLast()) e.preventDefault();
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, []);
+  }, [removal]);
 
-  const overlays = (
-    <>
-      <ConfirmHost />
-      <TipHost />
-      {update && <UpdateDialog version={update.version} />}
-    </>
+  const onOpen = useCallback(
+    (tab: TabRecord, background: boolean) => {
+      void send({ type: 'open-saved-tab', tabRecordId: tab.id, active: !background, windowId: currentWindowId })
+        .catch(() => undefined)
+        .then(() => {
+          if (!background) window.close();
+        });
+    },
+    [currentWindowId],
+  );
+  const onOpenAll = useCallback(
+    (group: CategoryGroup<TabRecord>) => {
+      void send({
+        type: 'open-tabs',
+        tabRecordIds: group.items.map((t) => t.id),
+        asGroup: { name: group.category.name, color: group.category.color },
+        windowId: currentWindowId,
+      })
+        .catch(() => undefined)
+        .then(() => window.close());
+    },
+    [currentWindowId],
   );
 
-  if (view.kind === 'keywords') {
-    return (
-      <>
-        <KeywordSave tabIds={view.tabIds} windows={windows} onBack={() => setView({ kind: 'home' })} />
-        {overlays}
-      </>
-    );
-  }
+  const foldedTabs = folded?.tabs;
+  const firstRun = !!foldedTabs && foldedTabs.length === 0 && (view.kind === 'rest' || view.kind === 'failed');
+  const newSince = view.kind === 'folding' || view.kind === 'done' ? view.fold.startedAt - 1000 : undefined;
 
   return (
-    <div className="relative flex h-full flex-col bg-bg">
-      <header
-        className={`flex shrink-0 items-center gap-1.5 px-3 pt-3 pb-2.5 max-[360px]:py-2 ${searching ? 'border-b border-border' : ''}`}
-      >
+    <div className="flex h-full flex-col bg-bg text-text">
+      <header className="flex flex-none items-center gap-2 px-4 py-3">
         <Logo size={24} />
-        <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-control border border-border-strong bg-surface pr-1 pl-2.5 text-text-3 focus-within:border-accent focus-within:shadow-[0_0_0_3px_var(--tf-accent-soft)]">
-          <Search size={16} aria-hidden className="shrink-0" />
+        <label
+          className={cx(
+            'flex h-8 min-w-0 flex-1 items-center gap-2 rounded-control border bg-surface pl-2.5 text-text-3',
+            query ? 'pr-1' : 'pr-2.5',
+            query || ringed
+              ? 'border-border-strong focus-within:border-accent focus-within:shadow-[0_0_0_3px_var(--tf-accent-soft)]'
+              : 'border-border-strong',
+          )}
+        >
+          <Search size={16} strokeWidth={1.75} aria-hidden className="flex-none" />
           <input
             ref={inputRef}
             type="search"
             autoFocus
+            role="combobox"
+            aria-expanded={searching}
+            aria-controls={searching ? RESULTS_ID : undefined}
+            aria-activedescendant={searching ? activeId : undefined}
+            aria-autocomplete="list"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onBlur={() => setRinged(true)}
             onKeyDown={(e) => {
-              if (e.key === 'ArrowDown') {
+              if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                if (!searching) return;
                 e.preventDefault();
-                navRef.current?.move(1);
-              } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                navRef.current?.move(-1);
-              } else if (e.key === 'Enter') {
+                navRef.current?.move(e.key === 'ArrowDown' ? 1 : -1);
+              } else if (e.key === 'Enter' && searching) {
                 e.preventDefault();
                 navRef.current?.open(e.metaKey || e.ctrlKey);
               } else if (e.key === 'Escape' && query) {
@@ -101,79 +185,76 @@ export function PopupApp() {
                 setQuery('');
               }
             }}
-            placeholder={narrow ? 'Search tabs' : 'Search tabs and keywords'}
-            aria-label="Search open and saved tabs by title, address or keyword"
+            placeholder="Search tabs"
+            aria-label="Search open and folded tabs by title, address or keyword"
             className="h-full min-w-0 flex-1 border-0 bg-transparent p-0 text-text outline-none [&::-webkit-search-cancel-button]:hidden"
           />
           {query && (
-            <IconButton label="Clear search" size="sm" tone="muted" onClick={() => setQuery('')}>
-              <X size={14} aria-hidden />
-            </IconButton>
+            <button
+              type="button"
+              aria-label="Clear search"
+              title="Clear search"
+              onClick={() => {
+                setQuery('');
+                inputRef.current?.focus();
+              }}
+              className="flex size-6 flex-none items-center justify-center rounded-md text-text-3 hover:bg-hover hover:text-text"
+            >
+              <X size={14} strokeWidth={1.75} aria-hidden />
+            </button>
           )}
         </label>
-        <IconButton
-          label="Settings"
-          size="lg"
+        <button
+          type="button"
+          aria-label="Settings"
+          title="Settings"
           onClick={() => {
-            openLibrary('#/settings');
-            window.close();
+            void openLibrary('#/settings').finally(() => window.close());
           }}
+          className="flex size-8 flex-none items-center justify-center rounded-control text-text-2 hover:bg-hover hover:text-text"
         >
           <SettingsIcon size={20} strokeWidth={1.75} aria-hidden />
-        </IconButton>
+        </button>
       </header>
 
       {searching ? (
-        <SearchResults query={query} windows={windows} navRef={navRef} onClear={() => setQuery('')} />
-      ) : (
-        <Home
-          windows={windows}
-          loaded={loaded}
-          currentWindowId={current.id}
-          incognito={current.incognito}
-          narrow={narrow}
-          onAskKeywords={(tabIds) => setView({ kind: 'keywords', tabIds })}
+        <SearchResults
+          query={query}
+          result={result}
+          openCount={docs.length}
+          navRef={navRef}
+          onActiveChange={setActiveId}
+          onClear={() => {
+            setQuery('');
+            inputRef.current?.focus();
+          }}
         />
-      )}
-
-      {searching ? (
-        <footer className="flex h-10 shrink-0 items-center gap-3.5 border-t border-border bg-bg-subtle px-4 text-meta text-text-3 max-[360px]:gap-2.5 max-[360px]:px-3">
-          <span className="inline-flex items-center gap-[5px]">
-            <Kbd>↑</Kbd>
-            <Kbd>↓</Kbd>
-            Move
-          </span>
-          <span className="inline-flex items-center gap-[5px]">
-            <Kbd>↵</Kbd>
-            Open
-          </span>
-          <span className="inline-flex items-center gap-[5px]">
-            <Kbd>{modKey}↵</Kbd>
-            <span className="max-[360px]:hidden">Open in background</span>
-            <span className="hidden max-[360px]:inline">Background</span>
-          </span>
-          <span className="inline-flex items-center gap-[5px]">
-            <Kbd>esc</Kbd>
-            Clear
-          </span>
-        </footer>
       ) : (
-        <footer className="flex h-11 shrink-0 items-center justify-between gap-3 border-t border-border bg-bg-subtle px-3 max-[360px]:h-9">
-          <button
-            type="button"
-            className="inline-flex items-center gap-1.5 font-semibold text-accent-text hover:underline"
-            onClick={() => {
-              openLibrary();
-              window.close();
-            }}
-          >
-            <Layers size={16} aria-hidden />
-            Open library
-          </button>
-          <PlanBadge plan={CURRENT_PLAN} />
-        </footer>
+        <>
+          {offer && <CrashLine offer={offer} windowId={currentWindowId} />}
+          <Hero view={view} stats={stats} ready={ready} shortcut={shortcut} onFold={() => void start()} />
+          {firstRun ? (
+            <FirstRun />
+          ) : (
+            <div className="scroll-thin min-h-0 flex-1 overflow-y-auto border-t border-border px-2 pt-1 pb-2">
+              {foldedTabs && (
+                <>
+                  <SectionLabel count={foldedTabs.length}>Folded</SectionLabel>
+                  <FoldedList
+                    tabs={foldedTabs}
+                    removal={removal}
+                    newSince={newSince}
+                    live={view.kind === 'folding'}
+                    onOpen={onOpen}
+                    onOpenAll={onOpenAll}
+                  />
+                </>
+              )}
+            </div>
+          )}
+          <PopupFooter sync={sync} />
+        </>
       )}
-      {overlays}
     </div>
   );
 }
