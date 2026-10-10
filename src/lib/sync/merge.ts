@@ -13,6 +13,7 @@ import {
   SYNC_LIMITS,
   type PackResult,
   type RemoteState,
+  type SyncLimits,
   type SyncRecord,
   type Tombstone,
 } from './records';
@@ -49,6 +50,8 @@ export interface SyncPlanInput {
   floor: number;
   now: number;
   budgetFactor?: number;
+  /** Where the shared copy lives: Chrome sync's limits unless given (CLOUD_LIMITS for the Tabfold account). */
+  limits?: SyncLimits;
 }
 
 export interface SyncUpdate {
@@ -113,23 +116,24 @@ interface View {
   key: string;
 }
 
-function toRecord(tab: LocalTab): SyncRecord {
+function toRecord(tab: LocalTab, limits: SyncLimits): SyncRecord {
   return {
     id: syncId(tab.id),
     url: tab.url,
-    title: capTitle(tab.title),
+    title: capTitle(tab.title, limits),
     savedAt: toSyncTime(tab.savedAt),
     keywords: canonicalKeywords(tab.keywords),
   };
 }
 
 export function planSync(input: SyncPlanInput): SyncPlan {
+  const limits = input.limits ?? SYNC_LIMITS;
   const now = toSyncTime(input.now);
   const floor = Math.max(toSyncTime(input.floor), toSyncTime(input.remote.floor));
 
   // This computer's folded tabs, by sync id and by address.
   const views: View[] = input.local.map((tab) => {
-    const record = toRecord(tab);
+    const record = toRecord(tab, limits);
     return { dbId: tab.id, record, key: urlKey(tab.url) };
   });
   const bySid = new Map<string, View>();
@@ -151,8 +155,8 @@ export function planSync(input: SyncPlanInput): SyncPlan {
 
   // Tombstones: drop old ones, and take back our own when the tab is here again (Undo).
   const mine: Record<string, number> = {};
-  for (const [id, at] of Object.entries(input.mine)) if (at >= now - MINE_TTL_MS) mine[id] = at;
-  let tombstones = pruneTombstones(input.remote.tombstones, now).filter((t) => {
+  for (const [id, at] of Object.entries(input.mine)) if (at >= now - limits.tombstoneMaxAgeMs) mine[id] = at;
+  let tombstones = pruneTombstones(input.remote.tombstones, now, limits).filter((t) => {
     const ours = mine[t.id] !== undefined;
     if (ours && (bySid.has(t.id) || byKey.has(t.key))) {
       delete mine[t.id];
@@ -169,7 +173,7 @@ export function planSync(input: SyncPlanInput): SyncPlan {
     tombstoned.add(sid);
     mine[sid] = now;
   }
-  tombstones = pruneTombstones(tombstones, now);
+  tombstones = pruneTombstones(tombstones, now, limits);
   const removedById = new Set(tombstones.map((t) => t.id));
   const removedKeyAt = new Map<string, number>();
   for (const t of tombstones) removedKeyAt.set(t.key, Math.max(removedKeyAt.get(t.key) ?? 0, t.at));
@@ -189,7 +193,7 @@ export function planSync(input: SyncPlanInput): SyncPlan {
   const adopt: SyncPlan['adopt'] = [];
   const insert: SyncRecord[] = [];
   const remote = input.remote.records
-    .filter((r) => isSyncable(r.url) && r.savedAt > floor && !isTombstoned(r, urlKey(r.url)))
+    .filter((r) => isSyncable(r.url, limits) && r.savedAt > floor && !isTombstoned(r, urlKey(r.url)))
     .sort(compareRecords);
   for (const incoming of remote) {
     const key = urlKey(incoming.url);
@@ -226,11 +230,11 @@ export function planSync(input: SyncPlanInput): SyncPlan {
   const live = [...bySid.values()];
   const winners = new Map<string, SyncRecord>();
   for (const view of live) {
-    if (!isSyncable(view.record.url) || view.record.savedAt <= floor) continue;
+    if (!isSyncable(view.record.url, limits) || view.record.savedAt <= floor) continue;
     const current = winners.get(view.key);
     if (!current || compareRecords(view.record, current) < 0) winners.set(view.key, view.record);
   }
-  const packed = pack([...winners.values()], tombstones, { floor, budgetFactor: input.budgetFactor });
+  const packed = pack([...winners.values()], tombstones, { floor, budgetFactor: input.budgetFactor, limits });
 
   const known: Record<string, string> = {};
   const sharedKeys = new Set<string>();

@@ -7,6 +7,7 @@ import { saveCapture } from '../repo';
 import { getSettings } from '../settings';
 import { activeFold, getDeviceId, type ActiveFold } from '../state';
 import { broadcast, getNormalWindows, incognitoAllowed, ownOrigin, sleep } from './browserState';
+import { afterFold } from './pro';
 import {
   buildPlan,
   capturedTabs,
@@ -226,6 +227,8 @@ async function runFold({ keepTabId, windowId, keepWindowOpen }: FoldOptions): Pr
     memory: memoryReading(before, after),
   };
   await report({ phase: 'done', closed: closedTabs, waiting: [], finishedAt: Date.now(), outcome: done });
+  // The memory milestone, and a smart name for Pro AI. Never holds up or fails the fold.
+  afterFold(done).catch(() => undefined);
   return done;
 }
 
