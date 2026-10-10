@@ -25,11 +25,15 @@ It also shares a short note of tabs you removed, so they disappear on your other
 
 This goes through your own Chrome sync, the same way Chrome syncs your bookmarks and settings, and only reaches computers where you're signed in to Chrome with the same account. If you aren't signed in to Chrome, or Chrome sync is off, it stays on this computer. Tabfold has no account and can't see any of it.
 
-You can turn it off at any time: in Tabfold's settings ("Sync folded tabs with Chrome"), or in Chrome's own sync settings. Older folded tabs, tab groups, windows, favicons and snapshots are never shared. Nothing else leaves your computer.
+You can turn it off at any time: in Tabfold's settings ("Sync folded tabs with Chrome"), or in Chrome's own sync settings. Older folded tabs, tab groups, windows, favicons and snapshots are never shared, and neither are tabs folded from Incognito windows. Nothing else leaves your computer.
 
 ## Free memory
 
 After you fold tabs, Tabfold reads how much free memory your computer has (Chrome's `system.memory`), to show how much folding freed. This number stays on your computer and is never stored or shared.
+
+## Incognito
+
+Tabfold doesn't touch Incognito windows unless you turn on "Fold Incognito windows too" in its settings and also allow Tabfold in Incognito in Chrome's extension settings. Tabs folded from Incognito are kept on this computer in Tabfold's storage (so they survive closing the Incognito window), never go to Chrome sync, and only ever reopen in an Incognito window. Remove them with × or Clear all data like any other tab.
 
 ## What Tabfold never does
 

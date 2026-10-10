@@ -68,10 +68,12 @@ export interface CaptureOptions {
   windowNames?: Record<number, string>;
   keywordsByTabId?: Record<number, string[]>;
   /**
-   * Only with scope 'window' or 'tabs', after the user confirmed: save that Incognito window or
-   * those Incognito tabs. "Save all" and snapshots never include Incognito.
+   * Include Incognito windows and tabs: a fold with "Fold Incognito windows too" on, or a save the
+   * user confirmed for an Incognito window. Snapshots never include Incognito.
    */
   includeIncognito?: boolean;
+  /** Tabfold pages that must stay open (the page that started the fold). Other Tabfold pages close. */
+  keepTabIds?: number[];
 }
 
 export interface CapturePlan {
@@ -158,7 +160,8 @@ export function planCapture(
       ? options.windowId
       : undefined;
   const explicit = options.scope === 'tabs';
-  const incognito = options.scope !== 'all' && options.includeIncognito === true;
+  const incognito = options.includeIncognito === true;
+  const keep = new Set(options.keepTabIds ?? []);
 
   for (const window of windows) {
     if (!isCapturableWindow(window, incognito)) continue;
@@ -171,17 +174,20 @@ export function planCapture(
       if (wanted && (tab.id === undefined || !wanted.has(tab.id))) continue;
       const url = rawTabUrl(tab);
       const kind = classifyUrl(url, options.ownOrigin);
+      if (!explicit && tab.pinned && options.keepPinnedOpen) {
+        plan.kept.pinned += 1;
+        continue;
+      }
       if (kind === 'own') {
+        // Tabfold's own pages (the welcome tab, the full list) aren't saved, but they close with
+        // everything else, except the page that started the fold.
         plan.skipped.own += 1;
+        if (!explicit && tab.id !== undefined && !keep.has(tab.id)) plan.closeTabIds.push(tab.id);
         continue;
       }
       if (kind === 'blank' && options.skipBlank) {
         plan.skipped.blank += 1;
         if (!explicit && tab.id !== undefined) plan.closeTabIds.push(tab.id);
-        continue;
-      }
-      if (!explicit && tab.pinned && options.keepPinnedOpen) {
-        plan.kept.pinned += 1;
         continue;
       }
       if (!explicit && tab.audible && options.audible === 'keep') {
@@ -210,6 +216,7 @@ export function planCapture(
       state,
       tabs: captured,
       sourceWindowId: window.id,
+      ...(window.incognito ? { incognito: true } : {}),
     });
   }
   return plan;
@@ -237,12 +244,20 @@ export interface DraftMeta {
   /** Skip a tab whose address is already in the session (or earlier in this capture). */
   dedupe: boolean;
   existingUrls?: Iterable<string>;
+  /** Addresses already folded from Incognito. Incognito and normal copies don't count as duplicates of each other. */
+  existingIncognitoUrls?: Iterable<string>;
 }
 
 export interface SkippedTab {
   tab: CapturedTab;
   /** Browser window the tab was in. */
   sourceWindowId?: number;
+  incognito?: boolean;
+}
+
+/** Duplicates are per mode: the same address in Incognito and in a normal window are two tabs. */
+export function modeKey(url: string, incognito: boolean | undefined): string {
+  return `${incognito ? 'incognito ' : ''}${dedupeKey(url)}`;
 }
 
 export interface DraftResult {
@@ -258,7 +273,10 @@ export interface DraftResult {
 
 export function buildDraft(windows: CapturedWindow[], meta: DraftMeta): DraftResult {
   const sessionId = newId();
-  const seen = new Set<string>([...(meta.existingUrls ?? [])].map(dedupeKey));
+  const seen = new Set<string>([
+    ...[...(meta.existingUrls ?? [])].map((url) => modeKey(url, false)),
+    ...[...(meta.existingIncognitoUrls ?? [])].map((url) => modeKey(url, true)),
+  ]);
   const skippedTabs: SkippedTab[] = [];
   const windowRecords: WindowRecord[] = [];
   const tabRecords: TabRecord[] = [];
@@ -269,9 +287,9 @@ export function buildDraft(windows: CapturedWindow[], meta: DraftMeta): DraftRes
     const windowId = newId();
     let order = 0;
     for (const tab of window.tabs) {
-      const key = dedupeKey(tab.url);
+      const key = modeKey(tab.url, window.incognito);
       if (meta.dedupe && seen.has(key)) {
-        skippedTabs.push({ tab, sourceWindowId: window.sourceWindowId });
+        skippedTabs.push({ tab, sourceWindowId: window.sourceWindowId, ...(window.incognito ? { incognito: true } : {}) });
         continue;
       }
       seen.add(key);
@@ -292,6 +310,7 @@ export function buildDraft(windows: CapturedWindow[], meta: DraftMeta): DraftRes
         savedAt: meta.now,
         keywords: tab.keywords,
         urlTruncated: tab.urlTruncated,
+        ...(window.incognito ? { incognito: true as const } : {}),
       });
     }
     if (order === 0) return;
@@ -304,6 +323,7 @@ export function buildDraft(windows: CapturedWindow[], meta: DraftMeta): DraftRes
       wasFocused: window.focused,
       bounds: window.bounds,
       state: window.state,
+      ...(window.incognito ? { incognito: true as const } : {}),
     });
   });
 

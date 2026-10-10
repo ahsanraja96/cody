@@ -43,23 +43,36 @@ export function resetGroupsFlagCache(): void {
   groupsBlocked = undefined;
 }
 
-/** The window the user is working in (popups and devtools windows don't count). */
-export async function currentNormalWindowId(): Promise<number | undefined> {
+/**
+ * The window the user is working in (popups and devtools windows don't count): a normal one, or
+ * with `incognito` an Incognito one. Tabs never cross between the two.
+ */
+export async function currentNormalWindowId(incognito = false): Promise<number | undefined> {
   try {
     const window = await browser.windows.getLastFocused({ windowTypes: ['normal'] });
-    if (window.id !== undefined && !window.incognito) return window.id;
+    if (window.id !== undefined && window.incognito === incognito) return window.id;
   } catch {
     // No window focused yet.
   }
   const all = await browser.windows.getAll({ windowTypes: ['normal'] });
-  return all.find((w) => !w.incognito)?.id;
+  return all.find((w) => w.incognito === incognito)?.id;
 }
 
-export async function windowExists(windowId: number | undefined): Promise<boolean> {
+/** True for an open normal window of that mode (normal by default, Incognito with `incognito`). */
+export async function windowExists(windowId: number | undefined, incognito = false): Promise<boolean> {
   if (windowId === undefined) return false;
   try {
     const window = await browser.windows.get(windowId);
-    return window.type === 'normal' && !window.incognito;
+    return window.type === 'normal' && window.incognito === incognito;
+  } catch {
+    return false;
+  }
+}
+
+/** "Allow in Incognito" is on for Tabfold in chrome://extensions. */
+export async function incognitoAllowed(): Promise<boolean> {
+  try {
+    return await browser.extension.isAllowedIncognitoAccess();
   } catch {
     return false;
   }

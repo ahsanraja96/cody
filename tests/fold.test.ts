@@ -4,13 +4,13 @@ import { resetGroupsFlagCache } from '@/lib/background/browserState';
 import { forgetUnfinishedFold, handleFold } from '@/lib/background/fold';
 import { handleMessage } from '@/lib/background';
 import { createMenus, MENU, onCommand, onMenuClicked } from '@/lib/background/menus';
-import { handleOpenTabs } from '@/lib/background/restore';
+import { handleOpenSavedTab, handleOpenTabs, handleRestore, INCOGNITO_OFF } from '@/lib/background/restore';
 import { route } from '@/lib/background/router';
 import { handleUndo } from '@/lib/background/save';
 import { resetTitleCache } from '@/lib/background/titles';
 import { db } from '@/lib/db';
 import type { FoldOutcome } from '@/lib/messages';
-import { saveCapture } from '@/lib/repo';
+import { getSessionGraph, saveCapture } from '@/lib/repo';
 import { updateSettings } from '@/lib/settings';
 import { activeFold, lastAction, pendingKeywordSave, type ActiveFold } from '@/lib/state';
 import { FakeChrome } from './chrome';
@@ -223,6 +223,140 @@ describe('fold', () => {
     await activeFold.set(done);
     await forgetUnfinishedFold();
     expect(await activeFold.get()).toMatchObject({ foldId: 'y' });
+  });
+});
+
+describe('fold: what stays open', () => {
+  it('closes Tabfold pages without saving them, except the page that started the fold', async () => {
+    const own = (path: string) => `chrome-extension://${fakeBrowser.runtime.id}/${path}`;
+    const { tabIds } = chrome.openWindow([own('library.html'), own('onboarding.html'), 'https://a.com'], { focused: true });
+    const response = await handleMessage({ __tabfold: true, command: { type: 'fold' } }, { id: fakeBrowser.runtime.id, tab: { id: tabIds[0] } });
+    expect(response).toMatchObject({ ok: true, data: { savedTabs: 1 } });
+    expect(chrome.tabs.map((t) => t.url)).toEqual([own('library.html')]);
+    expect(await db.tabs.count()).toBe(1);
+  });
+
+  it('counts tabs in app and pop-up windows, and Incognito tabs while folding them is off', async () => {
+    chrome.openWindow(['https://a.com'], { focused: true });
+    chrome.openWindow(['https://meet.example.com'], { type: 'popup' });
+    chrome.openWindow(['https://private.com', 'https://private.com/2'], { incognito: true });
+    const outcome = await handleFold();
+    expect(outcome.stayedOpen).toEqual({ pinned: 0, audible: 0, apps: 1, incognito: 2 });
+    expect(chrome.webTabs().map((t) => t.url).sort()).toEqual(['https://meet.example.com', 'https://private.com', 'https://private.com/2']);
+  });
+});
+
+describe('fold: Incognito windows', () => {
+  async function foldBoth() {
+    await updateSettings({ foldIncognito: true });
+    chrome.openWindow(['https://a.com', 'https://both.com'], { focused: true });
+    const secret = chrome.openWindow(['https://private.com', 'https://both.com'], { incognito: true });
+    const outcome = await handleFold();
+    return { outcome, secret };
+  }
+
+  it('stay open while the setting is off, and without "Allow in Incognito" even when it is on', async () => {
+    chrome.openWindow(['https://a.com'], { focused: true });
+    chrome.openWindow(['https://private.com'], { incognito: true });
+    await handleFold();
+    expect(chrome.webTabs().map((t) => t.url)).toEqual(['https://private.com']);
+
+    await updateSettings({ foldIncognito: true });
+    chrome.incognitoAccess = false;
+    chrome.openWindow(['https://b.com'], { focused: true });
+    await handleFold();
+    expect(chrome.webTabs().map((t) => t.url)).toEqual(['https://private.com']);
+    expect(await db.tabs.where('url').equals('https://private.com').count()).toBe(0);
+  });
+
+  it('with the setting on, folds them marked as Incognito; the same address in both modes is two tabs', async () => {
+    const { outcome } = await foldBoth();
+    expect(outcome).toMatchObject({ savedTabs: 4, skippedDuplicates: 0, closedTabs: 4 });
+    expect(outcome.stayedOpen.incognito).toBe(0);
+    expect(chrome.webTabs()).toHaveLength(0);
+    const tabs = await db.tabs.toArray();
+    expect(tabs.map((t) => [t.url, !!t.incognito]).sort()).toEqual([
+      ['https://a.com', false],
+      ['https://both.com', false],
+      ['https://both.com', true],
+      ['https://private.com', true],
+    ]);
+    const windows = await db.windows.toArray();
+    expect(windows.map((w) => !!w.incognito).sort()).toEqual([false, true]);
+
+    // Folding the same Incognito address again is a duplicate in Incognito only.
+    chrome.openWindow(['https://private.com', 'https://a.com/x'], { incognito: true });
+    const again = await handleFold();
+    expect(again).toMatchObject({ savedTabs: 1, skippedDuplicates: 1 });
+  });
+
+  it('a tab folded from Incognito opens only in Incognito: an open Incognito window, a new one, or not at all', async () => {
+    await foldBoth();
+    const row = (await db.tabs.toArray()).find((t) => t.url === 'https://private.com')!;
+    const normal = chrome.openWindow(['https://other.com'], { focused: true });
+
+    // No Incognito window open: a new Incognito window with the tab.
+    expect(await handleOpenSavedTab(row.id, true, normal.windowId)).toEqual({ opened: true });
+    const created = chrome.windows.at(-1)!;
+    expect(created.incognito).toBe(true);
+    expect(chrome.tabs.filter((t) => t.windowId === created.id).map((t) => t.url)).toEqual(['https://private.com']);
+
+    // An Incognito window is open: it goes there.
+    expect(await handleOpenSavedTab(row.id, false, normal.windowId)).toEqual({ opened: true });
+    expect(chrome.tabs.filter((t) => t.url === 'https://private.com').every((t) => t.incognito)).toBe(true);
+    expect(chrome.createdWindows.filter((d) => !d?.incognito)).toHaveLength(0);
+
+    // Without "Allow in Incognito" it doesn't open at all, and says why.
+    chrome.incognitoAccess = false;
+    expect(await handleOpenSavedTab(row.id, true, normal.windowId)).toEqual({ opened: false, reason: INCOGNITO_OFF });
+    expect(chrome.tabs.filter((t) => t.url === 'https://private.com' && !t.incognito)).toHaveLength(0);
+  });
+
+  it('"Open all" splits a group: normal tabs here, Incognito tabs in an Incognito window', async () => {
+    await foldBoth();
+    const here = chrome.openWindow(['https://other.com'], { focused: true });
+    const rows = await db.tabs.toArray();
+    const result = await handleOpenTabs({ type: 'open-tabs', tabRecordIds: rows.map((r) => r.id), asGroup: { name: 'Other', color: 'grey' }, windowId: here.windowId });
+    expect(result.opened).toBe(4);
+    const opened = chrome.tabs.filter((t) => t.url !== 'https://other.com' && t.url !== 'chrome://newtab/');
+    for (const tab of opened) {
+      const incognito = rows.find((r) => r.url === tab.url && !!r.incognito === tab.incognito);
+      expect(incognito, tab.url).toBeDefined();
+      expect(chrome.windows.find((w) => w.id === tab.windowId)!.incognito).toBe(tab.incognito);
+    }
+    expect(opened.filter((t) => t.incognito).map((t) => t.url).sort()).toEqual(['https://both.com', 'https://private.com']);
+    expect(opened.filter((t) => !t.incognito).every((t) => t.windowId === here.windowId)).toBe(true);
+  });
+
+  it('"Reopen" brings an Incognito window back as an Incognito window; without access it says so', async () => {
+    const { outcome } = await foldBoth();
+    const result = await handleRestore({ type: 'restore', sessionId: outcome.sessionId!, mode: 'original' });
+    expect(result.failed).toEqual([]);
+    const created = chrome.createdWindows;
+    expect(created.map((d) => !!d?.incognito).sort()).toEqual([false, true]);
+    expect(chrome.tabs.filter((t) => t.url === 'https://private.com').every((t) => t.incognito)).toBe(true);
+
+    chrome.incognitoAccess = false;
+    const blocked = await handleRestore({ type: 'restore', sessionId: outcome.sessionId!, mode: 'original', force: true });
+    expect(blocked.failed.map((f) => [f.url, f.reason]).sort()).toEqual([
+      ['https://both.com', 'incognito'],
+      ['https://private.com', 'incognito'],
+    ]);
+  });
+
+  it('undo puts Incognito tabs back in Incognito and normal tabs in a normal window', async () => {
+    const { outcome } = await foldBoth();
+    expect(await handleUndo(outcome.actionId!)).toEqual({ undone: true });
+    const back = chrome.webTabs();
+    expect(back.map((t) => [t.url, t.incognito]).sort()).toEqual([
+      ['https://a.com', false],
+      ['https://both.com', false],
+      ['https://both.com', true],
+      ['https://private.com', true],
+    ]);
+    for (const tab of back) expect(chrome.windows.find((w) => w.id === tab.windowId)!.incognito).toBe(tab.incognito);
+    expect(await db.tabs.count()).toBe(0);
+    expect((await getSessionGraph(outcome.sessionId!))?.session.deletedAt ?? 1).toBeGreaterThan(0);
   });
 });
 

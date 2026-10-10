@@ -21,6 +21,7 @@ export async function loadSavedDocs(database: TabfoldDB): Promise<SearchDoc[]> {
       sessionName: session.name,
       savedAt: tab.savedAt,
       deleted: session.deletedAt > 0,
+      ...(tab.incognito ? { incognito: true } : {}),
     });
   });
   return docs;

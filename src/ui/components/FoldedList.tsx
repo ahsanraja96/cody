@@ -4,6 +4,7 @@ import { groupByCategory, type Category, type CategoryGroup } from '@/lib/catego
 import { putBackTabs, removeTabsWithSnapshot, type RemovedTabs } from '@/lib/repo';
 import type { TabRecord } from '@/lib/types';
 import { displayHost } from '@/lib/urls';
+import { IncognitoMark } from './IncognitoMark';
 import { cx } from '../cx';
 import { Favicon } from './Favicon';
 import './FoldedList.css';
@@ -339,7 +340,7 @@ const FoldedRow = memo(function FoldedRow({
       </span>
       <button
         type="button"
-        aria-label={`Open ${title} (stays in the list)`}
+        aria-label={`Open ${title}${tab.incognito ? ' in Incognito' : ''} (stays in the list)`}
         onClick={(e) => onOpen(tab, e.metaKey || e.ctrlKey || e.shiftKey)}
         onAuxClick={(e) => {
           if (e.button === 1) onOpen(tab, true);
@@ -347,8 +348,11 @@ const FoldedRow = memo(function FoldedRow({
         className="flex h-full min-w-0 flex-1 items-center gap-2.5 rounded-control text-left"
       >
         <Favicon url={tab.url} size={16} />
-        <span dir="auto" className="min-w-0 flex-1 truncate">
-          {title}
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          <span dir="auto" className="min-w-0 truncate">
+            {title}
+          </span>
+          {tab.incognito && <IncognitoMark size={13} />}
         </span>
         <span className="max-w-[45%] flex-none truncate text-meta text-text-3">{siteName(tab.url)}</span>
       </button>

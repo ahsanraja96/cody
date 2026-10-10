@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { browser } from 'wxt/browser';
-import { ChevronDown, Download, Trash, Upload, X } from 'lucide-react';
+import { ChevronDown, Download, TriangleAlert, Trash, Upload, X } from 'lucide-react';
 import type { SyncStatus } from '@/lib/state';
 import { Kbd } from '@/ui/components/Chips';
 import { Segmented, Switch } from '@/ui/components/Controls';
 import { confirmAction } from '@/ui/components/Dialog';
 import { toast } from '@/ui/components/Toast';
 import { cx } from '@/ui/cx';
-import { useSettings } from '@/ui/hooks';
+import { useIncognitoAccess, useSettings } from '@/ui/hooks';
 import { clearEverything, errorText, exportAll } from './actions';
 import { count } from './format';
 import { SyncLine } from './SyncLine';
@@ -67,6 +67,45 @@ function SettingRow({
   );
 }
 
+/** Opens Tabfold's page in chrome://extensions, where "Allow in Incognito" is. */
+function openExtensionDetails() {
+  void browser.tabs.create({ url: `chrome://extensions/?id=${browser.runtime.id}` }).catch(() => undefined);
+}
+
+/**
+ * Chrome hides Incognito windows from extensions until "Allow in Incognito" is on. With the switch
+ * on, this is a warning (folds still skip Incognito); with it off, a hint.
+ */
+function IncognitoHelp({ warn }: { warn: boolean }) {
+  const link = (
+    <a
+      href={`chrome://extensions/?id=${browser.runtime.id}`}
+      onClick={(e) => {
+        e.preventDefault();
+        openExtensionDetails();
+      }}
+      className="font-semibold text-accent-text no-underline hover:underline"
+    >
+      Open Tabfold’s details
+    </a>
+  );
+  if (!warn) {
+    return (
+      <div className="mt-1">
+        Also needs “Allow in Incognito” for Tabfold in Chrome. {link}
+      </div>
+    );
+  }
+  return (
+    <div role="status" className="mt-2.5 flex items-start gap-2 rounded-control border border-amber-line bg-amber-soft px-3 py-2 text-text-2">
+      <TriangleAlert size={14} strokeWidth={1.75} aria-hidden className="mt-[3px] shrink-0 text-amber" />
+      <div>
+        Chrome hasn’t let Tabfold into Incognito yet, so folds still skip it. Turn on “Allow in Incognito” in Tabfold’s details. {link}
+      </div>
+    </div>
+  );
+}
+
 const SECONDARY =
   'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control border border-border-strong bg-surface px-3.5 text-text hover:bg-hover';
 
@@ -92,6 +131,7 @@ export function SettingsDialog({
   const ref = useRef<HTMLDialogElement>(null);
   const [settings, update] = useSettings();
   const shortcut = useFoldShortcut();
+  const incognitoAccess = useIncognitoAccess();
   const [clearing, setClearing] = useState(false);
 
   useEffect(() => {
@@ -217,6 +257,18 @@ export function SettingsDialog({
                 </>
               }
               control={<Switch checked={settings.syncWithChrome} onChange={(v) => update({ syncWithChrome: v })} label="Sync folded tabs with Chrome" />}
+            />
+            <SettingRow
+              title="Fold Incognito windows too"
+              description={
+                <>
+                  Their tabs stay on this computer, never go to Chrome sync, and reopen only in Incognito.
+                  {incognitoAccess === false && (
+                    <IncognitoHelp warn={settings.foldIncognito} />
+                  )}
+                </>
+              }
+              control={<Switch checked={settings.foldIncognito} onChange={(v) => update({ foldIncognito: v })} label="Fold Incognito windows too" />}
             />
             <SettingRow
               center

@@ -3,7 +3,7 @@ import type { TabRecord } from '@/lib/types';
 import { ConfirmHost } from '@/ui/components/Dialog';
 import { ToastViewport } from '@/ui/components/Toast';
 import { ImportDialog } from '@/ui/ImportPanel';
-import { useActiveFold, useFoldedTabs, useOpenWindows, useSettings, useSyncStatus } from '@/ui/hooks';
+import { useActiveFold, useFoldedTabs, useFoldWindows, useSettings, useSyncStatus } from '@/ui/hooks';
 import { EmptyState } from './EmptyState';
 import { startFold, useFoldCandidates, useFoldToast } from './fold';
 import { count } from './format';
@@ -39,7 +39,7 @@ export function LibraryApp() {
   const folded = useFoldedTabs();
   const fold = useActiveFold();
   const syncStatus = useSyncStatus();
-  const { windows } = useOpenWindows();
+  const { windows } = useFoldWindows();
   const candidates = useFoldCandidates(windows, settings.keepPinnedOpen);
   const shortcut = useFoldShortcut();
   const hasRemovals = useRemovals((s) => s.removals.size > 0);
@@ -151,7 +151,7 @@ export function LibraryApp() {
               <EmptyState onImport={openImport} foldable={candidates.tabs} />
             ) : (
               <>
-                <RecentFolds folds={recent} />
+                <RecentFolds folds={recent} tabs={tabs} />
                 {folded && (
                   <div className={recent.length ? 'mt-7 mb-1 flex items-baseline gap-2.5 px-0.5' : 'mb-1 flex items-baseline gap-2.5 px-0.5'}>
                     <h1 className="m-0 text-page leading-[1.45] font-semibold">Folded</h1>

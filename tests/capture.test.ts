@@ -40,13 +40,21 @@ describe('planCapture', () => {
     expect(planCapture([win(1, [music])], new Map(), { ...base, audible: 'close' }).closeTabIds).toContain(music.id);
   });
 
-  it('skips blank pages (closing them) and never touches its own pages', () => {
+  it('skips blank pages and its own pages (closing them, but never the page that asked)', () => {
     const blank = tab('chrome://newtab/');
     const own = tab(`${OWN}library.html`);
-    const plan = planCapture([win(1, [blank, own, tab('https://a.com')])], new Map(), base);
-    expect(plan.skipped).toEqual({ blank: 1, own: 1 });
+    const welcome = tab(`${OWN}onboarding.html`);
+    const plan = planCapture([win(1, [blank, own, welcome, tab('https://a.com')])], new Map(), { ...base, keepTabIds: [own.id!] });
+    expect(plan.skipped).toEqual({ blank: 1, own: 2 });
+    expect(plan.windows[0]!.tabs.map((t) => t.url)).toEqual(['https://a.com']);
     expect(plan.closeTabIds).toContain(blank.id);
+    expect(plan.closeTabIds).toContain(welcome.id);
     expect(plan.closeTabIds).not.toContain(own.id);
+    // A pinned Tabfold page is a pinned tab: it stays.
+    const pinnedOwn = tab(`${OWN}library.html`, { pinned: true });
+    const pinnedPlan = planCapture([win(1, [pinnedOwn, tab('https://a.com')])], new Map(), base);
+    expect(pinnedPlan.closeTabIds).not.toContain(pinnedOwn.id);
+    expect(pinnedPlan.kept.pinned).toBe(1);
   });
 
   it('ignores incognito and non-normal windows', () => {
@@ -105,13 +113,19 @@ describe('planCapture', () => {
     expect(isPlaceholderTitle('A page', 'https://a.com/x')).toBe(false);
   });
 
-  it('saves an Incognito window only for scope "window" or "tabs" with includeIncognito', () => {
+  it('captures Incognito windows only with includeIncognito, and marks them', () => {
     const secret = tab('https://secret.com', { incognito: true });
     const windows = [win(1, [tab('https://ok.com')]), win(2, [secret], { incognito: true })];
     expect(planCapture(windows, new Map(), { ...base, scope: 'window', windowId: 2 }).windows).toHaveLength(0);
     expect(planCapture(windows, new Map(), { ...base, scope: 'window', windowId: 2, includeIncognito: true }).windows[0]!.tabs[0]!.url).toBe('https://secret.com');
     expect(planCapture(windows, new Map(), { ...base, scope: 'tabs', tabIds: [secret.id!], includeIncognito: true }).closeTabIds).toEqual([secret.id]);
-    expect(planCapture(windows, new Map(), { ...base, includeIncognito: true }).windows).toHaveLength(1);
+    expect(planCapture(windows, new Map(), base).windows).toHaveLength(1);
+    // A fold with "Fold Incognito windows too" on.
+    const all = planCapture(windows, new Map(), { ...base, includeIncognito: true }).windows;
+    expect(all.map((w) => [w.tabs[0]!.url, !!w.incognito])).toEqual([
+      ['https://ok.com', false],
+      ['https://secret.com', true],
+    ]);
   });
 
   it('unknown group colours become grey', () => {

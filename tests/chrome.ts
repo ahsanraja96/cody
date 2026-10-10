@@ -55,6 +55,8 @@ export class FakeChrome {
   mutedLog: Array<{ id: number; muted: boolean; status: string; discarded: boolean }> = [];
   discardLog: Array<{ id: number; status: string }> = [];
   fileAccess = false;
+  /** "Allow in Incognito" for the extension. */
+  incognitoAccess = true;
   groupsBlocked = false;
   groups: Array<{ id: number; title: string; color: string; collapsed: boolean; windowId: number }> = [];
   /** Messages the worker broadcast to pages. */
@@ -154,9 +156,13 @@ export class FakeChrome {
 
   install(): this {
     const b = fakeBrowser;
-    vi.spyOn(b.windows, 'getAll').mockImplementation((async (info?: { populate?: boolean }) => {
+    vi.spyOn(b.windows, 'getAll').mockImplementation((async (info?: { populate?: boolean; windowTypes?: string[] }) => {
       await this.beforeWindowsRead?.();
-      return this.windows.map((w) => this.windowView(w, info?.populate));
+      return this.windows
+        .filter((w) => !info?.windowTypes || info.windowTypes.includes(w.type))
+        // Without "Allow in Incognito", Chrome doesn't show extensions Incognito windows at all.
+        .filter((w) => this.incognitoAccess || !w.incognito)
+        .map((w) => this.windowView(w, info?.populate));
     }) as never);
     vi.spyOn(b.windows, 'get').mockImplementation((async (id: number, info?: { populate?: boolean }) => {
       const window = this.windows.find((w) => w.id === id);
@@ -170,10 +176,12 @@ export class FakeChrome {
     }) as never);
     vi.spyOn(b.windows, 'create').mockImplementation((async (data?: Browser.windows.CreateData) => {
       this.createdWindows.push(data);
-      const { windowId } = this.openWindow([{ url: 'chrome://newtab/', title: 'New Tab', active: true }], {
-        focused: !!data?.focused,
-        incognito: !!data?.incognito,
-      });
+      if (data?.incognito && !this.incognitoAccess) throw new Error('Extension does not have permission for incognito mode.');
+      const urls = data?.url === undefined ? ['chrome://newtab/'] : Array.isArray(data.url) ? data.url : [data.url];
+      const { windowId } = this.openWindow(
+        urls.map((url, i) => ({ url, title: url === 'chrome://newtab/' ? 'New Tab' : `Title of ${url}`, active: i === 0 })),
+        { focused: !!data?.focused, incognito: !!data?.incognito },
+      );
       return this.windowView(this.windows.find((w) => w.id === windowId)!, true);
     }) as never);
     vi.spyOn(b.windows, 'update').mockImplementation((async (id: number, info: Browser.windows.UpdateInfo) => {
@@ -261,6 +269,7 @@ export class FakeChrome {
       return group;
     }) as never);
     vi.spyOn(b.extension, 'isAllowedFileSchemeAccess').mockImplementation((async () => this.fileAccess) as never);
+    vi.spyOn(b.extension, 'isAllowedIncognitoAccess').mockImplementation((async () => this.incognitoAccess) as never);
     vi.spyOn(b.runtime, 'sendMessage').mockImplementation((async (message: { __tabfoldEvent?: boolean; event?: { type: string } }) => {
       if (message?.__tabfoldEvent && message.event) this.broadcasts.push(message.event as FakeChrome['broadcasts'][number]);
       return undefined;

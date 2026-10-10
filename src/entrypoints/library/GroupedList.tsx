@@ -5,6 +5,7 @@ import { groupByCategory, type CategoryGroup, type CategoryId } from '@/lib/cate
 import type { TabRecord } from '@/lib/types';
 import { displayHost } from '@/lib/urls';
 import { Favicon } from '@/ui/components/Favicon';
+import { IncognitoMark } from '@/ui/components/IncognitoMark';
 import { cx } from '@/ui/cx';
 import { modKey, useNow } from '@/ui/hooks';
 import { openFolded, openGroup, removeGroup, removeOne, undoRemoval, useRemovals, type Removal } from './actions';
@@ -318,7 +319,7 @@ const Row = memo(function Row({ tab, now }: { tab: TabRecord; now: number }) {
       <span className="w-4 shrink-0" />
       <button
         type="button"
-        aria-label={`Open ${title} (stays in the list)`}
+        aria-label={`Open ${title}${tab.incognito ? ' in Incognito' : ''} (stays in the list)`}
         title={tab.url}
         onClick={(e) => void openFolded(tab, !(e.metaKey || e.ctrlKey))}
         onKeyDown={(e) => {
@@ -330,8 +331,11 @@ const Row = memo(function Row({ tab, now }: { tab: TabRecord; now: number }) {
         className="flex h-full min-w-0 flex-1 items-center gap-3 text-left focus-visible:outline-offset-0"
       >
         <Favicon url={tab.url} size={16} />
-        <span dir="auto" className="min-w-0 flex-1 truncate">
-          {title}
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          <span dir="auto" className="min-w-0 truncate">
+            {title}
+          </span>
+          {tab.incognito && <IncognitoMark />}
         </span>
         <span className="w-[180px] shrink-0 truncate text-small text-text-2 max-[720px]:hidden">{displayHost(tab.url)}</span>
       </button>

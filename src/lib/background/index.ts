@@ -81,11 +81,11 @@ function ensureStartup(): Promise<void> {
  */
 export function handleMessage(
   message: unknown,
-  sender: { id?: string },
+  sender: { id?: string; tab?: { id?: number } },
 ): Promise<CommandResponse<unknown>> | undefined {
   if (sender.id !== browser.runtime.id) return undefined;
   if (!message || typeof message !== 'object' || !(message as { __tabfold?: boolean }).__tabfold) return undefined;
-  return route((message as { command: Command }).command);
+  return route((message as { command: Command }).command, { tabId: sender.tab?.id });
 }
 
 export function setupBackground(): void {

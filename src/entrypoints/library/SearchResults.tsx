@@ -5,6 +5,7 @@ import { send } from '@/lib/messages';
 import type { SearchHit } from '@/lib/search/engine';
 import { displayHost } from '@/lib/urls';
 import { Favicon } from '@/ui/components/Favicon';
+import { IncognitoMark } from '@/ui/components/IncognitoMark';
 import { Highlight } from '@/ui/components/Highlight';
 import { toast } from '@/ui/components/Toast';
 import { cx } from '@/ui/cx';
@@ -221,6 +222,7 @@ function Result({
         <span dir="auto" className="min-w-0 truncate" title={doc.title}>
           <Highlight text={doc.title || doc.url} terms={hit.terms} />
         </span>
+        {doc.incognito && <IncognitoMark />}
         {hit.matchedKeywords.slice(0, 3).map((keyword) => (
           <span
             key={keyword}

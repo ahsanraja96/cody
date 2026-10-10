@@ -151,11 +151,16 @@ export interface OpenWindow {
  * Open normal windows with their tabs, kept fresh from tab and window events (batched, so a page
  * load's many update events cause one refresh). Closing a window while the popup is open is fine.
  */
-export function useOpenWindows(options: { includeIncognito?: boolean } = {}): { windows: OpenWindow[]; loaded: boolean } {
+export function useOpenWindows(
+  options: { includeIncognito?: boolean; paused?: boolean } = {},
+): { windows: OpenWindow[]; loaded: boolean } {
   const includeIncognito = options.includeIncognito ?? false;
+  // Paused until the caller knows whether to include Incognito, so the counts don't jump.
+  const paused = options.paused ?? false;
   const [windows, setWindows] = useState<OpenWindow[]>([]);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
+    if (paused) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = async () => {
@@ -216,8 +221,38 @@ export function useOpenWindows(options: { includeIncognito?: boolean } = {}): { 
       browser.tabs.onUpdated.removeListener(onUpdated);
       stopNames();
     };
-  }, [includeIncognito]);
+  }, [includeIncognito, paused]);
   return { windows, loaded };
+}
+
+/**
+ * The open windows a fold covers: Incognito ones too while "Fold Incognito windows too" is on and
+ * Chrome allows Tabfold in Incognito.
+ */
+export function useFoldWindows(): { windows: OpenWindow[]; loaded: boolean } {
+  const [settings, , settingsLoaded] = useSettings();
+  const access = useIncognitoAccess();
+  return useOpenWindows({
+    includeIncognito: settings.foldIncognito && access === true,
+    paused: !settingsLoaded || (settings.foldIncognito && access === undefined),
+  });
+}
+
+/** "Allow in Incognito" is on for Tabfold in chrome://extensions (undefined until known). */
+export function useIncognitoAccess(): boolean | undefined {
+  const [allowed, setAllowed] = useState<boolean>();
+  useEffect(() => {
+    const check = () =>
+      browser.extension
+        .isAllowedIncognitoAccess()
+        .then(setAllowed)
+        .catch(() => setAllowed(false));
+    void check();
+    // Turned on in Chrome's extension settings: picked up when the person comes back.
+    window.addEventListener('focus', check);
+    return () => window.removeEventListener('focus', check);
+  }, []);
+  return allowed;
 }
 
 export function openDocsFrom(windows: OpenWindow[]): SearchDoc[] {

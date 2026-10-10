@@ -412,6 +412,22 @@ describe('sync between two computers', () => {
     expect(await a.urls()).toEqual(['https://a.com', 'https://b.com', 'https://c.com']);
   });
 
+  it('never shares tabs folded from Incognito, and they stay here when the other computer has the same address', async () => {
+    clock += 2000;
+    const secret = { ...capturedWindow(['https://private.com', 'https://both.com']), incognito: true };
+    await saveCapture([capturedWindow(['https://a.com']), secret], { source: 'save-all', deviceId: 'device-a', now: clock }, { dedupe: true }, a.db);
+    expect(await a.sync()).toMatchObject({ wrote: true, status: { state: 'synced', syncedTabs: 1, localOnly: 0 } });
+    expect(JSON.stringify(await area.getAll())).toContain('a.com');
+    expect(JSON.stringify(await area.getAll())).not.toContain('private.com');
+
+    await b.fold(['https://both.com']);
+    await settle(a, b);
+    expect(await b.urls()).toEqual(['https://a.com', 'https://both.com']);
+    const both = (await a.tabs()).filter((t) => t.url === 'https://both.com');
+    expect(both.map((t) => !!t.incognito).sort()).toEqual([false, true]);
+    expect(JSON.stringify(await area.getAll())).not.toContain('private.com');
+  });
+
   it('removals travel both ways, including at the same time', async () => {
     await a.fold(['https://a.com', 'https://b.com', 'https://c.com', 'https://d.com']);
     await a.sync();

@@ -11,7 +11,7 @@ import { Logo } from '@/ui/components/Logo';
 import { cx } from '@/ui/cx';
 import {
   useFoldedTabs,
-  useOpenWindows,
+  useFoldWindows,
   useRecoveryOffer,
   useSettings,
   useSyncStatus,
@@ -22,7 +22,7 @@ import {
 import { FirstRun } from './FirstRun';
 import { Hero } from './Hero';
 import { KeywordFold } from './KeywordFold';
-import { CrashLine, PopupFooter, SectionLabel } from './parts';
+import { CrashLine, OpenProblem, PopupFooter, SectionLabel } from './parts';
 import { useFold, useFoldShortcut, useOpenTabStats } from './popupHooks';
 import { openDocs, RESULTS_ID, SearchResults, type SearchNav } from './SearchResults';
 import { UpdateDialog } from './UpdateDialog';
@@ -40,7 +40,8 @@ export function PopupApp() {
   // small window is only ever opened for keywords, so it waits for the request instead.
   const [view, setView] = useState<View>({ kind: asWindow ? 'loading' : 'home' });
   const [currentWindowId, setCurrentWindowId] = useState<number>();
-  const { windows, loaded } = useOpenWindows();
+  // With "Fold Incognito windows too" on (and allowed), Incognito tabs count as tabs to fold.
+  const { windows, loaded } = useFoldWindows();
   const update = useUpdateReady();
 
   useEffect(() => {
@@ -118,13 +119,17 @@ function Home({ windows, loaded, currentWindowId }: { windows: OpenWindow[]; loa
     return () => document.removeEventListener('keydown', onKey);
   }, [removal]);
 
+  // Why the last open didn't work (the popup stays open to say so).
+  const [problem, setProblem] = useState<string | null>(null);
   const onOpen = useCallback(
     (tab: TabRecord, background: boolean) => {
+      setProblem(null);
       void send({ type: 'open-saved-tab', tabRecordId: tab.id, active: !background, windowId: currentWindowId })
-        .catch(() => undefined)
-        .then(() => {
-          if (!background) window.close();
-        });
+        .then((result) => {
+          if (!result.opened) setProblem(result.reason ?? 'Chrome wouldn’t open this page.');
+          else if (!background) window.close();
+        })
+        .catch(() => undefined);
     },
     [currentWindowId],
   );
@@ -136,8 +141,11 @@ function Home({ windows, loaded, currentWindowId }: { windows: OpenWindow[]; loa
         asGroup: { name: group.category.name, color: group.category.color },
         windowId: currentWindowId,
       })
-        .catch(() => undefined)
-        .then(() => window.close());
+        .then((result) => {
+          if (result.reason) setProblem(result.reason);
+          else window.close();
+        })
+        .catch(() => undefined);
     },
     [currentWindowId],
   );
@@ -217,8 +225,10 @@ function Home({ windows, loaded, currentWindowId }: { windows: OpenWindow[]; loa
         </button>
       </header>
 
+      {problem && <OpenProblem text={problem} onDismiss={() => setProblem(null)} />}
       {searching ? (
         <SearchResults
+          onProblem={setProblem}
           query={query}
           result={result}
           openCount={docs.length}

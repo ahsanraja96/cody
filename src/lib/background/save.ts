@@ -40,10 +40,16 @@ type BrowserTab = Browser.tabs.Tab;
  */
 export const saveQueue = singleFlight<SaveOutcome>(800);
 
+/** A save covers Incognito only for one window or picked tabs the user confirmed; folds have their own setting. */
+function savesIncognito(command: Pick<SaveCommand, 'scope' | 'includeIncognito'>): boolean {
+  return command.scope !== 'all' && command.includeIncognito === true;
+}
+
 export async function buildPlan(
   windows: Browser.windows.Window[],
   command: Pick<SaveCommand, 'scope' | 'windowId' | 'tabIds' | 'audible' | 'keywordsByTabId' | 'includeIncognito'>,
   settings: Settings,
+  keepTabIds?: number[],
 ): Promise<CapturePlan> {
   const [groups, names] = await Promise.all([getGroups(), windowNames.get()]);
   const windowId = command.windowId ?? (await currentNormalWindowId());
@@ -59,6 +65,7 @@ export async function buildPlan(
     windowNames: names,
     keywordsByTabId: command.keywordsByTabId,
     includeIncognito: command.includeIncognito,
+    keepTabIds,
   });
 }
 
@@ -80,7 +87,7 @@ export function capturedTabs(plan: CapturePlan): CapturedTab[] {
 
 export async function preflightSave(command: PreflightCommand): Promise<PreflightResult> {
   const [windows, settings] = await Promise.all([getNormalWindows(), getSettings()]);
-  const plan = await buildPlan(windows, { ...command, audible: 'close' }, settings);
+  const plan = await buildPlan(windows, { ...command, audible: 'close', includeIncognito: savesIncognito(command) }, settings);
   const byId = tabsById(windows);
   const saving = capturedTabs(plan).filter((t) => t.sourceTabId !== undefined && byId.has(t.sourceTabId));
   const browserTab = (t: CapturedTab) => byId.get(t.sourceTabId!)!;
@@ -246,13 +253,18 @@ export async function recordUndo(input: {
   freedBytes: number;
   /** Browser tabs that never closed. */
   stillOpen: Set<number>;
-  incognito: boolean;
 }): Promise<string | null> {
   const { result, plan, close, stillOpen } = input;
   const reopenOnly: NonNullable<LastAction['reopenOnly']> = close
     ? result.skippedTabs
         .filter((s) => s.tab.sourceTabId === undefined || !stillOpen.has(s.tab.sourceTabId))
-        .map((s) => ({ url: s.tab.url, title: s.tab.title, pinned: s.tab.pinned, sourceWindowId: s.sourceWindowId }))
+        .map((s) => ({
+          url: s.tab.url,
+          title: s.tab.title,
+          pinned: s.tab.pinned,
+          sourceWindowId: s.sourceWindowId,
+          ...(s.incognito ? { incognito: true as const } : {}),
+        }))
     : [];
   if (result.savedTabIds.length === 0 && reopenOnly.length === 0) return null;
   const actionId = crypto.randomUUID();
@@ -275,7 +287,6 @@ export async function recordUndo(input: {
     closed: close,
     ...(reopenOnly.length ? { reopenOnly } : {}),
     ...(notClosedTabIds.length ? { notClosedTabIds } : {}),
-    ...(input.incognito ? { incognito: true } : {}),
   };
   await lastAction.set(action);
   return actionId;
@@ -286,7 +297,7 @@ export function handleSave(command: SaveCommand): Promise<SaveOutcome> {
     const settings = await getSettings();
     const duplicates = duplicatesMode(command, settings);
     const windows = await getNormalWindows();
-    const plan = await buildPlan(windows, command, settings);
+    const plan = await buildPlan(windows, { ...command, includeIncognito: savesIncognito(command) }, settings);
     const empty: SaveOutcome = {
       sessionId: null,
       sessionName: '',
@@ -302,8 +313,6 @@ export function handleSave(command: SaveCommand): Promise<SaveOutcome> {
       newTabsLeftOpen: 0,
     };
     if (plan.windows.length === 0) return empty;
-    const incognitoIds = new Set(windows.filter((w) => w.incognito).map((w) => w.id));
-    const savedFromIncognito = !!command.includeIncognito && plan.windows.some((w) => incognitoIds.has(w.sourceWindowId));
 
     if (command.close && command.scope !== 'tabs') {
       await takeSnapshot('before-bulk-close').catch((error) => console.warn('[tabfold] safety snapshot failed', error));
@@ -360,7 +369,7 @@ export function handleSave(command: SaveCommand): Promise<SaveOutcome> {
       failedToClose = outcome.failed.map((t) => refusedRef(t, byId));
     }
 
-    const actionId = await recordUndo({ result, plan, now, close: command.close, closedTabs, freedBytes, stillOpen, incognito: savedFromIncognito });
+    const actionId = await recordUndo({ result, plan, now, close: command.close, closedTabs, freedBytes, stillOpen });
 
     return {
       sessionId: result.sessionId || null,
@@ -392,16 +401,16 @@ export async function handleUndo(actionId: string): Promise<{ undone: boolean; r
   if (Date.now() > action.expiresAt + 2000) return { undone: false, reason: 'Undo is no longer available.' };
   await lastAction.set({ ...action, undone: true });
 
-  if (action.closed && action.incognito) {
-    await reopenInIncognito(action);
-  } else if (action.closed) {
+  if (action.closed) {
     // Tabs that refused to close are still open: don't open a second copy.
     const stillOpen = new Set(action.notClosedTabIds ?? []);
     const rows = (await db.tabs.bulkGet(action.savedTabIds)).filter((t): t is TabRecord => !!t && !stillOpen.has(t.id));
     // Skipped duplicates go back to the window they came from, after the saved tabs of that window.
     const extraBySource = new Map<number | undefined, RestoreTab[]>();
+    const incognitoSources = new Set<number | undefined>();
     for (const item of action.reopenOnly ?? []) {
       extraBySource.set(item.sourceWindowId, [...(extraBySource.get(item.sourceWindowId) ?? []), reopenTab(item)]);
+      if (item.incognito) incognitoSources.add(item.sourceWindowId);
     }
     const byWindow = new Map<string, TabRecord[]>();
     for (const row of rows) byWindow.set(row.windowId, [...(byWindow.get(row.windowId) ?? []), row]);
@@ -413,18 +422,22 @@ export async function handleUndo(actionId: string): Promise<{ undone: boolean; r
       const source = action.windowSources[windowId];
       const extra = source !== undefined ? (extraBySource.get(source) ?? []) : [];
       if (source !== undefined) extraBySource.delete(source);
-      targets.push((await windowExists(source)) ? source : undefined);
+      // An Incognito window comes back as an Incognito window, never a normal one.
+      const incognito = record?.incognito === true || tabs.some((t) => t.incognito);
+      targets.push((await windowExists(source, incognito)) ? source : undefined);
       plans.push({
         name: record?.name ?? '',
         bounds: record?.bounds ?? null,
         state: record?.state ?? null,
         focused: record?.wasFocused ?? false,
         tabs: [...tabs.sort((a, b) => a.order - b.order), ...extra],
+        ...(incognito ? { incognito: true } : {}),
       });
     }
     for (const [source, tabs] of extraBySource) {
-      targets.push((await windowExists(source)) ? source : undefined);
-      plans.push({ name: '', bounds: null, state: null, focused: false, tabs });
+      const incognito = incognitoSources.has(source);
+      targets.push((await windowExists(source, incognito)) ? source : undefined);
+      plans.push({ name: '', bounds: null, state: null, focused: false, tabs, ...(incognito ? { incognito: true } : {}) });
     }
     // Undo puts tabs back as they were a moment ago: loaded, with their titles (not lazily).
     if (plans.length) await restoreWindows(plans, { mode: 'original', lazy: false, targetWindowIds: targets });
@@ -432,29 +445,4 @@ export async function handleUndo(actionId: string): Promise<{ undone: boolean; r
   if (action.createdSession) await deleteSessionsForever([action.sessionId]);
   else if (action.savedTabIds.length) await removeTabs(action.savedTabIds);
   return { undone: true };
-}
-
-/**
- * Undo of an Incognito save: put the tabs back in their Incognito window (or a new Incognito
- * window), never in a normal one, so they stay out of normal history.
- */
-async function reopenInIncognito(action: LastAction): Promise<void> {
-  const stillOpen = new Set(action.notClosedTabIds ?? []);
-  const rows = (await db.tabs.bulkGet(action.savedTabIds)).filter((t): t is TabRecord => !!t && !stillOpen.has(t.id));
-  const byWindow = new Map<string, TabRecord[]>();
-  for (const row of rows) byWindow.set(row.windowId, [...(byWindow.get(row.windowId) ?? []), row]);
-  for (const [windowId, tabs] of byWindow) {
-    const urls = tabs.sort((a, b) => a.order - b.order).map((t) => t.url);
-    const source = action.windowSources[windowId];
-    const target = source !== undefined ? await browser.windows.get(source).catch(() => undefined) : undefined;
-    try {
-      if (target?.incognito && target.id !== undefined) {
-        for (const url of urls) await browser.tabs.create({ windowId: target.id, url, active: false });
-      } else {
-        await browser.windows.create({ incognito: true, url: urls });
-      }
-    } catch (error) {
-      console.warn('[tabfold] could not reopen Incognito tabs', error);
-    }
-  }
 }

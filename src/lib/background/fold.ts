@@ -1,4 +1,4 @@
-import { browser } from 'wxt/browser';
+import { browser, type Browser } from 'wxt/browser';
 import { refreshDataGuard } from '../dataGuard';
 import { isQuotaError } from '../db';
 import { estimateBytes } from '../format';
@@ -6,7 +6,7 @@ import { CommandError, type FoldOutcome, type MemoryReading, type WorkerEvent } 
 import { saveCapture } from '../repo';
 import { getSettings } from '../settings';
 import { activeFold, getDeviceId, type ActiveFold } from '../state';
-import { broadcast, getNormalWindows, sleep } from './browserState';
+import { broadcast, getNormalWindows, incognitoAllowed, ownOrigin, sleep } from './browserState';
 import {
   buildPlan,
   capturedTabs,
@@ -22,7 +22,9 @@ import { takeSnapshot } from './snapshots';
 
 /**
  * Fold: save every tab in every normal window, then close it. Pinned tabs (per the setting) and
- * tabs playing sound stay open; tabs already folded are closed but not saved twice. Progress is
+ * tabs playing sound stay open; tabs already folded are closed but not saved twice; Tabfold's own
+ * pages close without being saved (except the one that started the fold). Incognito windows are
+ * folded only with "Fold Incognito windows too" on and "Allow in Incognito" granted. Progress is
  * kept in `activeFold` and broadcast as `fold-progress`: saving, then closing in batches of 10,
  * then (when some tabs show Chrome's "Leave site?" dialog) waiting up to about 20 s for answers.
  */
@@ -67,16 +69,41 @@ function memoryReading(before: MemoryInfo | null, after: MemoryInfo | null): Mem
  * One fold at a time: a second request while one runs gets the running one's outcome. Folds and
  * saves share a queue, so they never race to close the same tabs.
  */
-export function handleFold(): Promise<FoldOutcome> {
-  return saveQueue('fold', runFold, 0) as Promise<FoldOutcome>;
+export function handleFold(options: { keepTabId?: number } = {}): Promise<FoldOutcome> {
+  return saveQueue('fold', () => runFold(options), 0) as Promise<FoldOutcome>;
 }
 
-async function runFold(): Promise<FoldOutcome> {
+/**
+ * Tabs a fold leaves open that the popup should explain: tabs in app and pop-up windows (never
+ * folded), and Incognito tabs while folding Incognito is off. Chrome only shows Tabfold Incognito
+ * windows with "Allow in Incognito" on, so without it they can't be counted.
+ */
+async function leftOut(windows: Browser.windows.Window[], includeIncognito: boolean): Promise<{ apps: number; incognito: number }> {
+  const others = await browser.windows.getAll({ populate: true, windowTypes: ['popup', 'app'] }).catch(() => []);
+  const origin = ownOrigin();
+  return {
+    // Tabfold's own small window (keywords) isn't a tab left open.
+    apps: others
+      .filter((w) => w.type !== 'normal')
+      .flatMap((w) => w.tabs ?? [])
+      .filter((t) => !(t.url || t.pendingUrl || '').startsWith(origin)).length,
+    incognito: includeIncognito ? 0 : windows.filter((w) => w.incognito).reduce((n, w) => n + (w.tabs?.length ?? 0), 0),
+  };
+}
+
+async function runFold({ keepTabId }: { keepTabId?: number }): Promise<FoldOutcome> {
   const foldId = crypto.randomUUID();
   const settings = await getSettings();
   const windows = await getNormalWindows();
+  const includeIncognito = settings.foldIncognito && (await incognitoAllowed());
   // Every normal window, whatever the old "current window only" setting says.
-  const plan = await buildPlan(windows, { scope: 'all', audible: 'keep' }, { ...settings, includeAllWindows: true });
+  const plan = await buildPlan(
+    windows,
+    { scope: 'all', audible: 'keep', includeIncognito },
+    { ...settings, includeAllWindows: true },
+    keepTabId !== undefined ? [keepTabId] : [],
+  );
+  const left = await leftOut(windows, includeIncognito);
   const total = plan.closeTabIds.length;
 
   let progress: ActiveFold = { foldId, phase: 'saving', total, closed: 0, waiting: [], startedAt: Date.now() };
@@ -95,7 +122,7 @@ async function runFold(): Promise<FoldOutcome> {
     closedTabs: 0,
     skippedDuplicates: 0,
     keptOpen: plan.kept,
-    stayedOpen: { pinned: plan.kept.pinned, audible: plan.kept.audible },
+    stayedOpen: { pinned: plan.kept.pinned, audible: plan.kept.audible, ...left },
     failedToClose: [],
     freedBytes: 0,
     intoUnsorted: false,
@@ -160,7 +187,7 @@ async function runFold(): Promise<FoldOutcome> {
   const skipped = new Set(result.skippedTabs.map((s) => s.tab));
   const written = capturedTabs(plan).filter((t) => !skipped.has(t));
   const freedBytes = estimateBytes(plan.closeTabIds.filter((id) => byId.has(id) && !byId.get(id)!.discarded && !notClosed.has(id)).length);
-  const actionId = await recordUndo({ result, plan, now, close: true, closedTabs, freedBytes, stillOpen: notClosed, incognito: false });
+  const actionId = await recordUndo({ result, plan, now, close: true, closedTabs, freedBytes, stillOpen: notClosed });
 
   const done: FoldOutcome = {
     ...outcome,

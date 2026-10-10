@@ -44,6 +44,8 @@ export interface CapturedWindow {
   tabs: CapturedTab[];
   /** Browser window id at capture time; never stored. */
   sourceWindowId?: number;
+  /** Folded from an Incognito window (only with "Fold Incognito windows too"). */
+  incognito?: boolean;
 }
 
 export type SessionSource =
@@ -90,6 +92,8 @@ export interface WindowRecord {
   wasFocused: boolean;
   bounds: WindowBounds | null;
   state: WindowState | null;
+  /** An Incognito window: it reopens only as an Incognito window. */
+  incognito?: true;
 }
 
 export interface TabRecord {
@@ -107,6 +111,11 @@ export interface TabRecord {
   savedAt: number;
   keywords: string[];
   urlTruncated: boolean;
+  /**
+   * Folded from an Incognito window: kept on this computer only (never in Chrome sync) and
+   * reopened only in Incognito.
+   */
+  incognito?: true;
 }
 
 export type SnapshotReason =

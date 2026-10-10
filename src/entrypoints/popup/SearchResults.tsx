@@ -6,6 +6,7 @@ import type { SearchResponse } from '@/lib/search/protocol';
 import { displayHost } from '@/lib/urls';
 import { Favicon } from '@/ui/components/Favicon';
 import { Highlight } from '@/ui/components/Highlight';
+import { IncognitoMark } from '@/ui/components/IncognitoMark';
 import { cx } from '@/ui/cx';
 import type { OpenWindow } from '@/ui/hooks';
 import { Kbd, SectionLabel } from './parts';
@@ -55,6 +56,7 @@ export function SearchResults({
   navRef,
   onActiveChange,
   onClear,
+  onProblem,
 }: {
   query: string;
   result: SearchResponse | null;
@@ -62,6 +64,8 @@ export function SearchResults({
   navRef: React.MutableRefObject<SearchNav | null>;
   onActiveChange: (id: string | undefined) => void;
   onClear: () => void;
+  /** A folded tab couldn't open: the popup says why instead of closing. */
+  onProblem?: (reason: string) => void;
 }) {
   const hits: SearchHit[] = useMemo(() => (result ? [...result.open, ...result.saved] : []), [result]);
   const [active, setActive] = useState(0);
@@ -78,8 +82,9 @@ export function SearchResults({
       await showTab(doc.tabId, doc.windowId);
       window.close();
     } else if (doc.tabRecordId) {
-      await send({ type: 'open-saved-tab', tabRecordId: doc.tabRecordId, active: !background }).catch(() => undefined);
-      if (!background) window.close();
+      const result = await send({ type: 'open-saved-tab', tabRecordId: doc.tabRecordId, active: !background }).catch(() => undefined);
+      if (result && !result.opened) onProblem?.(result.reason ?? 'Chrome wouldn’t open this page.');
+      else if (!background) window.close();
     }
   };
 
@@ -150,8 +155,11 @@ export function SearchResults({
       >
         <Favicon url={doc.url} size={16} dim={isOpen && doc.discarded} />
         <div className="min-w-0 flex-1">
-          <div dir="auto" className="truncate">
-            <Highlight text={doc.title} terms={hit.terms} />
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span dir="auto" className="min-w-0 truncate">
+              <Highlight text={doc.title} terms={hit.terms} />
+            </span>
+            {doc.incognito && <IncognitoMark size={13} />}
           </div>
           <div className="flex min-w-0 items-center gap-1.5 text-meta text-text-3">
             <span className="truncate">

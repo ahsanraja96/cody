@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { browser } from 'wxt/browser';
-import { Copy, Info, LoaderCircle, TriangleAlert, X } from 'lucide-react';
+import { Copy, Info, LoaderCircle, Trash2, TriangleAlert, X } from 'lucide-react';
 import { send, type RestoreFailure } from '@/lib/messages';
-import type { SessionRecord } from '@/lib/types';
+import type { SessionRecord, TabRecord } from '@/lib/types';
+import { IncognitoMark } from '@/ui/components/IncognitoMark';
 import { toast } from '@/ui/components/Toast';
 import { copyText, currentScreen, useActiveRestore } from '@/ui/hooks';
-import { errorText } from './actions';
+import { deleteFold, errorText } from './actions';
 import { count, foldTime } from './format';
 
 type Result =
@@ -20,8 +21,10 @@ const CHROME_PAGE = /^(chrome|edge|about|chrome-extension):|^https:\/\/(chromewe
 function failureText(failed: RestoreFailure[]): string {
   const files = failed.filter((f) => f.reason === 'file-access' || (!f.reason && /^file:/i.test(f.url))).length;
   const blocked = failed.filter((f) => f.reason === 'blocked');
-  const other = failed.length - files - blocked.length;
+  const other = failed.length - files - blocked.length - failed.filter((f) => f.reason === 'incognito').length;
+  const incognito = failed.filter((f) => f.reason === 'incognito').length;
   const parts: string[] = [];
+  if (incognito) parts.push(`${count(incognito, 'Incognito tab')} need “Allow in Incognito” for Tabfold`);
   if (blocked.length) {
     const chrome = blocked.every((f) => CHROME_PAGE.test(f.url));
     const noun = chrome ? 'Chrome page' : 'page';
@@ -34,10 +37,11 @@ function failureText(failed: RestoreFailure[]): string {
 
 /**
  * "Recent folds" (Min-List): the last three folds, each with Reopen, which brings the fold back as
- * its original windows (lazily: tabs load when you click them). Pages Chrome won't let extensions
- * open and folds that are already open get one small line under the strip (Min-States).
+ * its original windows (lazily: tabs load when you click them), and Delete, which takes the fold's
+ * tabs out of the list (with Undo). Pages Chrome won't let extensions open and folds that are
+ * already open get one small line under the strip (Min-States).
  */
-export function RecentFolds({ folds }: { folds: SessionRecord[] }) {
+export function RecentFolds({ folds, tabs }: { folds: SessionRecord[]; tabs: TabRecord[] }) {
   const active = useActiveRestore();
   const [busy, setBusy] = useState<string | null>(null);
   const [result, setResult] = useState<Result | null>(null);
@@ -101,8 +105,11 @@ export function RecentFolds({ folds }: { folds: SessionRecord[] }) {
             <div key={fold.id} className="flex items-center gap-3 rounded-card border border-border bg-surface py-3 pr-3 pl-4">
               <div className="min-w-0 flex-1">
                 <div className="truncate font-semibold">{foldTime(fold.createdAt)}</div>
-                <div className="truncate text-small text-text-3">
-                  {count(fold.tabCount, 'tab')} · {count(fold.windowCount, 'window')}
+                <div className="flex items-center gap-1.5 text-small text-text-3">
+                  <span className="truncate">
+                    {count(fold.tabCount, 'tab')} · {count(fold.windowCount, 'window')}
+                  </span>
+                  {tabs.some((t) => t.sessionId === fold.id && t.incognito) && <IncognitoMark size={13} />}
                 </div>
               </div>
               <button
@@ -115,6 +122,16 @@ export function RecentFolds({ folds }: { folds: SessionRecord[] }) {
               >
                 {working && <LoaderCircle size={14} aria-hidden className="tf-spin" />}
                 {running && running.total > 0 ? `${running.done} of ${running.total}` : 'Reopen'}
+              </button>
+              <button
+                type="button"
+                title="Delete this fold and its tabs from the list"
+                aria-label={`Delete the fold from ${foldTime(fold.createdAt)} and its ${count(fold.tabCount, 'tab')}`}
+                disabled={working}
+                onClick={() => void deleteFold(fold, tabs)}
+                className="-mr-1 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-text-2 hover:bg-hover hover:text-text disabled:text-text-3"
+              >
+                <Trash2 size={15} strokeWidth={1.75} aria-hidden />
               </button>
             </div>
           );

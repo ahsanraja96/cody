@@ -31,6 +31,11 @@ export interface Settings {
   backupReminder: boolean;
   /** Share the newest folded tabs through Chrome sync (no account; works when signed in to Chrome). */
   syncWithChrome: boolean;
+  /**
+   * Fold Incognito windows too (needs "Allow in Incognito" for Tabfold). Their tabs stay on this
+   * computer (never in Chrome sync) and reopen only in Incognito.
+   */
+  foldIncognito: boolean;
 }
 
 /** Calls and meeting sites are never suspended; tabs using a camera or mic can't be detected without reading pages. */
@@ -62,6 +67,7 @@ export const DEFAULT_SETTINGS: Settings = {
   askKeywordsOnSingleSave: true,
   backupReminder: true,
   syncWithChrome: true,
+  foldIncognito: false,
 };
 
 export const AUTO_SUSPEND_CHOICES = [5, 10, 15, 30, 60, 120, 240];

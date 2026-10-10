@@ -9,6 +9,7 @@ import { snapshotMirror } from './state';
 import { clearSyncedData } from './sync/clear';
 import { dedupeKey, displayHost } from './urls';
 import type {
+  CapturedTab,
   CapturedWindow,
   SessionDraft,
   SessionGraph,
@@ -152,6 +153,8 @@ export async function findSavedCopies(
   urls: Iterable<string>,
   preferSessionId?: string | null,
   database: TabfoldDB = db,
+  /** Only copies folded from Incognito (true) or from normal windows (false); any when left out. */
+  incognito?: boolean,
 ): Promise<Map<string, SavedCopy>> {
   const keys = new Set([...urls].map(dedupeKey));
   const found = new Map<string, SavedCopy>();
@@ -172,6 +175,7 @@ export async function findSavedCopies(
     const session = sessions.get(tab.sessionId);
     const key = dedupeKey(tab.url);
     if (!session || !keys.has(key)) continue;
+    if (incognito !== undefined && !!tab.incognito !== incognito) continue;
     const current = found.get(key);
     const better =
       !current ||
@@ -244,6 +248,7 @@ export async function saveCapture(
       if (found && !found.deletedAt) target = found;
     }
     const captured = windows.flatMap((w) => w.tabs);
+    const incognitoTabs = new Set(windows.filter((w) => w.incognito).flatMap((w) => w.tabs));
 
     // Tabs restored lazily and never opened have no title yet; reuse the title saved for that address.
     for (const tab of captured) {
@@ -252,17 +257,30 @@ export async function saveCapture(
       if (known && known.title !== tab.title && known.title !== displayHost(known.url)) tab.title = known.title;
     }
 
+    // Duplicates are looked up per mode: an Incognito tab never folds into a normal copy, or the reverse.
     const copies = options.dedupe
       ? await findSavedCopies(
-          captured.map((t) => t.url),
+          captured.filter((t) => !incognitoTabs.has(t)).map((t) => t.url),
           target?.id,
           database,
+          false,
         )
       : new Map<string, SavedCopy>();
+    const incognitoCopies =
+      options.dedupe && incognitoTabs.size
+        ? await findSavedCopies(
+            [...incognitoTabs].map((t) => t.url),
+            target?.id,
+            database,
+            true,
+          )
+        : new Map<string, SavedCopy>();
+    const copyOf = (tab: CapturedTab, incognito = incognitoTabs.has(tab)) =>
+      (incognito ? incognitoCopies : copies).get(dedupeKey(tab.url));
     // A duplicate is skipped, but keywords picked for it still land on the tab already saved.
     const merged = new Map<string, TabRecord>();
     for (const tab of captured) {
-      const copy = copies.get(dedupeKey(tab.url));
+      const copy = copyOf(tab);
       if (!copy || tab.keywords.length === 0) continue;
       const existing = merged.get(copy.tab.id) ?? copy.tab;
       const keywords = cleanKeywords([...existing.keywords, ...tab.keywords]);
@@ -274,13 +292,14 @@ export async function saveCapture(
       ...meta,
       dedupe: options.dedupe,
       existingUrls: [...copies.values()].map((c) => c.tab.url),
+      existingIncognitoUrls: [...incognitoCopies.values()].map((c) => c.tab.url),
     });
     const windowSources = new Map<string, number>([...windowIdMap.entries()].map(([source, id]) => [id, source]));
 
     if (draft.tabs.length === 0) {
       // Nothing new to write (every tab is saved already): no empty session, no Unsorted.
       if (merged.size) await bumpSearchVersion(database);
-      const first = skippedTabs[0] ? copies.get(dedupeKey(skippedTabs[0].tab.url))?.session : undefined;
+      const first = skippedTabs[0] ? copyOf(skippedTabs[0].tab, !!skippedTabs[0].incognito)?.session : undefined;
       const holder = target ?? first;
       return {
         sessionId: holder?.id ?? '',

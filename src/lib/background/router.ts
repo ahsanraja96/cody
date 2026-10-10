@@ -14,7 +14,12 @@ import { handleSave, handleUndo, preflightSave } from './save';
 import { dismissRecovery, recoverFromMirror, takeSnapshot } from './snapshots';
 import { suspendInactive, suspendTab } from './suspend';
 
-async function dispatch(command: Command): Promise<CommandResults[Command['type']]> {
+/** Where a command came from: the Tabfold tab that sent it (none for the popup). */
+export interface CommandSource {
+  tabId?: number;
+}
+
+async function dispatch(command: Command, source: CommandSource): Promise<CommandResults[Command['type']]> {
   switch (command.type) {
     case 'preflight-save':
       return preflightSave(command);
@@ -42,7 +47,8 @@ async function dispatch(command: Command): Promise<CommandResults[Command['type'
       await dismissRecovery();
       return { ok: true };
     case 'fold':
-      return handleFold();
+      // A fold started from a Tabfold page leaves that page open.
+      return handleFold({ keepTabId: source.tabId });
     case 'open-tabs':
       return handleOpenTabs(command);
     case 'sync-now':
@@ -53,9 +59,9 @@ async function dispatch(command: Command): Promise<CommandResults[Command['type'
 }
 
 /** Every handler is wrapped: one failure becomes a readable error for the page, never a dead worker. */
-export async function route(command: Command): Promise<CommandResponse<unknown>> {
+export async function route(command: Command, source: CommandSource = {}): Promise<CommandResponse<unknown>> {
   try {
-    return { ok: true, data: await dispatch(command) };
+    return { ok: true, data: await dispatch(command, source) };
   } catch (error) {
     console.error('[tabfold] command failed', command.type, error);
     if (error instanceof CommandError) return { ok: false, error: error.message, code: error.code };

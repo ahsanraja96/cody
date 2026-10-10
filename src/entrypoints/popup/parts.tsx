@@ -66,6 +66,27 @@ export function CrashLine({ offer, windowId }: { offer: RecoveryOffer; windowId?
   );
 }
 
+/** Why a folded tab didn't open (for example an Incognito tab without "Allow in Incognito"). */
+export function OpenProblem({ text, onDismiss }: { text: string; onDismiss: () => void }) {
+  return (
+    <div className="flex-none px-4 pb-3">
+      <div role="alert" className="flex items-start gap-2.5 rounded-card border border-amber-line bg-amber-soft py-2 pr-1.5 pl-3">
+        <Info size={16} strokeWidth={1.75} aria-hidden className="mt-0.5 flex-none text-amber" />
+        <span className="min-w-0 flex-1 text-small">{text}</span>
+        <button
+          type="button"
+          aria-label="Dismiss"
+          title="Dismiss"
+          onClick={onDismiss}
+          className="flex size-7 flex-none items-center justify-center rounded-md text-text-2 hover:bg-hover hover:text-text"
+        >
+          <X size={16} strokeWidth={1.75} aria-hidden />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** One quiet line about Chrome sync; nothing when it is off or before the first sync. */
 export function SyncLine({ status }: { status: SyncStatus | undefined }) {
   if (!status || status.state === 'off' || status.state === 'error') return null;

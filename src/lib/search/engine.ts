@@ -22,6 +22,8 @@ export interface SearchDoc {
   sessionName?: string;
   savedAt?: number;
   deleted?: boolean;
+  /** Folded from Incognito (reopens only in Incognito). */
+  incognito?: boolean;
   /** Open tabs */
   tabId?: number;
   windowId?: number;

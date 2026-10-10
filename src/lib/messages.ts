@@ -135,8 +135,11 @@ export interface SaveOutcome {
 export interface RestoreFailure {
   url: string;
   title: string;
-  /** 'file-access': a file:// page and "Allow access to file URLs" is off. 'blocked': Chrome never lets extensions open it. */
-  reason?: 'file-access' | 'blocked' | 'error';
+  /**
+   * 'file-access': a file:// page and "Allow access to file URLs" is off. 'blocked': Chrome never
+   * lets extensions open it. 'incognito': folded from Incognito and "Allow in Incognito" is off.
+   */
+  reason?: 'file-access' | 'blocked' | 'incognito' | 'error';
 }
 
 export interface RestoreOutcome {
@@ -174,8 +177,12 @@ export interface MemoryReading {
 
 export interface FoldOutcome extends SaveOutcome {
   foldId: string;
-  /** Tabs that stayed open on purpose. */
-  stayedOpen: { pinned: number; audible: number };
+  /**
+   * Tabs that stayed open on purpose: pinned, playing sound, in app or pop-up windows, and in
+   * Incognito windows while "Fold Incognito windows too" is off (counted only when Chrome lets
+   * Tabfold see them).
+   */
+  stayedOpen: { pinned: number; audible: number; apps?: number; incognito?: number };
   memory: MemoryReading;
 }
 
@@ -194,7 +201,7 @@ export interface CommandResults {
   'dismiss-recovery': { ok: true };
   'recover-from-mirror': { sessionId: string | null };
   fold: FoldOutcome;
-  'open-tabs': { opened: number };
+  'open-tabs': { opened: number; reason?: string };
   'sync-now': { ok: boolean };
 }
 

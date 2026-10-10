@@ -18,6 +18,8 @@ export interface RestoreWindow {
   state: WindowState | null;
   focused: boolean;
   tabs: RestoreTab[];
+  /** Folded from Incognito: opens only in an Incognito window, never a normal one. */
+  incognito?: boolean;
 }
 
 export function fromCaptured(windows: CapturedWindow[]): RestoreWindow[] {

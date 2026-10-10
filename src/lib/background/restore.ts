@@ -11,6 +11,7 @@ import {
   broadcast,
   currentNormalWindowId,
   getNormalWindows,
+  incognitoAllowed,
   ownOrigin,
   setAttentionBadge,
   sleep,
@@ -143,15 +144,32 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
   };
   await report(0);
 
-  let sharedWindowId: number | undefined;
-  if (options.mode === 'current') {
-    const current = options.currentWindowId ?? (await currentNormalWindowId());
-    if (await windowExists(current)) sharedWindowId = current;
-  }
+  // "Into the current window" and "into one new window" share one window per mode: tabs folded
+  // from Incognito go to an Incognito window, the rest to a normal one, never the other way round.
+  const shared = new Map<boolean, number | undefined>();
+  const sharedWindow = async (incognito: boolean): Promise<number | undefined> => {
+    if (options.mode === 'current' && !shared.has(incognito)) {
+      const given = options.currentWindowId;
+      shared.set(incognito, (await windowExists(given, incognito)) ? given : await currentNormalWindowId(incognito));
+    }
+    return shared.get(incognito);
+  };
+  let incognitoAccess: boolean | undefined;
   let firstCreated: number | undefined;
 
   for (const [windowIndex, plan] of windows.entries()) {
     if (cancelled.has(restoreId)) break;
+    const incognito = plan.incognito === true;
+    if (incognito) {
+      // Without "Allow in Incognito", Chrome won't let Tabfold open an Incognito window, and these
+      // tabs never open in a normal one instead.
+      incognitoAccess ??= await incognitoAllowed();
+      if (!incognitoAccess) {
+        for (const tab of plan.tabs) failed.push({ url: tab.url, title: tab.title, reason: 'incognito' });
+        done += plan.tabs.length;
+        continue;
+      }
+    }
     const tabs = plan.tabs.filter((tab) => {
       const reason: RestoreFailure['reason'] = refuseToOpen(tab.url, origin)
         ? 'blocked'
@@ -170,8 +188,9 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
     let placeholderTabId: number | undefined;
     let activateFirst = false;
     const target = options.targetWindowIds?.[windowIndex];
-    // windowExists only accepts normal, non-Incognito windows: restores never land in Incognito.
-    if (await windowExists(target)) {
+    const sharedWindowId = await sharedWindow(incognito);
+    // windowExists only accepts a window of the same mode: normal tabs never land in Incognito.
+    if (await windowExists(target, incognito)) {
       windowId = target;
     } else if ((options.mode === 'current' || options.mode === 'new-window') && sharedWindowId !== undefined) {
       windowId = sharedWindowId;
@@ -180,11 +199,11 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
       const focused = !options.background && (plan.focused || windowIndex === 0);
       let created: Browser.windows.Window | undefined;
       try {
-        created = await browser.windows.create({ focused, incognito: false, ...(bounds ?? {}) });
+        created = await browser.windows.create({ focused, incognito, ...(bounds ?? {}) });
       } catch {
         // Chrome refuses bounds it thinks are off-screen (its idea of the screens can differ from
         // the page's). Open at the default size instead of failing the restore.
-        created = await browser.windows.create({ focused, incognito: false }).catch(() => undefined);
+        created = await browser.windows.create({ focused, incognito }).catch(() => undefined);
       }
       windowId = created?.id;
       firstCreated ??= windowId;
@@ -193,7 +212,7 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
       if (windowId !== undefined && (plan.state === 'maximized' || plan.state === 'fullscreen')) {
         await browser.windows.update(windowId, { state: plan.state }).catch(() => undefined);
       }
-      if (options.mode === 'new-window') sharedWindowId = windowId;
+      if (options.mode === 'new-window') shared.set(incognito, windowId);
     }
     if (windowId === undefined) {
       for (const tab of tabs) failed.push({ url: tab.url, title: tab.title, reason: 'error' });
@@ -297,8 +316,8 @@ export async function handleRestore(command: RestoreCommand): Promise<RestoreOut
   const windows = command.windowRecordId ? graph.windows.filter((w) => w.id === command.windowRecordId) : graph.windows;
 
   if (!command.force && command.mode === 'original') {
-    const urls = windows.flatMap((w) => w.tabs.map((t) => t.url));
-    // An Incognito copy doesn't count: restores and "Switch to it" only use normal windows.
+    const urls = windows.filter((w) => !w.incognito).flatMap((w) => w.tabs.map((t) => t.url));
+    // An Incognito copy doesn't count: "Switch to it" only uses normal windows.
     const copy = describeOpenCopy(urls, (await getNormalWindows()).filter((w) => !w.incognito));
     if (copy) return { ...emptyOutcome(restoreId), alreadyOpenWindowId: copy.windowIds[0], alreadyOpen: copy };
   }
@@ -307,7 +326,14 @@ export async function handleRestore(command: RestoreCommand): Promise<RestoreOut
     await takeSnapshot('before-restore').catch(() => undefined);
     const settings = await getSettings();
     const result = await restoreWindows(
-      windows.map((w) => ({ name: w.name, bounds: w.bounds, state: w.state, focused: w.wasFocused, tabs: w.tabs })),
+      windows.map((w) => ({
+        name: w.name,
+        bounds: w.bounds,
+        state: w.state,
+        focused: w.wasFocused,
+        tabs: w.tabs,
+        ...(w.incognito ? { incognito: true } : {}),
+      })),
       {
         mode: command.mode,
         lazy: settings.lazyRestore,
@@ -378,26 +404,41 @@ type OpenTabsCommand = Extract<Command, { type: 'open-tabs' }>;
  * lazily like a restore (each loads once, muted, then sleeps). With `asGroup` they become one
  * Chrome tab group with that name and colour. The tabs stay in the list.
  */
-export async function handleOpenTabs(command: OpenTabsCommand): Promise<{ opened: number }> {
+export async function handleOpenTabs(command: OpenTabsCommand): Promise<{ opened: number; reason?: string }> {
   const rows = (await db.tabs.bulkGet(command.tabRecordIds)).filter((t): t is NonNullable<typeof t> => !!t);
   if (rows.length === 0) return { opened: 0 };
   const settings = await getSettings();
   const group = command.asGroup;
-  const tabs: RestoreTab[] = rows.map((row) => ({
+  const toTab = (row: (typeof rows)[number]): RestoreTab => ({
     url: row.url,
     title: row.title,
     pinned: false,
     groupName: group ? group.name : null,
     groupColor: group ? safeGroupColor(group.color) : null,
     groupCollapsed: false,
-  }));
-  const result = await restoreWindows([{ name: '', bounds: null, state: null, focused: false, tabs }], {
+  });
+  // Tabs folded from Incognito open in an Incognito window (as their own group), the rest here.
+  const plans: RestoreWindow[] = [false, true]
+    .map((incognito) => ({
+      name: '',
+      bounds: null,
+      state: null,
+      focused: false,
+      tabs: rows.filter((row) => !!row.incognito === incognito).map(toTab),
+      ...(incognito ? { incognito: true } : {}),
+    }))
+    .filter((plan) => plan.tabs.length > 0);
+  const result = await restoreWindows(plans, {
     mode: 'current',
     lazy: settings.lazyRestore,
     currentWindowId: command.windowId,
   });
-  return { opened: result.opened };
+  return { opened: result.opened, ...(result.failed.some((f) => f.reason === 'incognito') ? { reason: INCOGNITO_OFF } : {}) };
 }
+
+/** Why a tab folded from Incognito can't reopen. */
+export const INCOGNITO_OFF =
+  'Tabs folded from Incognito open only in Incognito. Turn on “Allow in Incognito” for Tabfold in Chrome’s extension settings.';
 
 export async function handleOpenSavedTab(
   tabRecordId: string,
@@ -407,8 +448,15 @@ export async function handleOpenSavedTab(
   const tab = await db.tabs.get(tabRecordId);
   if (!tab) return { opened: false, reason: 'This tab is no longer saved.' };
   if (refuseToOpen(tab.url, ownOrigin())) return { opened: false, reason: 'Chrome does not allow opening this address.' };
-  const target = (await windowExists(windowId)) ? windowId : await currentNormalWindowId();
+  // Folded from Incognito: back into an Incognito window (or a new one), never a normal one.
+  const incognito = tab.incognito === true;
+  if (incognito && !(await incognitoAllowed())) return { opened: false, reason: INCOGNITO_OFF };
+  const target = (await windowExists(windowId, incognito)) ? windowId : await currentNormalWindowId(incognito);
   try {
+    if (target === undefined && incognito) {
+      await browser.windows.create({ incognito: true, url: tab.url, focused: active });
+      return { opened: true };
+    }
     const created = await browser.tabs.create({ url: tab.url, active, windowId: target });
     if (active && created.windowId !== undefined) await browser.windows.update(created.windowId, { focused: true });
     return { opened: true };

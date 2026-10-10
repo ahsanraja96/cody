@@ -7,9 +7,9 @@ import type { Category } from '@/lib/categories';
 import { clearAllData, exportGraphs, putBackTabs, removeTabsWithSnapshot, type RemovedTabs } from '@/lib/repo';
 import { DEFAULT_SETTINGS } from '@/lib/settings';
 import { lastAction, recoveryOffer, snapshotMirror, UNDO_WINDOW_MS } from '@/lib/state';
-import type { TabRecord } from '@/lib/types';
+import type { SessionRecord, TabRecord } from '@/lib/types';
 import { dismissToast, toast } from '@/ui/components/Toast';
-import { count } from './format';
+import { count, foldTime } from './format';
 import { dropUndo, registerUndo } from './undo';
 
 export function errorText(error: unknown): string {
@@ -34,13 +34,14 @@ export async function openFolded(tab: TabRecord, active: boolean): Promise<void>
 export async function openGroup(tabs: TabRecord[], category: Category): Promise<void> {
   try {
     const current = await browser.windows.getCurrent().catch(() => undefined);
-    const { opened } = await send({
+    const { opened, reason } = await send({
       type: 'open-tabs',
       tabRecordIds: tabs.map((t) => t.id),
       asGroup: { name: category.name, color: category.color },
       windowId: current?.id,
     });
-    toast(opened === tabs.length ? `Opened ${count(opened, 'tab')}. They stay in the list.` : `Opened ${opened} of ${tabs.length} tabs.`);
+    if (reason) toast(opened ? `Opened ${opened} of ${tabs.length} tabs. ${reason}` : reason, { tone: 'error' });
+    else toast(opened === tabs.length ? `Opened ${count(opened, 'tab')}. They stay in the list.` : `Opened ${opened} of ${tabs.length} tabs.`);
   } catch (error) {
     toast(errorText(error), { tone: 'error' });
   }
@@ -113,7 +114,19 @@ export async function removeOne(tab: TabRecord): Promise<void> {
 }
 
 /** "Remove all N tabs" from a group's menu: no question, an Undo toast instead. */
-export async function removeGroup(tabs: TabRecord[]): Promise<void> {
+export function removeGroup(tabs: TabRecord[]): Promise<void> {
+  return removeWithUndo(tabs, (n) => `Removed ${count(n, 'tab')}`);
+}
+
+/** Delete on a Recent folds card: the fold's tabs leave the list, with the same Undo toast. */
+export function deleteFold(fold: SessionRecord, tabs: TabRecord[]): Promise<void> {
+  return removeWithUndo(
+    tabs.filter((t) => t.sessionId === fold.id),
+    (n) => `Deleted the fold from ${foldTime(fold.createdAt)} (${count(n, 'tab')})`,
+  );
+}
+
+async function removeWithUndo(tabs: TabRecord[], describe: (removed: number) => string): Promise<void> {
   try {
     const removed = await removeTabsWithSnapshot(tabs.map((t) => t.id));
     const key = `remove-group:${Date.now()}`;
@@ -123,7 +136,7 @@ export async function removeGroup(tabs: TabRecord[]): Promise<void> {
       dismissToast(toastId);
       putBackTabs(removed).catch((error) => toast(errorText(error), { tone: 'error' }));
     };
-    const message = `Removed ${count(removed.tabs.length, 'tab')}`;
+    const message = describe(removed.tabs.length);
     toastId = toast(message, {
       duration: UNDO_WINDOW_MS,
       countdown: true,

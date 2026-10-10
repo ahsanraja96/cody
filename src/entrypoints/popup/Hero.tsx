@@ -271,13 +271,17 @@ function stayedLine(fold: ActiveFold): string | null {
   if (!outcome) return null;
   const pinned = outcome.stayedOpen?.pinned ?? outcome.keptOpen.pinned;
   const audible = outcome.stayedOpen?.audible ?? outcome.keptOpen.audible;
+  const apps = outcome.stayedOpen?.apps ?? 0;
+  const incognito = outcome.stayedOpen?.incognito ?? 0;
   const asking = outcome.failedToClose.length;
   const parts = [
     pinned > 0 && `${pinned} pinned`,
     audible > 0 && `${audible} playing sound`,
+    apps > 0 && `${apps} in ${apps === 1 ? 'an app window' : 'app windows'}`,
+    incognito > 0 && `${incognito} in Incognito`,
     asking > 0 && `${asking} still asking “Leave site?”`,
   ].filter(Boolean);
-  const count = pinned + audible + asking;
+  const count = pinned + audible + apps + incognito + asking;
   return count ? `${count} stayed open: ${parts.join(', ')}` : null;
 }
 

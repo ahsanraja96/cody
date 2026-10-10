@@ -181,7 +181,8 @@ export async function syncOnce(
   }
 
   const deviceId = await deps.deviceId();
-  const local = (await listFoldedTabs(deps.database)).map((tab) => ({
+  // Tabs folded from Incognito stay on this computer: they never go to Chrome sync.
+  const local = (await listFoldedTabs(deps.database)).filter((tab) => !tab.incognito).map((tab) => ({
     id: tab.id,
     url: tab.url,
     title: tab.title,
