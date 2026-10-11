@@ -22,6 +22,23 @@ function connectSources(): string {
   return sources.join(' ');
 }
 
+/**
+ * The site that shows shared folders (WXT_SHARE_ORIGIN, default https://tabfold.app). Its pages may
+ * ask Tabfold to "Save to my Tabfold" (externally_connectable; no install warning). Match patterns
+ * take no port, so a local test server's port is dropped.
+ */
+function shareMatches(): string[] {
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
+  const value = env.WXT_SHARE_ORIGIN?.trim() || 'https://tabfold.app';
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`WXT_SHARE_ORIGIN is not a valid URL: ${value}`);
+  }
+  return [`${url.protocol}//${url.hostname}/*`];
+}
+
 // See https://wxt.dev/api/config.html
 export default defineConfig({
   srcDir: 'src',
@@ -54,7 +71,13 @@ export default defineConfig({
         suggested_key: { default: 'Alt+Shift+S' },
         description: 'Fold this tab',
       },
+      // The 4th suggested key, Chrome's maximum.
+      'snooze-tab': {
+        suggested_key: { default: 'Alt+Shift+Z' },
+        description: 'Snooze this tab until tomorrow morning',
+      },
     },
+    externally_connectable: { matches: shareMatches() },
     // In production nothing may talk to the network except the Tabfold server (Pro).
     // Dev mode needs the Vite server, so WXT manages CSP there.
     ...(mode === 'production'

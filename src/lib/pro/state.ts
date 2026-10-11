@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser';
 import type { SyncStatus } from '../state';
-import { FREE_PLAN, type AiRuns, type CheckoutState, type MilestoneState, type PlanState, type ProjectsState, type Tier } from './types';
+import { FREE_PLAN, type AiRuns, type CheckoutState, type MilestoneState, type PlanState, type ProjectsState, type TeamInfo, type Tier } from './types';
 
 /** Pro state kept in extension storage, shared by the worker and the pages. */
 
@@ -42,6 +42,16 @@ function item<T>(key: string, area: Area = 'local') {
 const TIERS: readonly Tier[] = ['free', 'pro', 'pro-ai'];
 const time = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 
+/** A Teams plan as the server sent it (server/API.md "Teams"), or null. */
+export function readTeam(value: unknown): TeamInfo | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.id !== 'string' || !v.id || typeof v.name !== 'string') return null;
+  if (v.role !== 'owner' && v.role !== 'member') return null;
+  const seats = typeof v.seats === 'number' && Number.isFinite(v.seats) && v.seats > 0 ? Math.floor(v.seats) : 1;
+  return { id: v.id, name: v.name.slice(0, 60), role: v.role, seats };
+}
+
 /**
  * A plan as the server sent it or as stored, checked field by field. Fields a plan stored by an
  * older version lacks read as their empty value (trialUsed false, renewsAt null), and such a plan
@@ -64,6 +74,9 @@ export function readPlan(value: unknown): PlanState | null {
     cancelAt: time(v.cancelAt),
     renewsAt: time(v.renewsAt),
     checkedAt: 'renewsAt' in v ? (time(v.checkedAt) ?? 0) : 0,
+    // Pro for life and Teams (0.6): only when present, so older plans read exactly as before.
+    ...(v.lifetime === true ? { lifetime: true } : {}),
+    ...(readTeam(v.team) ? { team: readTeam(v.team) } : {}),
   };
 }
 
