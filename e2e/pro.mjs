@@ -1,12 +1,13 @@
-// End-to-end test of Pro and Pro AI: a build of the extension pointed at the real server code
-// (server/supabase/functions/tabfold/app.ts) with an in-memory store, a fake Stripe
+// End-to-end test of Pro, Pro AI, Pro for life and Teams: a build of the extension pointed at the
+// real server code (server/supabase/functions/tabfold/app.ts) with an in-memory store, a fake Stripe
 // (tests/server/fakeStripe.ts: its REST API, checkout and billing pages, signed webhooks), a mailer
-// that keeps the sign-in codes, and a fake model, driven in real Chromium.
+// that keeps the sign-in codes, a fake model, and the public share site (web/), driven in real
+// Chromium.
 // Run with `npm run e2e:pro`: it builds that copy into .output-pro first (SKIP_BUILD=1 reuses it).
 // Screenshots go to e2e/screenshots/pro (or $SHOTS_DIR/pro).
 import { spawnSync } from 'node:child_process';
 import http from 'node:http';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { launchChrome } from './cdp.mjs';
@@ -19,7 +20,9 @@ import { serveWeb, startFakeStripe } from '../tests/server/fakeStripe.ts';
 
 export const API_PORT = 47812;
 export const STRIPE_PORT = 47813;
+export const SHARE_PORT = 47814;
 const API = `http://127.0.0.1:${API_PORT}/tabfold`;
+const SHARE_SITE = `http://127.0.0.1:${SHARE_PORT}`;
 const EXT = path.resolve(process.env.TABFOLD_OUT_DIR ?? '.output-pro', 'chrome-mv3');
 const SHOTS = path.resolve(process.env.SHOTS_DIR ?? 'e2e/screenshots', 'pro');
 mkdirSync(SHOTS, { recursive: true });
@@ -28,7 +31,7 @@ if (!process.env.SKIP_BUILD) {
   const built = spawnSync('npx', ['wxt', 'build'], {
     stdio: 'inherit',
     shell: process.platform === 'win32',
-    env: { ...process.env, TABFOLD_OUT_DIR: path.dirname(EXT), WXT_TABFOLD_API: API },
+    env: { ...process.env, TABFOLD_OUT_DIR: path.dirname(EXT), WXT_TABFOLD_API: API, WXT_SHARE_ORIGIN: SHARE_SITE },
   });
   if (built.status !== 0) process.exit(built.status ?? 1);
 }
@@ -57,17 +60,29 @@ const WEBHOOK_SECRET = 'whsec_e2e_test';
 const store = new MemoryStore();
 const mailer = memoryMailer();
 const modelCalls = [];
+/** The numbered tab lines the model was sent ("3. [site] title"), only from the <tabs> block. */
+const tabLines = (user) => (user.split('<tabs>')[1] ?? '').split('\n').filter((l) => /^\d+\. /.test(l));
+const pick = (lines, re) => lines.filter((l) => re.test(l)).map((l) => Number(l.split('.')[0]));
 const model = createModel(async (_system, user, schema) => {
   const kind = schema === undefined ? '' : JSON.stringify(schema);
+  const lines = tabLines(user);
+  // The tidy-up's schema also has a "summary", so look for the list names first.
+  if (kind.includes('suggestions')) {
+    modelCalls.push('tidy');
+    // The kitchen tabs nobody opened in a month belong in a new folder.
+    return { suggestions: [{ summary: `${pick(lines, /kitchen|tiles|oven|worktop/i).length} tabs about the kitchen`, folder: 0, name: 'Kitchen renovation', tabs: pick(lines, /kitchen|tiles|oven|worktop/i) }] };
+  }
+  if (kind.includes('matches')) {
+    modelCalls.push('ask');
+    return { matches: pick(lines, /Lisbon/i).map((tab) => ({ tab, reason: 'Flats for the Lisbon trip' })) };
+  }
   modelCalls.push(kind.includes('groups') ? 'organise' : kind.includes('summary') ? 'context' : 'name');
   if (kind.includes('groups')) {
     // Put the Stripe, Supabase and React pages in "Checkout app", the Lisbon page in "Holiday in Lisbon".
-    const lines = user.split('\n').filter((l) => /^\d+\. /.test(l));
-    const pick = (re) => lines.filter((l) => re.test(l)).map((l) => Number(l.split('.')[0]));
     return {
       groups: [
-        { name: 'Checkout app', tabs: pick(/Stripe|Supabase|React/i) },
-        { name: 'Holiday in Lisbon', tabs: pick(/Lisbon/i) },
+        { name: 'Checkout app', tabs: pick(lines, /Stripe|Supabase|React/i) },
+        { name: 'Holiday in Lisbon', tabs: pick(lines, /Lisbon/i) },
       ],
     };
   }
@@ -81,7 +96,7 @@ const deps = {
   mailer,
   model,
   now: () => Date.now(),
-  config: { allowedOrigins: ['*'], publicUrl: API, automaticTax: false, codeSecret: 'e2e-code-secret' },
+  config: { allowedOrigins: ['*'], publicUrl: API, shareBaseUrl: SHARE_SITE, automaticTax: false, codeSecret: 'e2e-code-secret' },
   log: (message) => serverLog.push(message),
 };
 const api = await serveWeb((request) => handle(request, deps), { port: API_PORT });
@@ -95,6 +110,7 @@ const PAGES = {
   react: 'useOptimistic – React',
   lisbon: 'Holiday flats in Lisbon',
   news: 'Hacker News',
+  docs: 'Route Handlers | Next.js',
 };
 const site = http.createServer((req, res) => {
   const name = (req.url ?? '/').slice(1) || 'home';
@@ -102,6 +118,26 @@ const site = http.createServer((req, res) => {
 });
 await new Promise((r) => site.listen(0, '127.0.0.1', r));
 const page = (name) => `http://127.0.0.1:${site.address().port}/${name}`;
+
+// The public share site (web/), as Netlify serves it: /s/<id> is s.html; config.js points at the
+// test server and this browser's Tabfold.
+const WEB = path.resolve('web');
+const siteConfig = { API_URL: API, EXTENSION_ID: '', STORE_URL: 'https://chromewebstore.google.com/' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
+const shareSite = http.createServer((req, res) => {
+  const { pathname } = new URL(req.url ?? '/', SHARE_SITE);
+  if (pathname === '/config.js') {
+    res.writeHead(200, { 'content-type': TYPES['.js'] }).end(`window.TABFOLD_CONFIG = ${JSON.stringify(siteConfig)};`);
+    return;
+  }
+  const file = path.join(WEB, pathname.startsWith('/s/') ? 's.html' : path.normalize(pathname.slice(1) || 'index.html'));
+  if (!file.startsWith(WEB + path.sep) || !existsSync(file)) {
+    res.writeHead(404).end();
+    return;
+  }
+  res.writeHead(200, { 'content-type': TYPES[path.extname(file)] ?? 'application/octet-stream' }).end(readFileSync(file));
+});
+await new Promise((r) => shareSite.listen(SHARE_PORT, '127.0.0.1', r));
 
 const accountOf = (email) => [...store.accounts.values()].find((a) => a.email === email);
 const OWNER = 'e2e@example.com';
@@ -111,6 +147,7 @@ const BUYER = 'new@example.com';
 const userDataDir = mkdtempSync(path.join(os.tmpdir(), 'tabfold-pro-'));
 const browser = await launchChrome({ extensionDir: EXT, userDataDir });
 const extId = await browser.extensionId();
+siteConfig.EXTENSION_ID = extId;
 const ext = (p) => `chrome-extension://${extId}/${p}`;
 const pages = [];
 async function open(url, size) {
@@ -266,24 +303,33 @@ const cloudStatus = await until(async () => {
 check('the account sync status says synced', cloudStatus?.syncedTabs === 5, JSON.stringify(cloudStatus));
 check('Chrome sync pauses while the account syncs', (await local('syncStatus'))?.state === 'off');
 
-// 3. Organise with AI: preview, then group the list by project.
+// 3. Organise with AI: preview, then put the tabs into folders.
 const list = await open(ext('library.html'));
 check('the full list shows the smart name and the plan', (await has(list, 'Checkout app · Stripe webhooks')) && (await has(list, 'Pro AI', 2000)));
 await click(list, 'Organise with AI');
-check('Organise with AI shows the projects first', (await has(list, 'Group my list by project', 15_000)) && (await has(list, 'Holiday in Lisbon', 2000)));
+check('Organise with AI shows the folders first', (await has(list, 'Put them in folders', 15_000)) && (await has(list, 'Holiday in Lisbon', 2000)));
 await shot(list, 'organise.png');
-await click(list, 'Group my list by project');
+await click(list, 'Put them in folders');
+const liveFolders = async () => (await idb('folders')).filter((f) => !f.deletedAt);
+const folderNamed = async (name) => (await liveFolders()).find((f) => f.name === name);
 const grouped = await until(async () => {
-  const tabs = await idb('tabs');
-  return tabs.filter((t) => t.project).length >= 4 ? tabs : null;
+  const [folders, tabs] = [await liveFolders(), await idb('tabs')];
+  return folders.length === 2 && tabs.filter((t) => t.folderId).length === 4 ? { folders, tabs } : null;
 }, 10_000, 300);
-check('applying puts the tabs in projects', !!grouped, grouped ? grouped.map((t) => `${t.project ?? '-'}`).join(', ') : 'none');
-check('the list switches to By project', (await has(list, 'By project', 6000)) && (await has(list, 'Everything else', 4000)));
+check(
+  'applying makes the two folders and puts 4 tabs in them',
+  !!grouped && grouped.folders.every((f) => f.source === 'ai'),
+  grouped ? grouped.folders.map((f) => `${f.name}: ${grouped.tabs.filter((t) => t.folderId === f.id).length}`).join(', ') : 'none',
+);
+check('toast: Put 4 tabs into 2 folders', await has(list, 'Put 4 tabs into 2 folders.'));
+check('the list shows the folders first, then the tabs not in a folder', (await has(list, 'Tabs not in a folder')) && !(await textOf(list)).includes('By project'));
+await shot(list, 'folders.png');
 const runs = await local('aiRuns');
 check('the run is counted (1 of 300)', runs?.used === 1 && runs?.limit === 300, JSON.stringify(runs));
+const checkoutFolder = await folderNamed('Checkout app');
 
 // 4. Copy as context and backups, through the worker.
-const checkoutTabs = (await idb('tabs')).filter((t) => t.project === 'Checkout app');
+const checkoutTabs = (await idb('tabs')).filter((t) => t.folderId === checkoutFolder?.id);
 const context = await send({ type: 'ai-context', tabRecordIds: checkoutTabs.map((t) => t.id), name: 'Checkout app' });
 check('Copy as context gives Markdown with an AI summary', context?.ok && context.data.markdown.includes('## Checkout app') && context.data.markdown.includes('Docs and dashboards'));
 const backups = await send({ type: 'backups-list' });
@@ -307,6 +353,139 @@ await control.evaluate(
 await until(async () => !(await idb('tabs')).some((t) => t.url.endsWith('/lisbon')), 6000, 300);
 const restored = await send({ type: 'backup-restore', day: backups.data[0].day });
 check('restoring a backup brings back the removed tab, deleting nothing', restored?.ok && restored.data.restored === 1 && (await idb('tabs')).length === 5, JSON.stringify(restored?.data));
+
+// 4b. Ask your tabs (Pro AI): a question in search gets "Ask", and the AI's best matches.
+const search = async (p, text) => {
+  await p.send('Page.bringToFront');
+  await p.evaluate(() => {
+    const field = document.querySelector('input[type=search]');
+    field.focus();
+    field.select();
+  });
+  await p.send('Input.insertText', { text });
+};
+await search(list, 'where were the flats for our trip');
+check('a question in search offers Ask', !!(await until(() => list.evaluate(() => [...document.querySelectorAll('button')].some((b) => b.innerText.trim() === 'Ask')), 4000)));
+await click(list, 'Ask');
+const bestMatches = await until(() => list.evaluate(() => document.querySelector('ul[aria-label="Best matches"]')?.innerText ?? ''), 15_000);
+check('Ask shows Best matches: the Lisbon tab, with why', !!bestMatches && bestMatches.includes('Holiday flats in Lisbon') && bestMatches.includes('Flats for the Lisbon trip'), bestMatches);
+await shot(list, 'ask.png');
+await list.evaluate(() => {
+  const field = document.querySelector('input[type=search]');
+  field.focus();
+  field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+});
+await until(async () => !(await textOf(list)).includes('Best matches'), 4000);
+
+// 4c. The weekly tidy-up (Pro AI): tabs nobody opened in a month get a folder, with one click.
+const MONTH_AGO = Date.now() - 40 * 24 * 60 * 60_000;
+const KITCHEN = ['Kitchen worktops compared', 'Wall tiles for the kitchen', 'Built-in oven reviews', 'Kitchen lighting ideas', 'Kitchen sink taps', 'Kitchen floor tiles'];
+await control.evaluate(
+  ([titles, at]) =>
+    new Promise((resolve) => {
+      const req = indexedDB.open('tabfold');
+      req.onsuccess = () => {
+        const tx = req.result.transaction(['sessions', 'windows', 'tabs'], 'readwrite');
+        tx.objectStore('sessions').put({
+          id: 'kitchen', name: 'Kitchen', tags: [], pinned: 0, color: null, kind: 'session', source: 'save-all', createdAt: at, updatedAt: at,
+          deletedAt: 0, deviceId: 'e2e', version: 1, tabCount: titles.length, windowCount: 1, preview: [],
+        });
+        tx.objectStore('windows').put({ id: 'kitchenw', sessionId: 'kitchen', name: '', order: 0, wasFocused: false, bounds: null, state: null });
+        titles.forEach((title, i) =>
+          tx.objectStore('tabs').put({
+            id: `kitchen${i}`, sessionId: 'kitchen', windowId: 'kitchenw', url: `https://kitchen.example/${i}`, title, favIconUrl: '', pinned: false,
+            groupName: null, groupColor: null, groupCollapsed: false, order: i, savedAt: at, keywords: [], urlTruncated: false,
+          }),
+        );
+        tx.oncomplete = () => {
+          req.result.close();
+          resolve(true);
+        };
+      };
+    }),
+  [KITCHEN, MONTH_AGO],
+);
+const tidy = await send({ type: 'tidy-run' });
+const suggestion = tidy?.data?.suggestions?.find((x) => x.kind === 'fold-into');
+check('the tidy-up suggests a folder for the month-old kitchen tabs', tidy?.ok && suggestion?.tabRecordIds.length === 6 && suggestion.action === 'Make a folder ‘Kitchen renovation’', JSON.stringify(tidy?.data ?? tidy));
+await list.send('Page.reload');
+check('the full list shows Your weekly tidy-up', (await has(list, 'Your weekly tidy-up', 10_000)) && (await has(list, '6 tabs about the kitchen haven’t been opened in a month', 3000)));
+await shot(list, 'tidy.png');
+await click(list, 'Make a folder ‘Kitchen renovation’');
+const kitchen = await until(async () => {
+  const folder = await folderNamed('Kitchen renovation');
+  return folder && (await idb('tabs')).filter((t) => t.folderId === folder.id).length === 6 ? folder : null;
+}, 8000, 300);
+check('one click makes the folder and moves the 6 tabs', !!kitchen);
+check('the card goes away', !!(await until(async () => !(await textOf(list)).includes('Your weekly tidy-up'), 5000)));
+
+// 4d. A live folder (Pro): opens as a Chrome tab group; tabs added to the group join the folder;
+// "Fold the group" closes them and keeps them in the folder.
+const folderMenu = async (p, folder, item) => {
+  await p.send('Page.bringToFront');
+  const opened = await p.evaluate((name) => {
+    const button = [...document.querySelectorAll(`[aria-label="More for ${name}"]`)].find((b) => b.getBoundingClientRect().width > 0);
+    button?.click();
+    return !!button;
+  }, folder);
+  await sleep(250);
+  return opened && (await p.evaluate((label) => {
+    const entry = [...document.querySelectorAll('[role=menuitem]')].find((e) => e.innerText.trim().startsWith(label));
+    entry?.click();
+    return !!entry;
+  }, item));
+};
+await folderMenu(list, 'Checkout app', 'Open as a live group');
+const group = await until(async () => (await control.evaluate(() => chrome.tabGroups.query({ title: 'Checkout app' })))[0], 10_000, 300);
+const groupTabs = group ? await control.evaluate((id) => chrome.tabs.query({ groupId: id }), group.id) : [];
+check('Open as a live group opens the folder as a tab group', !!group && groupTabs.length === 3, `${groupTabs.length} tabs`);
+check('the folder says it’s live, with Go to window', (await has(list, 'Live · ', 6000)) && (await has(list, 'Go to window', 2000)) && (await has(list, 'Fold the group', 2000)));
+await shot(list, 'live.png');
+if (group) {
+  await control.evaluate(async ([windowId, groupId, url]) => {
+    const tab = await chrome.tabs.create({ windowId, url, active: false });
+    await chrome.tabs.group({ groupId, tabIds: [tab.id] });
+  }, [group.windowId, group.id, page('docs')]);
+}
+const joined = await until(async () => (await idb('tabs')).find((t) => t.url === page('docs') && t.folderId === checkoutFolder?.id), 10_000, 300);
+check('a tab added to the group joins the folder', !!joined);
+await list.send('Page.bringToFront');
+await click(list, 'Fold the group');
+check('Fold the group closes the group’s tabs', !!(await until(async () => (await control.evaluate(() => chrome.tabGroups.query({ title: 'Checkout app' }))).length === 0, 10_000, 300)));
+const afterLive = (await idb('tabs')).filter((t) => t.folderId === checkoutFolder?.id);
+check('…and keeps them in the folder (4 now)', afterLive.length === 4, `${afterLive.length}`);
+check('the folder isn’t live any more', !!(await until(async () => !(await textOf(list)).includes('Go to window'), 5000)));
+
+// 4e. Share a folder (Pro): a public page anyone can open, "Save to my Tabfold", Stop sharing.
+await folderMenu(list, 'Checkout app', 'Share…');
+check('Share… asks first', (await has(list, 'Share “Checkout app”')) && (await has(list, 'Create link', 2000)));
+await click(list, 'Create link', 'dialog[open] button');
+const shared = await until(async () => (await folderNamed('Checkout app'))?.shareId, 10_000, 300);
+check('Create link shares the folder', !!shared && (await has(list, 'Stop sharing', 5000)));
+await shot(list, 'share.png');
+const info = await send({ type: 'share-info', folderId: checkoutFolder?.id });
+check('the link is on the share site', info?.ok && info.data?.url === `${SHARE_SITE}/s/${shared}`, info?.data?.url ?? JSON.stringify(info));
+const publicPage = await open(`${SHARE_SITE}/s/${shared}`);
+check('the public page shows the folder and its pages', (await has(publicPage, 'Checkout app', 10_000)) && (await has(publicPage, 'Route Handlers | Next.js', 4000)) && (await has(publicPage, 'Webhooks | Stripe Documentation', 2000)));
+check('…with Open all and Copy links', (await has(publicPage, 'Open all 4')) && (await has(publicPage, 'Copy links', 2000)));
+await shot(publicPage, 'share-public.png');
+const foldersBefore = (await liveFolders()).length;
+await publicPage.evaluate(() => document.getElementById('save')?.click());
+check('Save to my Tabfold saves it from the page', await has(publicPage, 'Saved to your Tabfold.', 10_000));
+const savedCopy = await until(async () => {
+  const folders = await liveFolders();
+  return folders.length === foldersBefore + 1 ? folders.find((f) => f.name === 'Checkout app' && f.id !== checkoutFolder?.id) : null;
+}, 8000, 300);
+check('…as a new folder with the 4 tabs', !!savedCopy && (await idb('tabs')).filter((t) => t.folderId === savedCopy.id).length === 4);
+const viewed = await send({ type: 'share-info', folderId: checkoutFolder?.id });
+check('the server counts the public page’s views', viewed?.ok && viewed.data?.views >= 1, JSON.stringify(viewed?.data));
+await list.send('Page.bringToFront');
+await click(list, 'Stop sharing', 'dialog[open] button');
+check('Stop sharing says the link no longer works', await has(list, 'Stopped sharing “Checkout app”. The link no longer works.'));
+await publicPage.send('Page.reload');
+check('the public page then says the link doesn’t work any more', await has(publicPage, 'This link doesn’t work any more', 10_000));
+await publicPage.close().catch(() => undefined);
+await list.evaluate(() => document.querySelector('dialog[open]')?.close());
 
 // 5. Keep Pro AI: Stripe Checkout in a tab, billing from the trial's end, the tab turns into the welcome page.
 await go('#/pro');
@@ -380,16 +559,22 @@ check('signing in with a code', await enterCode(ui, OWNER));
 check('toast: Signed in · Pro AI, yearly', await has(ui, 'Signed in · Pro AI, yearly'));
 check('the plan follows the email back', !!(await waitPlan((p) => p.email === OWNER && p.tier === 'pro-ai')));
 
-// 8. The subscription ends after the trial's days are over: the list, projects and backups stay; a
+// 8. The subscription ends after the trial's days are over: the list, folders and backups stay; a
 // one-time notice says so. (Cancelled while the free trial still ran, the trial would carry on.)
-const inProjects = (await idb('tabs')).filter((t) => t.project).length;
+const foldersWhilePaid = (await liveFolders()).length;
+const inFolders = (await idb('tabs')).filter((t) => t.folderId).length;
 store.accounts.get(accountOf(OWNER).id).trialStartedAt = Date.now() - 8 * 24 * 60 * 60_000;
 await stripe.setSubscription(subscriptionId, { status: 'canceled' }, { event: 'customer.subscription.deleted' });
 await send({ type: 'plan-refresh', force: true });
 check('when the subscription ends the plan goes back to Free (still signed in)', !!(await waitPlan((p) => p.tier === 'free' && p.email === OWNER)));
 await list.send('Page.bringToFront');
 check('a notice says Pro AI ended', await has(list, 'Your Pro AI plan has ended'));
-check('projects stay after the plan ends', inProjects >= 3 && (await idb('tabs')).filter((t) => t.project).length === inProjects && (await local('projects'))?.projects?.length === 2);
+check(
+  'folders stay after the plan ends, even past Free’s 3',
+  foldersWhilePaid === 4 && (await liveFolders()).length === 4 && (await idb('tabs')).filter((t) => t.folderId).length === inFolders,
+  `${foldersWhilePaid} folders, ${inFolders} tabs in them`,
+);
+check('…and the full list asks for Upgrade again', !!(await until(() => list.evaluate(() => [...document.querySelectorAll('button, a')].some((b) => b.innerText.trim() === 'Upgrade')), 5000)));
 await shot(list, 'plan-ended.png');
 
 // 9. A new buyer on a signed-out computer: closing checkout charges nothing; paying signs in.
@@ -432,6 +617,45 @@ if (squatter) {
   await squatter.checkoutPage.close().catch(() => undefined);
 }
 
+// 10b. Pro for life: one payment, no renewal.
+const LIFER = 'life@example.com';
+await ui.send('Page.bringToFront');
+await signOut(ui);
+await go('#/pro');
+check('the plans page offers Pro for life', await has(ui, '$99 once, for life'));
+await click(ui, '$99 once, for life');
+const lifetime = await pay(LIFER);
+check('Pro for life opens Stripe Checkout as a one-time payment', !!lifetime && [...stripe.sessions.values()].some((x) => x.mode === 'payment'));
+check('the welcome page says Pro, for life', !!lifetime && (await has(lifetime.checkoutPage, 'You’re on Tabfold Pro, for life', 20_000)));
+if (lifetime) await shot(lifetime.checkoutPage, 'welcome-lifetime.png');
+check('…signed in, Pro for life with no renewal', !!(await waitPlan((p) => p.email === LIFER && p.lifetime === true && p.tier === 'pro' && !p.renewsAt)));
+if (lifetime) await lifetime.checkoutPage.close().catch(() => undefined);
+await ui.send('Page.bringToFront');
+await go('#/settings');
+check('Settings › Your plan says Pro for life', (await has(ui, 'Pro for life')) && (await has(ui, 'One payment, no renewal', 3000)));
+await shot(ui, 'settings-lifetime.png');
+
+// 10c. Start a team: a name and how many people, Stripe Checkout per person, "Your team is ready".
+const TEAM_OWNER = 'team@example.com';
+await signOut(ui);
+await go('#/pro');
+await click(ui, 'Start a team');
+check('Start a team asks for the team’s name and how many people', (await has(ui, 'Team name')) && (await has(ui, 'People', 2000)));
+await ui.evaluate(() => document.querySelector('dialog[open] input:not([type=number])')?.focus());
+await ui.send('Input.insertText', { text: 'Truewidgets' });
+await shot(ui, 'team-start.png');
+await click(ui, 'Continue', 'dialog[open] button');
+const teamPaid = await pay(TEAM_OWNER);
+check('the welcome page says Your team is ready', !!teamPaid && (await has(teamPaid.checkoutPage, 'Your team is ready', 20_000)) && (await has(teamPaid.checkoutPage, 'Invite people', 2000)));
+check('the team pays per person on Stripe (3 people)', [...stripe.subscriptions.values()].some((x) => x.items.data[0].quantity === 3));
+if (teamPaid) await shot(teamPaid.checkoutPage, 'welcome-team.png');
+const teamPlan = await waitPlan((p) => p.email === TEAM_OWNER && p.team?.name === 'Truewidgets');
+check('the plan is the team’s: Pro AI, owner, 3 people', teamPlan?.tier === 'pro-ai' && teamPlan.team.role === 'owner' && teamPlan.team.seats === 3, JSON.stringify(teamPlan?.team));
+if (teamPaid) await teamPaid.checkoutPage.close().catch(() => undefined);
+await ui.send('Page.bringToFront');
+await go('#/settings');
+check('Settings › Your plan shows the team', await has(ui, 'Team · Truewidgets · 3 people'));
+
 // 11. Remove Tabfold: take your tabs with you first (Reopen all; we never press Remove here).
 await ui.send('Page.bringToFront');
 await go('#/settings');
@@ -442,14 +666,14 @@ await shot(ui, 'remove.png');
 const reopened = await send({ type: 'reopen-everything' });
 check('Reopen all reopens every folded tab', reopened?.ok && reopened.data.opened >= 5, JSON.stringify(reopened?.data));
 
-check('the model was only asked for names, projects and summaries', modelCalls.length >= 3 && modelCalls.every((c) => ['organise', 'name', 'context'].includes(c)), modelCalls.join(','));
+check('the model was only asked for names, folders, summaries, Ask and the tidy-up', modelCalls.length >= 5 && modelCalls.every((c) => ['organise', 'name', 'context', 'ask', 'tidy'].includes(c)), modelCalls.join(','));
 check('every Stripe webhook was accepted', stripe.deliveries.length > 0 && stripe.deliveries.every((d) => d.status === 200), JSON.stringify(stripe.deliveries.filter((d) => d.status !== 200)));
 check('the server logged no failures', serverLog.length === 0, serverLog.slice(0, 3).join(' | '));
 const pageErrors = pages.flatMap((p) => p.errors);
 check('no errors in extension pages', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '));
 
 await browser.close();
-await Promise.all([stripe.close(), api.close(), new Promise((r) => site.close(r))]);
+await Promise.all([stripe.close(), api.close(), new Promise((r) => site.close(r)), new Promise((r) => shareSite.close(r))]);
 rmSync(userDataDir, { recursive: true, force: true });
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length} passed, ${failed.length} failed. Screenshots: ${SHOTS}`);
