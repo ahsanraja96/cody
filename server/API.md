@@ -115,6 +115,11 @@ any account it was linked to). With `startTrial`, starts the 7-day Pro AI trial 
 never had one and has no live subscription (`trialStarted: true`); `trialUsed: true` means it had
 one before (the person stays signed in). Codes are stored only as an HMAC and deleted once used.
 
+### `POST /trial` (signed in)
+`{ "plan": PlanState, "runs": AiRuns | null, "trialStarted": boolean, "trialUsed": boolean }`.
+Starts the trial for an account that is already signed in (same rules as `startTrial` above), so a
+signed-in person doesn't need another code.
+
 ### `POST /signin/profile` (any token)
 Body `{ "profileKey": string }` → `{ "plan": PlanState, "runs": AiRuns | null }`. Links this
 token to the account the profile key belongs to; 401 `not-signed-in` if the key is unknown.
