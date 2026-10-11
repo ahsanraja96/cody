@@ -23,6 +23,8 @@ const PRO_ERROR_CODES: readonly ProErrorCode[] = [
   'invalid-email',
   'wrong-code',
   'code-expired',
+  'owner-only',
+  'not-in-team',
   'server',
 ];
 
@@ -46,6 +48,8 @@ export const PRO_ERROR_MESSAGES: Record<ProErrorCode, string> = {
   'invalid-email': 'That doesn’t look like an email address.',
   'wrong-code': 'That code doesn’t match.',
   'code-expired': 'That code has expired or was tried too many times. Ask for a new one.',
+  'owner-only': 'Only the team’s owner can do this.',
+  'not-in-team': 'You’re not in a team.',
   server: 'Something went wrong on Tabfold’s side. Try again in a moment.',
 };
 

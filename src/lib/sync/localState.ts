@@ -26,6 +26,11 @@ export interface SyncLocalState {
   writes: number[];
   /** Runs in a row that found Chrome sync's copy only partly arrived. */
   partialRuns: number;
+  /**
+   * Changed when this state is forgotten on purpose (a team's copy after "Clear everything" or
+   * leaving the team), so a run that started before doesn't write what it planned then.
+   */
+  epoch?: number;
 }
 
 export const SYNC_STATE_KEY = 'syncState';

@@ -3,6 +3,7 @@ import { browser } from 'wxt/browser';
 import { ChevronDown, CirclePause, CopyX, LoaderCircle, Sparkles, TriangleAlert, Trash, Upload, X } from 'lucide-react';
 import { send } from '@/lib/messages';
 import { hasPro, hasProAi } from '@/lib/pro/tiers';
+import { personalFolders } from '@/lib/teams';
 import type { SyncStatus } from '@/lib/state';
 import { Kbd } from '@/ui/components/Chips';
 import { Segmented, Switch } from '@/ui/components/Controls';
@@ -21,6 +22,7 @@ import { RemoveDialog } from './RemoveDialog';
 import { goToPlans } from './router';
 import { SitesYouMoved } from './SitesYouMoved';
 import { CloudSyncLine, SyncLine } from './SyncLine';
+import { TeamSection } from './TeamSection';
 import { YourPlan } from './YourPlan';
 
 const SLEEP_CHOICES: Array<{ value: number; label: string }> = [
@@ -176,7 +178,8 @@ export function SettingsDialog({
   const cloudStatus = useCloudSyncStatus();
   const pro = hasPro(plan);
   const proAi = hasProAi(plan);
-  const folders = useFolders() ?? [];
+  // A rule folds into the person's own folders only (a team's tabs are shared on purpose, never by a rule).
+  const folders = personalFolders(useFolders() ?? []);
   const siteKinds = useSiteKinds();
   const autoNotice = useAutoFoldNotice();
   const autoRuns = useAutoFoldLast();
@@ -251,6 +254,7 @@ export function SettingsDialog({
 
           <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-10 py-1 max-[560px]:px-5">
             <YourPlan open={open} onRestore={() => setBackups(true)} />
+            {plan.team && plan.email && <TeamSection plan={plan} open={open} />}
             <SettingRow
               title="Keep pinned tabs open"
               description="Fold skips them. Tabs playing sound always stay open too."

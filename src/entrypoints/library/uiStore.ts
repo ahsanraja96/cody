@@ -7,8 +7,8 @@ import type { FolderRecord, TabRecord } from '@/lib/types';
  * menu, the left column, a toast, the palette) and shown by one host in LibraryApp.
  */
 export type LibraryDialog =
-  /** Name a new folder; with tabs, they move into it. */
-  | { kind: 'new-folder'; tabRecordIds?: string[] }
+  /** Name a new folder; with tabs, they move into it. With `teamId`, a new team folder. */
+  | { kind: 'new-folder'; tabRecordIds?: string[]; teamId?: string }
   /** "Free has 3 folders". */
   | { kind: 'folder-limit' }
   | { kind: 'delete-folder'; folder: FolderRecord; tabs: number }
@@ -37,6 +37,12 @@ interface LibraryUi {
   /** The left column's "New folder" field is open. */
   creating: boolean;
   setCreating: (on: boolean) => void;
+  /** The left column's "New team folder" field is open. */
+  creatingTeam: boolean;
+  setCreatingTeam: (on: boolean) => void;
+  /** Settings opens on the Team section with the invite field focused ("Invite people"). */
+  focusInvite: boolean;
+  setFocusInvite: (on: boolean) => void;
   /** Folder or group to scroll to and open ("Move to › Client sites" then jump). */
   jumpTo: string | null;
   setJumpTo: (id: string | null) => void;
@@ -52,6 +58,10 @@ export const useLibraryUi = create<LibraryUi>((set) => ({
   setRenaming: (renaming) => set({ renaming }),
   creating: false,
   setCreating: (creating) => set({ creating }),
+  creatingTeam: false,
+  setCreatingTeam: (creatingTeam) => set({ creatingTeam }),
+  focusInvite: false,
+  setFocusInvite: (focusInvite) => set({ focusInvite }),
   jumpTo: null,
   setJumpTo: (jumpTo) => set({ jumpTo }),
 }));

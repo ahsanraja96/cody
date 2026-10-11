@@ -6,6 +6,7 @@ import type { PlanState } from '@/lib/pro/types';
 import { UNDO_WINDOW_MS, type LiveFolder } from '@/lib/state';
 import type { FolderRecord, TabGroupColor, TabRecord } from '@/lib/types';
 import { dismissToast, toast, type ToastOptions } from '@/ui/components/Toast';
+import { personalFolders } from '@/lib/teams';
 import { cleanFolderName, isSnoozed, type TabGroup } from '@/ui/folders';
 import { hasFreeLimits } from '@/ui/hooks';
 import { errorCode, proErrorText } from '@/ui/pro';
@@ -91,16 +92,23 @@ export function undoToast(message: string, actionIds: Array<string | null | unde
 // ---------------------------------------------------------------------------------------------
 // Folders
 
-/** Free already has its 3 folders: show "Free has 3 folders" instead of asking the worker. */
+/** Free already has its 3 folders: show "Free has 3 folders" instead of asking the worker. Team folders don't count. */
 export function folderLimitReached(plan: PlanState, folders: readonly FolderRecord[] | undefined): boolean {
-  return hasFreeLimits(plan) && (folders?.length ?? 0) >= FREE_LIMITS.folders;
+  return hasFreeLimits(plan) && personalFolders(folders ?? []).length >= FREE_LIMITS.folders;
 }
 
-export async function createFolder(name: string, color: TabGroupColor, tabRecordIds: string[] = []): Promise<FolderRecord | null> {
+/** A new folder; with `teamId`, a team folder everyone in the team sees ("New team folder"). */
+export async function createFolder(name: string, color: TabGroupColor, tabRecordIds: string[] = [], teamId?: string): Promise<FolderRecord | null> {
   const clean = cleanFolderName(name);
   if (!clean) return null;
   try {
-    const { folder } = await send({ type: 'folder-create', name: clean, color, ...(tabRecordIds.length ? { tabRecordIds } : {}) });
+    const { folder } = await send({
+      type: 'folder-create',
+      name: clean,
+      color,
+      ...(tabRecordIds.length ? { tabRecordIds } : {}),
+      ...(teamId ? { teamId } : {}),
+    });
     if (tabRecordIds.length) toast(`Moved ${count(tabRecordIds.length, 'tab')} to ${folder.name}`, { tone: 'success' });
     return folder;
   } catch (error) {
@@ -150,7 +158,15 @@ export async function moveToFolder(tabs: TabRecord[], folder: FolderRecord | nul
   try {
     const { moved, actionId } = await send({ type: 'tabs-move', tabRecordIds: ids, folderId: folder?.id ?? null });
     const n = moved || ids.length;
-    undoToast(folder ? `Moved ${count(n, 'tab')} to ${folder.name}` : `Took ${count(n, 'tab')} out of ${from?.name ?? 'the folder'}`, [actionId]);
+    const shared = !!folder?.teamId && !(from?.teamId === folder.teamId);
+    undoToast(
+      folder
+        ? shared
+          ? `Moved ${count(n, 'tab')} to ${folder.name}. Your team sees ${n === 1 ? 'it' : 'them'} now.`
+          : `Moved ${count(n, 'tab')} to ${folder.name}`
+        : `Took ${count(n, 'tab')} out of ${from?.name ?? 'the folder'}`,
+      [actionId],
+    );
   } catch (error) {
     handleCommandError(error);
   }

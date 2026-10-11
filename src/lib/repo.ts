@@ -18,7 +18,9 @@ import { newId } from './format';
 import { getDeviceId, snapshotMirror } from './state';
 import { clearSyncedData } from './sync/clear';
 import { clearCloudSyncedData } from './sync/cloud';
+import { forgetTeamSyncState } from './sync/team';
 import { urlKey } from './sync/records';
+import { isTeamSession, teamDeviceId, teamSessionName } from './teams';
 import { dedupeKey, displayHost } from './urls';
 import type {
   CapturedTab,
@@ -737,10 +739,11 @@ export async function removeDuplicateCopies(
   database: TabfoldDB = db,
 ): Promise<{ removed: RemovedTabs; placements: TabPatch[] }> {
   const wanted = urls ? new Set(urls.map(urlKey)) : null;
-  const live = new Set((await database.folders.where('deletedAt').equals(0).primaryKeys()) as string[]);
+  const live = new Set((await database.folders.where('deletedAt').equals(0).filter((f) => !f.teamId).primaryKeys()) as string[]);
   const extras: string[] = [];
   const moves = new Map<string, string[]>();
-  for (const group of duplicateGroups(await listFoldedTabs(database))) {
+  // A team's tabs are everyone's: they're never "extra copies" of the person's own.
+  for (const group of duplicateGroups(await listPersonalTabs(database))) {
     const [keep, ...rest] = group;
     if (!keep || (wanted && !wanted.has(urlKey(keep.url)))) continue;
     if (!keep.folderId || !live.has(keep.folderId)) {
@@ -830,6 +833,122 @@ export async function listFoldedTabs(database: TabfoldDB = db): Promise<TabRecor
   return database.tabs.where('sessionId').anyOf([...live]).toArray();
 }
 
+/**
+ * The person's own folded tabs: every tab in a live fold except a team's (src/lib/teams.ts). What
+ * Chrome sync and the account carry, and what Make room, duplicates and the tidy-up look at.
+ */
+export async function listPersonalTabs(database: TabfoldDB = db): Promise<TabRecord[]> {
+  const live = (await listLiveSessions(database)).filter((s) => !isTeamSession(s)).map((s) => s.id);
+  if (live.length === 0) return [];
+  return database.tabs.where('sessionId').anyOf(live).toArray();
+}
+
+/** A team's tabs: the ones in its live fold. */
+export async function listTeamTabs(teamId: string, database: TabfoldDB = db): Promise<TabRecord[]> {
+  const deviceId = teamDeviceId(teamId);
+  const live = (await listLiveSessions(database)).filter((s) => s.deviceId === deviceId).map((s) => s.id);
+  if (live.length === 0) return [];
+  return database.tabs.where('sessionId').anyOf(live).toArray();
+}
+
+/**
+ * A team's fold (one per team, "Team · <name>"), made when there's none, with its window and the
+ * next tab position. Runs inside the caller's transaction (sessions, windows, tabs).
+ */
+export async function findOrCreateTeamSession(
+  database: TabfoldDB,
+  team: { id: string; name: string },
+  now: number,
+): Promise<{ session: SessionRecord; windowId: string; nextOrder: number }> {
+  const deviceId = teamDeviceId(team.id);
+  let session = (await liveRange(database.sessions).toArray()).find((s) => s.deviceId === deviceId);
+  if (session && team.name && session.name !== teamSessionName(team.name)) {
+    session = { ...session, name: teamSessionName(team.name) };
+    await database.sessions.put(session);
+  }
+  if (!session) {
+    session = {
+      id: newId(),
+      name: teamSessionName(team.name || 'Team'),
+      tags: [],
+      pinned: 0,
+      color: null,
+      kind: 'session',
+      // Not a fold of windows: it stays out of Recent folds.
+      source: 'import',
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: 0,
+      deviceId,
+      version: 1,
+      tabCount: 0,
+      windowCount: 0,
+      preview: [],
+    };
+    await database.sessions.add(session);
+  }
+  return { session, ...(await firstWindow(database, session.id)) };
+}
+
+/** A fold's first window (made when it has none) and the next position in it. */
+async function firstWindow(database: TabfoldDB, sessionId: string): Promise<{ windowId: string; nextOrder: number }> {
+  const window = (await database.windows.where('sessionId').equals(sessionId).sortBy('order'))[0];
+  if (window) {
+    const siblings = await database.tabs.where('windowId').equals(window.id).toArray();
+    return { windowId: window.id, nextOrder: siblings.reduce((max, t) => Math.max(max, t.order + 1), 0) };
+  }
+  const windowId = newId();
+  await database.windows.add({ id: windowId, sessionId, name: '', order: 0, wasFocused: false, bounds: null, state: null });
+  return { windowId, nextOrder: 0 };
+}
+
+/**
+ * A personal fold to put tabs in that come out of a team folder ("From Truewidgets"): one per name
+ * on this computer, made when there's none. Not a fold of windows, so not in Recent folds. Runs
+ * inside the caller's transaction.
+ */
+export async function findOrCreatePersonalSession(
+  database: TabfoldDB,
+  name: string,
+  deviceId: string,
+  now: number,
+): Promise<{ session: SessionRecord; windowId: string; nextOrder: number }> {
+  let session = (await liveRange(database.sessions).toArray()).find(
+    (s) => s.name === name && s.source === 'import' && s.deviceId === deviceId && s.kind === 'session',
+  );
+  if (!session) {
+    session = {
+      id: newId(),
+      name,
+      tags: [],
+      pinned: 0,
+      color: null,
+      kind: 'session',
+      source: 'import',
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: 0,
+      deviceId,
+      version: 1,
+      tabCount: 0,
+      windowCount: 0,
+      preview: [],
+    };
+    await database.sessions.add(session);
+  }
+  return { session, ...(await firstWindow(database, session.id)) };
+}
+
+/** Refresh these folds' counts after tabs moved in or out; a fold left empty goes to Trash. Inside a transaction. */
+export async function settleSessions(sessionIds: Iterable<string>, database: TabfoldDB, now: number): Promise<void> {
+  for (const sessionId of new Set(sessionIds)) {
+    const updated = await recomputeSession(sessionId, database, now);
+    if (updated && updated.tabCount === 0 && updated.kind !== 'unsorted' && !updated.deletedAt) {
+      await database.sessions.put({ ...updated, deletedAt: now });
+    }
+  }
+}
+
 /** A tab's folder and snooze, and when they last changed. A field left out means none. */
 export type TabPlacement = Pick<TabRecord, 'folderId' | 'snoozeUntil' | 'snoozedOn' | 'placedAt'>;
 
@@ -840,12 +959,14 @@ export interface SyncedTab extends TabPlacement {
   title: string;
   savedAt: number;
   keywords: string[];
+  /** A team's copy: who added it. */
+  addedBy?: string;
 }
 
 export interface SyncChanges {
   /** Removed on another computer. */
   remove: string[];
-  update: Array<{ id: string; title?: string; keywords?: string[]; placement?: TabPlacement }>;
+  update: Array<{ id: string; title?: string; keywords?: string[]; placement?: TabPlacement; addedBy?: string }>;
   /** Replace this computer's copy of an address with the newer one from another computer. */
   adopt: Array<{ localId: string; tab: SyncedTab }>;
   /** New from other computers: added to the "From your other computers" fold. */
@@ -909,10 +1030,11 @@ async function findOrCreateInbox(
 /**
  * Apply what Chrome sync brought, in one transaction. Folds that lose their last tab go to Trash,
  * as with any removal. Returns the id of the "From your other computers" fold when tabs went in.
+ * With `team` (a team's copy), new tabs go into the team's fold instead, and that fold's id comes back.
  */
 export async function applySyncChanges(
   changes: SyncChanges,
-  options: { inboxId: string | null; deviceId: string; now?: number },
+  options: { inboxId: string | null; deviceId: string; now?: number; team?: { id: string; name: string } },
   database: TabfoldDB = db,
 ): Promise<{ inboxId: string | null }> {
   const now = options.now ?? Date.now();
@@ -941,6 +1063,7 @@ export async function applySyncChanges(
         ...row,
         ...(update.title !== undefined ? { title: update.title } : {}),
         ...(update.keywords ? { keywords: update.keywords } : {}),
+        ...(update.addedBy ? { addedBy: update.addedBy } : {}),
       };
       await database.tabs.put(update.placement ? withPlacement(next, update.placement) : next);
       touched.add(row.sessionId);
@@ -952,14 +1075,20 @@ export async function applySyncChanges(
       const clash = await database.tabs.get(tab.id);
       if (clash) touched.add(clash.sessionId);
       await database.tabs.delete(localId);
+      const { addedBy: _was, ...kept } = row;
       await database.tabs.put(
-        withPlacement({ ...row, id: tab.id, url: tab.url, title: tab.title, savedAt: tab.savedAt, keywords: tab.keywords }, tab),
+        withPlacement(
+          { ...kept, id: tab.id, url: tab.url, title: tab.title, savedAt: tab.savedAt, keywords: tab.keywords, ...(tab.addedBy ? { addedBy: tab.addedBy } : {}) },
+          tab,
+        ),
       );
       touched.add(row.sessionId);
       changed = true;
     }
     if (changes.insert.length) {
-      const inbox = await findOrCreateInbox(database, inboxId, options.deviceId, now);
+      const inbox = options.team
+        ? await findOrCreateTeamSession(database, options.team, now)
+        : await findOrCreateInbox(database, inboxId, options.deviceId, now);
       inboxId = inbox.session.id;
       touched.add(inboxId);
       let order = inbox.nextOrder;
@@ -984,6 +1113,7 @@ export async function applySyncChanges(
               savedAt: tab.savedAt,
               keywords: tab.keywords,
               urlTruncated: false,
+              ...(tab.addedBy ? { addedBy: tab.addedBy } : {}),
             },
             tab,
           ),
@@ -1091,6 +1221,9 @@ export async function clearAllData(database: TabfoldDB = db): Promise<void> {
   // Tabfold account for Pro.
   await clearSyncedData();
   await clearCloudSyncedData();
+  // A team's copy is everyone's: it isn't cleared. This computer only forgets what it knew of it,
+  // so the emptied list isn't taken for "removed everything" and the team's folders come back.
+  await forgetTeamSyncState().catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1135,7 +1268,7 @@ export async function restoreRecords(
     urlTruncated: false,
   });
   // Folded from normal windows only: a backup never holds Incognito tabs, and an Incognito copy isn't the same tab.
-  const seen = new Set((await listFoldedTabs(database)).filter((t) => !t.incognito).map((t) => modeKey(t.url, false)));
+  const seen = new Set((await listPersonalTabs(database)).filter((t) => !t.incognito).map((t) => modeKey(t.url, false)));
   const missing: BackupTab[] = [];
   for (const record of newestFirst) {
     const key = modeKey(record.url, false);
@@ -1155,7 +1288,7 @@ export async function restoreRecords(
     now,
     dedupe: false,
   });
-  const live = new Set((await database.folders.where('deletedAt').equals(0).primaryKeys()) as string[]);
+  const live = new Set((await database.folders.where('deletedAt').equals(0).filter((f) => !f.teamId).primaryKeys()) as string[]);
   draft.tabs.forEach((tab, index) => {
     const folderId = restoring[index]?.folderId;
     if (folderId && live.has(folderId)) tab.folderId = folderId;

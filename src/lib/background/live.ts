@@ -5,6 +5,8 @@ import { CommandError, type Command, type CommandResults } from '../messages';
 import { removeTabsWithSnapshot, saveCapture, type RemovedTabs } from '../repo';
 import { getSettings } from '../settings';
 import { getDeviceId, liveFolders, type LiveFolder } from '../state';
+import { planState } from '../pro/state';
+import { placeTabs } from '../teamFolders';
 import type { FolderRecord, TabRecord } from '../types';
 import { capFavicon, capUrl, classifyUrl, displayHost } from '../urls';
 import { currentNormalWindowId, ownOrigin } from './browserState';
@@ -147,9 +149,18 @@ async function join(binding: LiveFolder, tab: Browser.tabs.Tab): Promise<string 
     { name: folder.name, source: 'save-tabs', deviceId: await getDeviceId(), now },
     { targetSessionId: target?.id ?? null, dedupe: false },
   );
-  const recordId = result.savedTabIds[0];
+  let recordId = result.savedTabIds[0];
   if (!recordId) return null;
-  await db.tabs.update(recordId, { folderId: binding.folderId });
+  if (folder.teamId) {
+    // A live team folder: the tab is shared with the team, as added by this person.
+    const plan = await planState.get();
+    if (!plan.email || plan.team?.id !== folder.teamId) return null;
+    const placed = await placeTabs([recordId], folder, { email: plan.email, teamName: plan.team.name, deviceId: await getDeviceId(), now });
+    recordId = placed.newIds[0];
+    if (!recordId) return null;
+  } else {
+    await db.tabs.update(recordId, { folderId: binding.folderId });
+  }
   if (result.sessionId !== binding.liveSessionId) {
     const all = await bindings();
     if (all[binding.folderId]) await saveBindings({ ...all, [binding.folderId]: { ...all[binding.folderId]!, liveSessionId: result.sessionId } });

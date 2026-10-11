@@ -29,7 +29,8 @@ function OnItem({ icon, title, children }: { icon: ReactNode; title: string; chi
  * "Confirming your payment" until the server has the subscription (asked every 3 s for up to 2
  * minutes; after that it says it can take a minute and Pro switches on by itself), then what is
  * now on, with "Organise my tabs" (Pro AI) and "Back to your list". Pro for life says "You’re on
- * Tabfold Pro, for life"; a Teams plan says "Your team is ready" with "Invite people". When the
+ * Tabfold Pro, for life"; a Teams plan says "Your team is ready" with "Invite people" (Settings,
+ * on the Team section's invite field). When the
  * payment went to an email that already had an account, this computer signs in with a code first.
  */
 export function WelcomePage({ onBack, onOrganise, onTeam }: { onBack: () => void; onOrganise: () => void; onTeam: () => void }) {
@@ -137,7 +138,12 @@ export function WelcomePage({ onBack, onOrganise, onTeam }: { onBack: () => void
         <ul className="m-0 mt-6 w-full list-none p-0 text-left">
           {team && (
             <OnItem icon={<Users size={16} strokeWidth={1.75} />} title={teamLine(plan) ?? 'Your team'}>
-              Everyone in it gets Pro AI. Team folders come next; invite people by email.
+              Everyone in it gets Pro AI. Invite people by email; they sign in with a code to join.
+            </OnItem>
+          )}
+          {team && (
+            <OnItem icon={<FolderOpen size={16} strokeWidth={1.75} />} title="Team folders">
+              Left column › New team folder. Everyone in the team sees it and can add tabs to it.
             </OnItem>
           )}
           {lifetime && !tier && (

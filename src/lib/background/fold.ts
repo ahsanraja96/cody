@@ -144,8 +144,9 @@ async function leftOut(windows: Browser.windows.Window[], includeIncognito: bool
  */
 async function putInFolder(folderId: string, savedTabIds: string[], copies: TabRecord[]): Promise<NonNullable<LastAction['patches']>> {
   const folder = await db.folders.get(folderId);
-  // A folder deleted meanwhile: the tabs stay by kind of site.
-  if (!folder || folder.deletedAt) return [];
+  // A folder deleted meanwhile: the tabs stay by kind of site. A team folder isn't a fold's
+  // destination (a rule can't share tabs with a team): they stay by kind of site too.
+  if (!folder || folder.deletedAt || folder.teamId) return [];
   const moving = copies.filter((t) => t.folderId !== folderId);
   await db.transaction('rw', db.tabs, async () => {
     if (savedTabIds.length) await db.tabs.where('id').anyOf(savedTabIds).modify({ folderId });

@@ -11,6 +11,7 @@ import type { PlanState } from './pro/types';
 import { updateSettings } from './settings';
 import { siteKinds, type LastAction } from './state';
 import { DELETED_FOLDER_TTL_MS, hash53, urlKey } from './sync/records';
+import { isTeamSession, personalFolders } from './teams';
 import { TAB_GROUP_COLORS, type FolderRecord, type TabGroupColor, type TabRecord } from './types';
 
 /**
@@ -65,9 +66,14 @@ export function nextFolderColor(liveCount: number): TabGroupColor {
 
 const byOrder = (a: FolderRecord, b: FolderRecord) => a.order - b.order || a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1);
 
-/** Folders that aren't deleted, in the left column's order. */
+/** Folders that aren't deleted, in the left column's order (team folders too). */
 export async function listLiveFolders(database: TabfoldDB = db): Promise<FolderRecord[]> {
   return (await database.folders.where('deletedAt').equals(0).toArray()).sort(byOrder);
+}
+
+/** The person's own live folders (no team's): what Organise, the tidy-up and Free's 3 folders go by. */
+export async function listPersonalFolders(database: TabfoldDB = db): Promise<FolderRecord[]> {
+  return personalFolders(await listLiveFolders(database));
 }
 
 /**
@@ -106,12 +112,15 @@ export interface NewFolder {
   color?: TabGroupColor;
   source?: FolderRecord['source'];
   id?: string;
+  /** A team folder (Teams): it goes last among that team's folders and counts toward no limit. */
+  teamId?: string;
 }
 
 /**
  * Add a folder, last in the left column. Free stops at 3 live folders (`folder-limit`) unless
- * `unlimited` (a paid plan, or a folder that brings nothing new, like the old projects). Runs inside
- * the caller's transaction when there is one (it needs `folders`).
+ * `unlimited` (a paid plan, or a folder that brings nothing new, like the old projects); team
+ * folders count toward no limit. Runs inside the caller's transaction when there is one (it needs
+ * `folders`).
  */
 export async function addFolder(
   input: NewFolder,
@@ -122,8 +131,11 @@ export async function addFolder(
   if (!name) throw new CommandError('Give the folder a name.', 'invalid-name');
   const now = options.now ?? Date.now();
   return database.transaction('rw', [database.folders], async () => {
-    const live = await database.folders.where('deletedAt').equals(0).toArray();
-    if (!options.unlimited && live.length >= FREE_LIMITS.folders) throw folderLimitError();
+    const all = await database.folders.where('deletedAt').equals(0).toArray();
+    const team = input.teamId ?? null;
+    // A team's folders and the person's own are numbered apart: each list keeps its own order.
+    const live = team ? all.filter((f) => f.teamId === team) : personalFolders(all);
+    if (!team && !options.unlimited && live.length >= FREE_LIMITS.folders) throw folderLimitError();
     const folder: FolderRecord = {
       id: input.id && isFolderId(input.id) ? input.id : newFolderId(),
       name,
@@ -133,6 +145,7 @@ export async function addFolder(
       updatedAt: now,
       deletedAt: 0,
       source: input.source ?? 'person',
+      ...(team ? { teamId: team } : {}),
     };
     await database.folders.put(folder);
     return folder;
@@ -254,10 +267,10 @@ export function installPlacementStamp(database: TabfoldDB = db): void {
 // ---------------------------------------------------------------------------------------------
 // The free list's limit (500 tabs)
 
-/** Folded tabs now: the live folds' tab counts (snoozed tabs count too). */
+/** Folded tabs now: the live folds' tab counts (snoozed tabs count too; a team's fold doesn't). */
 export async function countFoldedTabs(database: TabfoldDB = db): Promise<number> {
   const live = await database.sessions.where('deletedAt').equals(0).toArray();
-  return live.reduce((sum, session) => sum + (session.tabCount || 0), 0);
+  return live.reduce((sum, session) => sum + (isTeamSession(session) ? 0 : session.tabCount || 0), 0);
 }
 
 export interface ListRoom {

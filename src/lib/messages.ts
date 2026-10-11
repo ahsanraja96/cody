@@ -1,6 +1,17 @@
 import { browser } from 'wxt/browser';
 import type { CategoryId } from './categories';
-import type { AiGroup, BackupInfo, BillingInterval, CheckoutPlan, OrganiseResult, PlanState, SigninPurpose, SigninResult } from './pro/types';
+import type {
+  AiGroup,
+  BackupInfo,
+  BillingInterval,
+  CheckoutPlan,
+  OrganiseResult,
+  PlanState,
+  SigninPurpose,
+  SigninResult,
+  TeamDetails,
+  TeamSummary,
+} from './pro/types';
 import type { TidyState } from './state';
 import type { ActiveFold } from './state';
 import type { FolderRecord, TabGroupColor } from './types';
@@ -149,14 +160,21 @@ export type Command =
   /** Before removing Tabfold: reopen every folded tab, lazily, one window per fold. */
   | { type: 'reopen-everything' }
   // ---- 0.6: folders and kinds of site (src/lib/background/folders.ts) ----
-  /** A new folder (Free: 3 live folders, else `folder-limit`). With tabs, they move into it. */
-  | { type: 'folder-create'; name: string; color?: TabGroupColor; tabRecordIds?: string[] }
+  /**
+   * A new folder (Free: 3 live folders, else `folder-limit`). With tabs, they move into it. With
+   * `teamId` (the plan's team), a team folder: everyone in the team sees it; no limit.
+   */
+  | { type: 'folder-create'; name: string; color?: TabGroupColor; tabRecordIds?: string[]; teamId?: string }
   | { type: 'folder-update'; id: string; name?: string; color?: TabGroupColor }
   /** The folders' order in the left column, top first. */
   | { type: 'folder-reorder'; ids: string[] }
   /** Delete a folder; its tabs go back to their kind of site (Undo with `undo`). */
   | { type: 'folder-delete'; id: string }
-  /** Move tabs into a folder, or out of their folder (`folderId: null`). Undo with `undo`. */
+  /**
+   * Move tabs into a folder, or out of their folder (`folderId: null`). Undo with `undo`. Into a
+   * team folder, a tab is shared with the team (it leaves the person's own list); out of one, it
+   * is the person's own again.
+   */
   | { type: 'tabs-move'; tabRecordIds: string[]; folderId: string | null }
   /** Move a site to another kind (remembered for its new tabs), or put it back (`kind: null`). */
   | { type: 'site-kind-set'; host: string; kind: CategoryId | null }
@@ -195,7 +213,28 @@ export type Command =
   | { type: 'tidy-run' }
   | { type: 'tidy-apply'; suggestionId: string }
   /** "Not now": hide the card until next week. */
-  | { type: 'tidy-dismiss' };
+  | { type: 'tidy-dismiss' }
+  // ---- Teams (src/lib/background/teams.ts, server/API.md "Teams") ----
+  /** The plan's team, its people (owner first) and its open invitations; kept for the pages too. */
+  | { type: 'team-get' }
+  /** Rename the team (owner). */
+  | { type: 'team-rename'; name: string }
+  /** Email invitations (owner): at most 20 at a time. */
+  | { type: 'team-invite'; emails: string[] }
+  | { type: 'team-cancel-invite'; email: string }
+  /** Take someone out of the team (owner; a member's `id` from `team-get`). */
+  | { type: 'team-remove'; memberId: string }
+  /** Leave the team (a member, not the owner). The full list then asks about its folders here. */
+  | { type: 'team-leave' }
+  /**
+   * Sync the team's folders now: read the team's copy, bring in what changed, send what changed
+   * here. `background` (the pages' 2-minute pull) keeps to the back-off and skips an unchanged copy.
+   */
+  | { type: 'team-sync-now'; background?: boolean }
+  /** "Keep a copy" after leaving a team: its folders become the person's own. */
+  | { type: 'team-keep-copy'; teamId: string }
+  /** Let a former team's folders go from this computer (the notice's ×). */
+  | { type: 'team-gone-dismiss'; teamId: string };
 
 /** One fold in "Make room", oldest first. */
 export interface RoomFold {
@@ -388,6 +427,16 @@ export interface CommandResults {
   'tidy-run': TidyState;
   'tidy-apply': { done: number; actionId: string | null };
   'tidy-dismiss': { ok: true };
+  'team-get': TeamDetails;
+  'team-rename': { team: TeamSummary };
+  /** How many invitations were new (someone already in or invited isn't counted). */
+  'team-invite': { invited: number };
+  'team-cancel-invite': { ok: true };
+  'team-remove': { ok: true };
+  'team-leave': { ok: true };
+  'team-sync-now': { ok: boolean };
+  'team-keep-copy': { folders: number; tabs: number };
+  'team-gone-dismiss': { ok: true };
 }
 
 /**

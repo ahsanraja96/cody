@@ -53,6 +53,8 @@ export interface LocalTab {
   snoozeUntil?: number;
   snoozedOn?: string;
   placedAt?: number;
+  /** Team copy only: who added it to the team. */
+  addedBy?: string;
 }
 
 /** Folders (every row, deleted ones too) and site kinds on this computer. */
@@ -95,6 +97,8 @@ export interface SyncUpdate {
   keywords?: string[];
   /** Its folder and snooze changed on another computer (or its folder was deleted). */
   placement?: SyncPlacement;
+  /** Team copy: who added it (when this computer didn't know). */
+  addedBy?: string;
 }
 
 export interface FolderMerge {
@@ -167,9 +171,16 @@ export function pickPlacement(a: SyncPlacement, b: SyncPlacement): SyncPlacement
   return placementOf(placementKey(a) >= placementKey(b) ? a : b);
 }
 
+/** Who added a tab (team copy), the same on every computer: one that says beats one that doesn't. */
+export function pickAddedBy(a: string | undefined, b: string | undefined): string | undefined {
+  if (!a || !b) return a || b || undefined;
+  return a <= b ? a : b;
+}
+
 /** Two copies of one tab (same sync id): commutative and idempotent, so every computer agrees. */
 export function mergeContent(a: SyncRecord, b: SyncRecord): SyncRecord {
   const url = a.url === b.url ? a.url : a.url > b.url ? a.url : b.url;
+  const addedBy = pickAddedBy(a.addedBy, b.addedBy);
   return {
     id: a.id,
     url,
@@ -177,6 +188,7 @@ export function mergeContent(a: SyncRecord, b: SyncRecord): SyncRecord {
     savedAt: Math.max(a.savedAt, b.savedAt),
     keywords: canonicalKeywords([...a.keywords, ...b.keywords]),
     ...pickPlacement(a, b),
+    ...(addedBy ? { addedBy } : {}),
   };
 }
 
@@ -319,6 +331,7 @@ function toRecord(tab: LocalTab, limits: SyncLimits): SyncRecord {
       snoozedOn: tab.snoozedOn,
       placedAt: tab.placedAt ? toSyncTime(tab.placedAt) : undefined,
     }),
+    ...(tab.addedBy ? { addedBy: tab.addedBy } : {}),
   };
 }
 
@@ -407,7 +420,8 @@ export function planSync(input: SyncPlanInput): SyncPlan {
       const change: SyncUpdate = { id: same.dbId };
       if (merged.title !== same.record.title) change.title = merged.title;
       if (!sameKeywords(merged.keywords, same.record.keywords)) change.keywords = merged.keywords;
-      if (change.title !== undefined || change.keywords) update.set(same.dbId, change);
+      if (merged.addedBy && merged.addedBy !== same.record.addedBy) change.addedBy = merged.addedBy;
+      if (change.title !== undefined || change.keywords || change.addedBy) update.set(same.dbId, change);
       same.record = merged;
       continue;
     }
@@ -424,6 +438,9 @@ export function planSync(input: SyncPlanInput): SyncPlan {
         delete record.snoozedOn;
         delete record.placedAt;
         Object.assign(record, pickPlacement(incoming, newest.record));
+        const adder = pickAddedBy(incoming.addedBy, newest.record.addedBy);
+        if (adder) record.addedBy = adder;
+        else delete record.addedBy;
         adopt.push({ localId: newest.dbId, record });
         unindex(newest);
         const view: View = { dbId: record.id, record, key };

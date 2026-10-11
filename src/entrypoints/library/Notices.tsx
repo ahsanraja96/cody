@@ -1,14 +1,24 @@
 import { useState, type ReactNode } from 'react';
 import { browser } from 'wxt/browser';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { CircleAlert, Info, RefreshCw, RotateCcw, TriangleAlert, X } from 'lucide-react';
+import { CircleAlert, Info, RefreshCw, RotateCcw, TriangleAlert, Users, X } from 'lucide-react';
 import { acknowledgeWipe, checkWiped } from '@/lib/dataGuard';
 import { send } from '@/lib/messages';
 import { planEnded } from '@/lib/pro/state';
 import type { ActiveFold } from '@/lib/state';
 import { toast } from '@/ui/components/Toast';
 import { FREE_LIMITS } from '@/lib/limits';
-import { currentScreen, hasFreeLimits, useFoldedCount, useListRoom, useLoadedPlan, usePlanEnded, useRecoveryOffer, useUpdateReady } from '@/ui/hooks';
+import {
+  currentScreen,
+  hasFreeLimits,
+  useFoldedCount,
+  useListRoom,
+  useLoadedPlan,
+  usePlanEnded,
+  useRecoveryOffer,
+  useTeamGone,
+  useUpdateReady,
+} from '@/ui/hooks';
 import { tierName } from '@/ui/pro';
 import { errorText } from './actions';
 import { startFold, useFoldError } from './fold';
@@ -282,6 +292,50 @@ function PlanEndedLine() {
 }
 
 /**
+ * "You’re no longer in Truewidgets. Its folders were removed from this computer." (Teams): once,
+ * after leaving, being removed, or the team's plan ending. "Keep a copy" turns the team's folders
+ * into the person's own; × lets them go for good.
+ */
+function TeamGoneLine() {
+  const gone = useTeamGone();
+  const [busy, setBusy] = useState<string | null>(null);
+  if (gone.length === 0) return null;
+  return (
+    <>
+      {gone.map((entry) => {
+        const keep = async () => {
+          setBusy(entry.teamId);
+          try {
+            const { folders, tabs } = await send({ type: 'team-keep-copy', teamId: entry.teamId });
+            toast(`Kept ${count(folders, 'folder')} and ${count(tabs, 'tab')} from ${entry.name} as your own.`, { tone: 'success' });
+          } catch (error) {
+            toast(errorText(error), { tone: 'error' });
+          } finally {
+            setBusy(null);
+          }
+        };
+        const dismiss = () => void send({ type: 'team-gone-dismiss', teamId: entry.teamId }).catch(() => undefined);
+        return (
+          <div key={entry.teamId} role="status" className="flex items-center gap-2.5 rounded-card border border-border bg-bg-subtle py-2 pr-1.5 pl-3.5">
+            <Users size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-text-2" />
+            <p className="m-0 min-w-0 flex-1">
+              <b className="font-semibold">
+                {entry.reason === 'ended' ? `The Teams plan for ${entry.name} has ended.` : `You’re no longer in ${entry.name}.`}
+              </b>{' '}
+              <span className="text-text-2">Its folders were removed from this computer.</span>
+            </p>
+            <button type="button" className={PRIMARY_SM} disabled={busy !== null} onClick={() => void keep()}>
+              Keep a copy
+            </button>
+            <DismissButton onClick={dismiss} label="Dismiss: let them go" />
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/**
  * "Your free list is full: 500 of 500 tabs" while it is, or after a fold that didn't fit was
  * started where no page could say so (the shortcut, a rule: worker event `limit-hit`).
  */
@@ -306,6 +360,7 @@ export function Notices({ fold, onImport, onMakeRoom }: { fold: ActiveFold | und
       <LeaveSiteLine fold={fold} />
       <CrashLine />
       <WipedLine onImport={onImport} />
+      <TeamGoneLine />
       <PlanEndedLine />
     </div>
   );

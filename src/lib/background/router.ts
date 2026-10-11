@@ -16,6 +16,7 @@ import {
 } from './restore';
 import { handleSave, handleUndo, preflightSave } from './save';
 import { handleShareCommand } from './share';
+import { handleTeamCommand } from './teams';
 import { dismissRecovery, recoverFromMirror, takeSnapshot } from './snapshots';
 import { suspendInactive, suspendTab } from './suspend';
 import { handleTidyCommand } from './tidy';
@@ -116,6 +117,16 @@ async function dispatch(command: Command, source: CommandSource): Promise<Comman
     case 'tidy-apply':
     case 'tidy-dismiss':
       return handleTidyCommand(command);
+    case 'team-get':
+    case 'team-rename':
+    case 'team-invite':
+    case 'team-cancel-invite':
+    case 'team-remove':
+    case 'team-leave':
+    case 'team-sync-now':
+    case 'team-keep-copy':
+    case 'team-gone-dismiss':
+      return handleTeamCommand(command);
   }
 }
 

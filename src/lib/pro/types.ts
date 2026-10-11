@@ -46,6 +46,49 @@ export interface TeamInfo {
   seats: number;
 }
 
+/** A team's plan: on, on with a payment that didn't go through, or ended (folders readable 30 more days). */
+export type TeamStatus = 'active' | 'past_due' | 'ended';
+
+/** `GET /team`'s `team`: the plan's team, with its status. */
+export interface TeamSummary extends TeamInfo {
+  status: TeamStatus;
+}
+
+/** Someone in the team (owner first, then in the order they joined). `id` is what removing them takes. */
+export interface TeamMember {
+  id: string;
+  email: string;
+  role: 'owner' | 'member';
+  joinedAt: number;
+}
+
+/** An invitation nobody has taken up yet (oldest first). */
+export interface TeamInvite {
+  email: string;
+  invitedAt: number;
+}
+
+/** `GET /team` (server/API.md "Teams"): the team, its people and its open invitations. */
+export interface TeamDetails {
+  team: TeamSummary;
+  members: TeamMember[];
+  invites: TeamInvite[];
+}
+
+/**
+ * A team this computer had folders from, that the person is no longer in (left, removed) or whose
+ * plan ended. Its folders and tabs are out of the list until the person answers the notice in the
+ * full list: "Keep a copy" (personal folders) or dismiss (gone for good).
+ */
+export interface TeamGone {
+  teamId: string;
+  name: string;
+  reason: 'left' | 'ended';
+  at: number;
+  folders: number;
+  tabs: number;
+}
+
 /** What a checkout buys: a subscription tier, Pro for life (one payment), or a Teams plan (per person). */
 export type CheckoutPlan = Exclude<Tier, 'free'> | 'pro-lifetime' | 'teams';
 
@@ -170,6 +213,10 @@ export type ProErrorCode =
   | 'invalid-email'
   | 'wrong-code'
   | 'code-expired'
+  /** 0.6 Teams: a team route only the owner may use (the server's 403). */
+  | 'owner-only'
+  /** 0.6 Teams: this account isn't in a team (the server's 404 on a team route). */
+  | 'not-in-team'
   | 'server';
 
 /** Why a sign-in code is emailed; it only changes the email's wording. */

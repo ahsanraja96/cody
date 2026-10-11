@@ -1,6 +1,7 @@
 import { useId, useMemo, useState, type ReactNode } from 'react';
 import { Folder, FolderPlus, LoaderCircle, Sparkles, X } from 'lucide-react';
 import { FREE_LIMITS } from '@/lib/limits';
+import { personalFolders, teamFolders } from '@/lib/teams';
 import type { FolderRecord, TabGroupColor, TabRecord } from '@/lib/types';
 import { FolderIcon } from '@/ui/components/FolderIcon';
 import { Modal } from '@/ui/components/Modal';
@@ -99,21 +100,21 @@ export function ColourPicker({ value, onChange }: { value: TabGroupColor; onChan
   );
 }
 
-function NewFolderDialog({ tabRecordIds, onClose }: { tabRecordIds?: string[]; onClose: () => void }) {
+function NewFolderDialog({ tabRecordIds, teamId, onClose }: { tabRecordIds?: string[]; teamId?: string; onClose: () => void }) {
   const folders = useFolders() ?? [];
   const plan = usePlan();
   const [name, setName] = useState('');
-  const [color, setColor] = useState<TabGroupColor>(() => nextFolderColor(folders));
+  const [color, setColor] = useState<TabGroupColor>(() => nextFolderColor(teamId ? teamFolders(folders, teamId) : personalFolders(folders)));
   const [busy, setBusy] = useState(false);
   const inputId = useId();
   const submit = async () => {
     if (!cleanFolderName(name) || busy) return;
-    if (folderLimitReached(plan, folders)) {
+    if (!teamId && folderLimitReached(plan, folders)) {
       openDialog({ kind: 'folder-limit' });
       return;
     }
     setBusy(true);
-    const folder = await createFolder(name, color, tabRecordIds);
+    const folder = await createFolder(name, color, tabRecordIds, teamId);
     setBusy(false);
     // A limit answer replaced this dialog with "Free has 3 folders"; otherwise it's done.
     if (folder) onClose();
@@ -122,7 +123,7 @@ function NewFolderDialog({ tabRecordIds, onClose }: { tabRecordIds?: string[]; o
     <SmallDialog
       open
       onClose={onClose}
-      title="New folder"
+      title={teamId ? 'New team folder' : 'New folder'}
       closeButton
       footer={
         <>
@@ -160,7 +161,8 @@ function NewFolderDialog({ tabRecordIds, onClose }: { tabRecordIds?: string[]; o
         </div>
         <ColourPicker value={color} onChange={setColor} />
         <p className="m-0 text-small text-text-3">
-          {tabRecordIds?.length ? `${count(tabRecordIds.length, 'tab')} will move into it. ` : ''}“Open all” opens a Chrome tab group in this colour.
+          {tabRecordIds?.length ? `${count(tabRecordIds.length, 'tab')} will move into it. ` : ''}
+          {teamId ? 'Everyone in your team sees it and can add to it.' : '“Open all” opens a Chrome tab group in this colour.'}
         </p>
       </form>
     </SmallDialog>
@@ -202,12 +204,13 @@ function FolderLimitDialog({ onClose }: { onClose: () => void }) {
 }
 
 function DeleteFolderDialog({ folder, tabs, onClose }: { folder: FolderRecord; tabs: number; onClose: () => void }) {
+  const team = !!folder.teamId;
   return (
     <SmallDialog
       open
       onClose={onClose}
       width={360}
-      title={`Delete “${folder.name}”?`}
+      title={team ? `Delete “${folder.name}” for everyone?` : `Delete “${folder.name}”?`}
       footer={
         <>
           {/* Destructive: focus stays on Cancel, so Enter never deletes by accident. */}
@@ -228,9 +231,13 @@ function DeleteFolderDialog({ folder, tabs, onClose }: { folder: FolderRecord; t
       }
     >
       <p className="m-0 mt-1.5 text-text-2">
-        {tabs > 0
-          ? `Its ${count(tabs, 'tab')} stay in your list, back with their kind of site. Only the folder goes.`
-          : 'It has no tabs. Only the folder goes.'}
+        {team
+          ? tabs > 0
+            ? `It’s a team folder: it goes for everyone in your team, with its ${count(tabs, 'tab')}.`
+            : 'It’s a team folder: it goes for everyone in your team.'
+          : tabs > 0
+            ? `Its ${count(tabs, 'tab')} stay in your list, back with their kind of site. Only the folder goes.`
+            : 'It has no tabs. Only the folder goes.'}
       </p>
     </SmallDialog>
   );
@@ -240,7 +247,7 @@ function DeleteFolderDialog({ folder, tabs, onClose }: { folder: FolderRecord; t
 function PickFolderDialog({ tabRecordIds, title, onClose }: { tabRecordIds: string[]; title: string; onClose: () => void }) {
   const folders = useFolders() ?? [];
   const plan = usePlan();
-  const [choice, setChoice] = useState<string>(() => folders[0]?.id ?? 'new');
+  const [choice, setChoice] = useState<string>(() => personalFolders(folders)[0]?.id ?? folders[0]?.id ?? 'new');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const groupId = useId();
@@ -290,14 +297,21 @@ function PickFolderDialog({ tabRecordIds, title, onClose }: { tabRecordIds: stri
         <span id={groupId} className="sr-only">
           Folder
         </span>
-        {folders.map((folder) => (
-          <label key={folder.id} className={row}>
-            <input type="radio" name={groupId} checked={choice === folder.id} onChange={() => setChoice(folder.id)} className="accent-[var(--tf-accent)]" />
-            <FolderIcon color={folder.color} />
-            <span dir="auto" className="min-w-0 flex-1 truncate">
-              {folder.name}
-            </span>
-          </label>
+        {[...personalFolders(folders), ...teamFolders(folders)].map((folder, index, all) => (
+          <div key={folder.id} className="contents">
+            {folder.teamId && !all[index - 1]?.teamId && (
+              <div role="presentation" className="px-2.5 pt-2 pb-1 text-meta font-semibold tracking-[.04em] text-text-3 uppercase">
+                Team
+              </div>
+            )}
+            <label className={row}>
+              <input type="radio" name={groupId} checked={choice === folder.id} onChange={() => setChoice(folder.id)} className="accent-[var(--tf-accent)]" />
+              <FolderIcon color={folder.color} />
+              <span dir="auto" className="min-w-0 flex-1 truncate">
+                {folder.name}
+              </span>
+            </label>
+          </div>
         ))}
         <label className={row}>
           <input type="radio" name={groupId} checked={choice === 'new'} onChange={() => setChoice('new')} className="accent-[var(--tf-accent)]" />
@@ -485,7 +499,7 @@ export function FolderDialogHost({ render }: { render?: (dialog: LibraryDialog, 
   if (!dialog) return null;
   switch (dialog.kind) {
     case 'new-folder':
-      return <NewFolderDialog key="new" tabRecordIds={dialog.tabRecordIds} onClose={close} />;
+      return <NewFolderDialog key="new" tabRecordIds={dialog.tabRecordIds} teamId={dialog.teamId} onClose={close} />;
     case 'folder-limit':
       return <FolderLimitDialog key="limit" onClose={close} />;
     case 'delete-folder':

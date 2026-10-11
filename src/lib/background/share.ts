@@ -5,6 +5,7 @@ import { FREE_LIMITS } from '../limits';
 import { CommandError, type Command, type CommandResults } from '../messages';
 import { api, ProError } from '../pro/api';
 import { PRO_CONFIG, proConfigured } from '../pro/config';
+import { planState } from '../pro/state';
 import { saveCapture } from '../repo';
 import { TAB_GROUP_COLORS, type CapturedTab, type FolderRecord, type TabGroupColor, type TabRecord } from '../types';
 import { capUrl, classifyUrl, displayHost } from '../urls';
@@ -124,6 +125,10 @@ function shareUrl(value: unknown, id: string): string {
 async function createShare(folderId: string, live: boolean): Promise<CommandResults['share-create']> {
   await requirePaid();
   const folder = await folderOf(folderId);
+  // A team folder is shared as a link by the team's owner only (Mx-Plans: "Owner controls: members, sharing").
+  if (folder.teamId && (await planState.get()).team?.role !== 'owner') {
+    throw new ProError('owner-only', 'Only the team’s owner can share a team folder as a link.');
+  }
   if (folder.shareId) {
     // Already shared: send what it has now (and the switch), same link.
     const updated = await updateShare(folderId, live);

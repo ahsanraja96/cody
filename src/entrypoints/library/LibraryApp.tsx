@@ -7,6 +7,7 @@ import { ImportDialog } from '@/ui/ImportPanel';
 import { browser } from 'wxt/browser';
 import { extUrl } from '@/lib/extUrl';
 import { hasProAi } from '@/lib/pro/tiers';
+import { isTeamSession } from '@/lib/teams';
 import { FREE_PLAN } from '@/lib/pro/types';
 import { send } from '@/lib/messages';
 import {
@@ -75,6 +76,38 @@ function usePlanRefresh() {
     window.addEventListener('focus', refresh);
     return () => window.removeEventListener('focus', refresh);
   }, []);
+}
+
+/** While the full list is open: the team's folders are read every 2 minutes and on focus. */
+const TEAM_PULL_MS = 2 * 60_000;
+
+/**
+ * Teams: pull the team's folders when the page opens, when it comes back into focus (at most every
+ * 10 seconds) and every 2 minutes while it's open; and read the team's people for the avatars.
+ */
+function useTeamRefresh(teamId: string | null) {
+  useEffect(() => {
+    if (!teamId) return;
+    let last = 0;
+    let peopleAt = 0;
+    const pull = (force = false) => {
+      if (!force && Date.now() - last < 10_000) return;
+      last = Date.now();
+      void send({ type: 'team-sync-now', background: true }).catch(() => undefined);
+      if (Date.now() - peopleAt >= TEAM_PULL_MS) {
+        peopleAt = Date.now();
+        void send({ type: 'team-get' }).catch(() => undefined);
+      }
+    };
+    pull(true);
+    const onFocus = () => pull();
+    window.addEventListener('focus', onFocus);
+    const timer = setInterval(() => pull(true), TEAM_PULL_MS);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      clearInterval(timer);
+    };
+  }, [teamId]);
 }
 
 /**
@@ -165,6 +198,7 @@ export function LibraryApp() {
   const { ask, run: runAsk } = useAsk(query);
   useFoldToast();
   usePlanRefresh();
+  useTeamRefresh(plan.email ? (plan.team?.id ?? null) : null);
   useCheckoutClosedToast();
   useAutoFoldToast();
 
@@ -180,7 +214,7 @@ export function LibraryApp() {
   const recent = useMemo(
     () =>
       (folded?.folds ?? [])
-        .filter((f) => f.kind !== 'unsorted' && f.source !== 'import' && f.tabCount > 0)
+        .filter((f) => f.kind !== 'unsorted' && f.source !== 'import' && f.tabCount > 0 && !isTeamSession(f))
         .sort((a, b) => b.createdAt - a.createdAt)
         .slice(0, 3),
     [folded],
@@ -306,7 +340,8 @@ export function LibraryApp() {
     );
   }
 
-  const empty = folded !== undefined && tabs.length === 0 && !hasRemovals && (folders?.length ?? 0) === 0;
+  // On a Teams plan the list shows even when empty: the team's section is where team folders start.
+  const empty = folded !== undefined && tabs.length === 0 && !hasRemovals && (folders?.length ?? 0) === 0 && !(plan.email && plan.team);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-bg text-text">
@@ -349,7 +384,11 @@ export function LibraryApp() {
                 navigate('list', { replace: true });
                 setOrganising(true);
               }}
-              onTeam={() => navigate('settings', { replace: true })}
+              onTeam={() => {
+                // Settings opens on the Team section, the invite field ready.
+                useLibraryUi.getState().setFocusInvite(true);
+                navigate('settings', { replace: true });
+              }}
             />
           )}
         </main>

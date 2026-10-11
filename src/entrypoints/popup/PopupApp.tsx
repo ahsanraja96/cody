@@ -177,6 +177,11 @@ function Home({
   const snoozeBack = useSnoozeBack();
   const autoNotice = useAutoFoldNotice();
   const free = !!plan && hasFreeLimits(plan);
+  // Teams: the team's folders are read when the popup opens (the worker keeps to its back-off).
+  const teamId = plan?.email ? (plan.team?.id ?? null) : null;
+  useEffect(() => {
+    if (teamId) void send({ type: 'team-sync-now', background: true }).catch(() => undefined);
+  }, [teamId]);
   const toLibrary = (hash: string) => void openLibrary(hash).finally(() => window.close());
   const limit = room
     ? { full: room.full, near: room.near, room: room.room, onUpgrade: () => toLibrary(PLANS_HASH), onMakeRoom: () => toLibrary('#/room') }

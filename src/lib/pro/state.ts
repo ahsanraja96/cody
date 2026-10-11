@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser';
 import type { SyncStatus } from '../state';
-import { FREE_PLAN, type AiRuns, type CheckoutState, type MilestoneState, type PlanState, type ProjectsState, type TeamInfo, type Tier } from './types';
+import { FREE_PLAN, type AiRuns, type CheckoutState, type MilestoneState, type PlanState, type ProjectsState, type TeamDetails, type TeamGone, type TeamInfo, type Tier } from './types';
 
 /** Pro state kept in extension storage, shared by the worker and the pages. */
 
@@ -116,6 +116,26 @@ export const checkoutNotice = item<{ kind: 'closed'; at: number }>(CHECKOUT_NOTI
  * to use it. Set only while this computer isn't signed in.
  */
 export const needsSignIn = item<{ email: string }>(NEEDS_SIGN_IN);
+
+// ---- Teams (0.6) ----
+
+/** What this computer remembers about its team's copy (src/lib/sync/team.ts), with the team's id. */
+export const TEAM_SYNC_STATE_KEY = 'teamSyncState';
+
+/** Sync of the team's folders: the same shape as Chrome sync's status. */
+export const teamSyncStatus = item<SyncStatus>('teamSyncStatus');
+
+/** The team as `GET /team` last said (its people for the avatars, open invitations), and when. */
+export const teamDetails = item<TeamDetails & { at: number }>('teamDetails');
+
+/** Teams whose folders were taken out of the list here, waiting for "Keep a copy" or dismiss. */
+export const teamGone = {
+  ...item<TeamGone[]>('teamGone'),
+  get: async (): Promise<TeamGone[]> => {
+    const value = await get<unknown>('teamGone');
+    return Array.isArray(value) ? (value as TeamGone[]).filter((g) => !!g && typeof g.teamId === 'string') : [];
+  },
+};
 
 /** Forget what this computer knew about the account's copy, so the next account sync starts fresh (signing out or in as someone else). */
 export async function forgetCloudSyncState(): Promise<void> {

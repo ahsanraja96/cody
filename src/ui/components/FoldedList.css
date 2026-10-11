@@ -35,6 +35,16 @@
 :root[data-theme='dark'] .tf-cg-cyan { --tf-cg: #78d9ec; }
 :root[data-theme='dark'] .tf-cg-orange { --tf-cg: #fcad70; }
 
+/* Text on a colour group fill (a team member's avatar): Chrome's contrast in each theme. */
+.tf-cg-grey, .tf-cg-blue, .tf-cg-red, .tf-cg-green, .tf-cg-pink, .tf-cg-purple, .tf-cg-cyan { --tf-cg-on: #ffffff; }
+.tf-cg-yellow, .tf-cg-orange { --tf-cg-on: #202124; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) [class*='tf-cg-'] { --tf-cg-on: #202124; }
+}
+
+:root[data-theme='dark'] [class*='tf-cg-'] { --tf-cg-on: #202124; }
+
 .tf-cg-dot {
   flex: none;
   border-radius: 50%;
