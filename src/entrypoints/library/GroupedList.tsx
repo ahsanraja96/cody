@@ -40,8 +40,8 @@ type Item =
   | { type: 'team-label'; key: string }
   /** The team has no folders yet. */
   | { type: 'team-empty'; key: string }
-  /** "Sara added 3 tabs · 2 h ago" under a team folder's header. */
-  | { type: 'activity'; key: string; group: TabGroup }
+  /** "Sara added 3 tabs · 2 h ago" under a team folder's header (from the tabs still in the list). */
+  | { type: 'activity'; key: string; group: TabGroup; tabs: TabRecord[] }
   | { type: 'row'; key: string; tab: TabRecord; group: TabGroup }
   | { type: 'removed'; key: string; removal: Removal; group: TabGroup }
   | { type: 'more'; key: string; group: TabGroup; hidden: number }
@@ -172,7 +172,7 @@ export function GroupedList({
       });
       if (!isOpen) return;
       if (group.folder && liveFolders[group.folder.id]) out.push({ type: 'live-line', key: `l:${id}`, group });
-      if (group.folder?.teamId && latestActivity(live)) out.push({ type: 'activity', key: `a:${id}`, group });
+      if (group.folder?.teamId && latestActivity(live)) out.push({ type: 'activity', key: `a:${id}`, group, tabs: live });
       if (group.items.length === 0) out.push({ type: 'empty', key: `n:${id}`, group });
       const visible = showAll[id] ? group.items : group.items.slice(0, FIRST_ROWS);
       for (const tab of visible) {
@@ -338,7 +338,7 @@ export function GroupedList({
                   No team folders yet. Make one, then move tabs into it: everyone in the team sees them.
                 </div>
               ) : item.type === 'activity' ? (
-                <ActivityLine group={item.group} team={team} now={now} />
+                <ActivityLine tabs={item.tabs} team={team} now={now} />
               ) : item.type === 'live-line' ? (
                 <LiveLine group={item.group} />
               ) : item.type === 'empty' ? (
@@ -437,8 +437,8 @@ function TeamLabel({ team }: { team: TeamView }) {
 }
 
 /** "Sara added 3 tabs · 2 h ago" (Mx-Share "A team folder"): the newest addition, from who added each tab. */
-function ActivityLine({ group, team, now }: { group: TabGroup; team: TeamView; now: number }) {
-  const activity = latestActivity(group.items);
+function ActivityLine({ tabs, team, now }: { tabs: TabRecord[]; team: TeamView; now: number }) {
+  const activity = latestActivity(tabs);
   if (!activity) return null;
   const you = !!team.email && activity.email === team.email;
   const when = ago(activity.at, now).replace(/^(Just now|Yesterday|Last week)/, (w) => w.toLowerCase());

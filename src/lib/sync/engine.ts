@@ -650,8 +650,21 @@ export function setupSync(): void {
   });
   chromeSync.schedule(STARTUP_DELAY_MS);
   void cloudPullIfDue(STARTUP_DELAY_MS);
-  // A team's folders: read at every worker start (the pages ask again while they're open).
-  teamSync.schedule(STARTUP_DELAY_MS);
+  // A team's folders: read when the worker starts (the pages ask again while they're open).
+  void teamPullIfDue(STARTUP_DELAY_MS);
+}
+
+/** The worker starts often (its alarms wake it every minute): it reads the team's copy at most this often then. */
+const TEAM_PULL_EVERY_MS = 2 * 60_000;
+const TEAM_PULLED_AT = 'teamPulledAt';
+
+async function teamPullIfDue(delayMs = 0): Promise<void> {
+  const now = Date.now();
+  const stored = await browser.storage.session.get(TEAM_PULLED_AT).catch(() => ({}) as Record<string, unknown>);
+  const last = typeof stored[TEAM_PULLED_AT] === 'number' ? (stored[TEAM_PULLED_AT] as number) : 0;
+  if (now - last < TEAM_PULL_EVERY_MS) return;
+  await browser.storage.session.set({ [TEAM_PULLED_AT]: now }).catch(() => undefined);
+  teamSync.schedule(delayMs);
 }
 
 /**

@@ -391,6 +391,18 @@ describe('the team client and commands', () => {
     expect(data(await route({ type: 'team-sync-now' }))).toEqual({ ok: false });
   });
 
+  it('a team folder is shared as a link by the owner only', async () => {
+    await join(SARA_KEY, SARA);
+    await useToken(SARA_KEY);
+    data(await route({ type: 'plan-refresh', force: true }));
+    const folder = data<{ folder: FolderRecord }>(await route({ type: 'folder-create', name: 'Client sites', teamId })).folder;
+    expect(await route({ type: 'share-create', folderId: folder.id, live: false })).toMatchObject({
+      ok: false,
+      code: 'owner-only',
+      error: 'Only the team’s owner can share a team folder as a link.',
+    });
+  });
+
   it('a new team folder: no limit, and only for the plan’s team', async () => {
     const made = data<{ folder: FolderRecord }>(await route({ type: 'folder-create', name: 'Client sites', color: 'green', teamId }));
     expect(made.folder).toMatchObject({ name: 'Client sites', color: 'green', teamId });

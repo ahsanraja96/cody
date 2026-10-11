@@ -175,6 +175,8 @@ export function folderMenu(group: TabGroup, ctx: MenuContext): MenuEntry[] {
   const free = hasFreeLimits(ctx.plan);
   const n = group.items.length;
   const live = !!ctx.liveFolders[folder.id];
+  // A team folder's link is the owner's to share (Mx-Plans: "Owner controls: members, sharing").
+  const shareable = !folder.teamId || ctx.plan.team?.role === 'owner';
   return [
     { key: 'rename', label: 'Rename', icon: <Pencil {...ICON} />, onSelect: () => useLibraryUi.getState().setRenaming({ id: folder.id, where: 'list' }) },
     swatches(folder),
@@ -199,6 +201,8 @@ export function folderMenu(group: TabGroup, ctx: MenuContext): MenuEntry[] {
       label: 'Share…',
       icon: <Link {...ICON} />,
       hint: free ? <ProTag /> : undefined,
+      disabled: !free && !shareable,
+      description: !free && !shareable ? 'Only the team’s owner can share it' : undefined,
       onSelect: () => (free ? goToPlans() : openDialog({ kind: 'share', folderId: folder.id })),
     },
     {
