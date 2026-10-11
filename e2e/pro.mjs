@@ -111,6 +111,7 @@ const PAGES = {
   lisbon: 'Holiday flats in Lisbon',
   news: 'Hacker News',
   docs: 'Route Handlers | Next.js',
+  brief: 'Client brief · Truewidgets',
 };
 const site = http.createServer((req, res) => {
   const name = (req.url ?? '/').slice(1) || 'home';
@@ -636,7 +637,7 @@ check('Settings › Your plan says Pro for life', (await has(ui, 'Pro for life')
 await shot(ui, 'settings-lifetime.png');
 
 // 10c. Start a team: a name and how many people, Stripe Checkout per person, "Your team is ready".
-const TEAM_OWNER = 'team@example.com';
+const TEAM_OWNER = 'ana@truewidgets.com';
 await signOut(ui);
 await go('#/pro');
 await click(ui, 'Start a team');
@@ -655,6 +656,144 @@ if (teamPaid) await teamPaid.checkoutPage.close().catch(() => undefined);
 await ui.send('Page.bringToFront');
 await go('#/settings');
 check('Settings › Your plan shows the team', await has(ui, 'Team · Truewidgets · 3 people'));
+const teamPrice = teamPlan?.interval === 'month' ? '$30' : '$288';
+check(`…renewing for every seat (${teamPrice})`, await has(ui, ` for ${teamPrice}`, 3000));
+
+// 10d. The team at work on two computers: Ana invites Sara, makes a team folder and shares a tab;
+// Sara joins with her code, sees it and adds one; Ana removes Sara, who keeps a copy.
+const SARA = 'sara@truewidgets.com';
+const teamId = teamPlan?.team?.id;
+check('Settings › Team: the seats line', /3 people · \$(8 a person a month, billed yearly|10 a person a month, billed monthly)\. Everyone gets Pro AI\./.test(await textOf(ui)));
+const typeInvite = async (text) => {
+  await ui.evaluate(() => {
+    const field = document.querySelector('input[placeholder="sara@example.com, mike@example.com"]');
+    field.focus();
+    field.select();
+  });
+  await ui.send('Input.insertText', { text });
+};
+await typeInvite('mike@');
+await click(ui, 'Invite', 'section button');
+check('a bad address is caught before anything is sent', await has(ui, '“mike@” doesn’t look like an email address.'));
+await typeInvite(SARA);
+await click(ui, 'Invite', 'section button');
+check('Invite: “Invited 1 person…”', await has(ui, 'Invited 1 person. They get an email; signing in with it joins Truewidgets.'));
+check('…Sara gets the invitation email', mailer.invites.some((i) => i.email === SARA && i.team === 'Truewidgets' && i.inviter === TEAM_OWNER), JSON.stringify(mailer.invites));
+check('…and shows as waiting', await has(ui, `${SARA} · Invited · waiting`));
+await shot(ui, 'settings-team.png');
+
+await go('#/');
+check('the left column has the team’s section', await has(ui, 'TEAM · TRUEWIDGETS'));
+await click(ui, 'New team folder', '[aria-label="Folders and groups"] button');
+await until(() => ui.evaluate(() => document.activeElement?.getAttribute('aria-label') === 'Team folder name'), 3000);
+await ui.send('Input.insertText', { text: 'Client sites' });
+await ui.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+await ui.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+const teamFolder = await until(async () => (await liveFolders()).find((f) => f.name === 'Client sites' && f.teamId === teamId), 6000, 300);
+check('New team folder in the left column makes a team folder', !!teamFolder);
+check('…and shows it in the list', !!(await until(() => ui.evaluate(() => [...document.querySelectorAll('h2 button')].some((b) => b.innerText.startsWith('Client sites'))), 6000, 200)));
+/** Click a menu entry once it shows (menus open a beat after their button). */
+const pickMenu = (p, label) =>
+  until(
+    () =>
+      p.evaluate((l) => {
+        const item = [...document.querySelectorAll('[role=menuitem], [role=menuitemradio]')].find((e) => e.getBoundingClientRect().width > 0 && e.innerText.trim().startsWith(l));
+        item?.click();
+        return !!item;
+      }, label),
+    4000,
+    150,
+  );
+await until(() => ui.evaluate(() => {
+  const more = document.querySelector('[aria-label^="More for Hacker News"]');
+  more?.click();
+  return !!more;
+}), 6000, 300);
+await pickMenu(ui, 'Move to');
+const teamHeading = await until(() => ui.evaluate(() => [...document.querySelectorAll('[role=menu]')].some((m) => /\bTEAM\b|\bTeam\b/.test(m.innerText) && m.innerText.includes('Client sites'))), 4000, 150);
+check('Move to lists the team folder under “Team”', !!teamHeading);
+await pickMenu(ui, 'Client sites');
+check('moving a tab in: “Your team sees it now.”', await has(ui, 'Moved 1 tab to Client sites. Your team sees it now.'));
+const shared1 = await until(async () => (await idb('tabs')).find((t) => t.url === page('news') && t.folderId === teamFolder?.id), 5000, 300);
+check('…the tab is in the team folder, added by Ana', shared1?.addedBy === TEAM_OWNER, JSON.stringify(shared1?.addedBy));
+check('the team folder says who added what', await has(ui, 'You added 1 tab · just now'));
+await shot(ui, 'team-list.png');
+const ownerPush = await send({ type: 'team-sync-now' });
+check('the team’s folder and tab go to the server', ownerPush?.ok && ownerPush.data.ok);
+
+// Sara's computer: a second Chrome with Tabfold, signed in with the invited email.
+const saraDir = mkdtempSync(path.join(os.tmpdir(), 'tabfold-pro-sara-'));
+const saraBrowser = await launchChrome({ extensionDir: EXT, userDataDir: saraDir });
+const saraExt = (p) => `chrome-extension://${extId}/${p}`;
+const sara = await saraBrowser.openPage(saraExt('library.html#/settings'));
+pages.push(sara);
+await pin(sara);
+const saraSend = (command) => sara.evaluate((c) => new Promise((res) => chrome.runtime.sendMessage({ __tabfold: true, command: c }, res)), command);
+const saraLocal = (key) => sara.evaluate((k) => chrome.storage.local.get(k).then((r) => r[k]), key);
+const saraIdb = (storeName) =>
+  sara.evaluate(
+    (st) =>
+      new Promise((resolve) => {
+        const req = indexedDB.open('tabfold');
+        req.onsuccess = () => {
+          const q = req.result.transaction(st).objectStore(st).getAll();
+          q.onsuccess = () => {
+            resolve(q.result);
+            req.result.close();
+          };
+        };
+      }),
+    storeName,
+  );
+await has(sara, 'Already paid? Sign in', 10_000);
+await click(sara, 'Already paid? Sign in');
+check('Sara signs in with the invited email’s code', await enterCode(sara, SARA));
+const saraPlan = await until(async () => {
+  const p = await saraLocal('plan');
+  return p?.team?.role === 'member' ? p : null;
+}, 15_000, 400);
+check('…and is in Truewidgets as a member, on Pro AI', saraPlan?.tier === 'pro-ai' && saraPlan.team.name === 'Truewidgets', JSON.stringify(saraPlan?.team));
+check('two people fit the 3 seats: Stripe still bills 3', [...stripe.subscriptions.values()].some((x) => x.items.data[0].quantity === 3));
+await saraSend({ type: 'team-sync-now' });
+await sara.goto(saraExt('library.html'));
+check('Sara sees the team folder with Ana’s tab', (await has(sara, 'Client sites', 10_000)) && (await has(sara, 'Hacker News', 3000)));
+check('…“Ana added 1 tab”', await has(sara, 'Ana added 1 tab · just now', 3000));
+await shot(sara, 'team-sara.png');
+
+// Sara adds a page of her own to the team folder; Ana's computer gets it.
+await sara.evaluate((url) => chrome.windows.create({ url, focused: false }), page('brief'));
+await sleep(1200);
+await saraSend({ type: 'fold' });
+const saraFolder = (await saraIdb('folders')).find((f) => f.teamId === teamId && !f.deletedAt);
+const saraTab = await until(async () => (await saraIdb('tabs')).find((t) => t.url === page('brief')), 6000, 300);
+const saraMove = await saraSend({ type: 'tabs-move', tabRecordIds: [saraTab?.id], folderId: saraFolder?.id });
+check('Sara moves a page into the team folder', saraMove?.ok && saraMove.data.moved === 1, JSON.stringify(saraMove));
+await saraSend({ type: 'team-sync-now' });
+await send({ type: 'team-sync-now' });
+check('Ana’s computer gets it: “Sara added 1 tab”', (await has(ui, 'Client brief · Truewidgets', 10_000)) && (await has(ui, 'Sara added 1 tab · just now', 3000)));
+check('…and Sara’s tab stays out of Ana’s own sync', !(await idb('tabs')).some((t) => t.url === page('brief') && !t.folderId));
+
+// Ana removes Sara; Sara's computer says so once, and Keep a copy keeps the folder as hers.
+await go('#/settings');
+await until(() => ui.evaluate((email) => !!document.querySelector(`[aria-label="Remove ${email}"]`), SARA), 8000);
+await ui.evaluate((email) => document.querySelector(`[aria-label="Remove ${email}"]`)?.click(), SARA);
+check('Remove asks first', await has(ui, 'Remove Sara from Truewidgets?'));
+await ui.evaluate(() => {
+  const confirm = [...document.querySelectorAll('dialog[open]')].find((d) => d.innerText.includes('Remove Sara from Truewidgets?') && !d.innerText.includes('Your plan'));
+  [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.innerText.trim() === 'Remove')?.click();
+});
+check('…then Sara is out', await has(ui, `Removed ${SARA} from Truewidgets.`));
+await saraSend({ type: 'plan-refresh', force: true });
+await sara.goto(saraExt('library.html'));
+check('Sara’s list: “You’re no longer in Truewidgets…”', await has(sara, 'You’re no longer in Truewidgets. Its folders were removed from this computer.', 15_000));
+await shot(sara, 'team-gone.png');
+await click(sara, 'Keep a copy');
+check('Keep a copy: “Kept 1 folder and 2 tabs…”', await has(sara, 'Kept 1 folder and 2 tabs from Truewidgets as your own.'));
+const kept = (await saraIdb('folders')).find((f) => f.name === 'Client sites' && !f.deletedAt);
+check('…the folder is Sara’s own now, with both tabs', !!kept && !kept.teamId && (await saraIdb('tabs')).filter((t) => t.folderId === kept.id).length === 2);
+check('Ana still has the team folder and both tabs', (await idb('tabs')).filter((t) => t.folderId === teamFolder?.id).length === 2);
+await saraBrowser.close();
+rmSync(saraDir, { recursive: true, force: true });
 
 // 11. Remove Tabfold: take your tabs with you first (Reopen all; we never press Remove here).
 await ui.send('Page.bringToFront');

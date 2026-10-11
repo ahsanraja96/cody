@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { ExternalLink, LoaderCircle, LogIn, Sparkles, TriangleAlert, Users } from 'lucide-react';
 import { send } from '@/lib/messages';
 import { hasPro, hasProAi } from '@/lib/pro/tiers';
-import { FREE_PLAN, PRICES, type BackupInfo, type PlanState } from '@/lib/pro/types';
+import { FREE_PLAN, PRICES, TEAMS_PRICES, type BackupInfo, type PlanState } from '@/lib/pro/types';
 import type { SyncStatus } from '@/lib/state';
 import { Chip } from '@/ui/components/ProBits';
 import { toast } from '@/ui/components/Toast';
@@ -83,10 +83,12 @@ function Box({
 
 const sparkles = <Sparkles size={14} strokeWidth={1.75} aria-hidden className="text-accent-text" />;
 
-/** The list price of a plan's next charge ("$84"). */
+/** The list price of a plan's next charge ("$84"; a team's owner pays for every seat: "$288"). */
 function priceOf(plan: PlanState): string | null {
+  if (!plan.interval) return null;
+  if (plan.team?.role === 'owner') return dollars(TEAMS_PRICES[plan.interval] * plan.team.seats);
   const tier = paidTier(plan);
-  return tier && plan.interval ? dollars(PRICES[tier][plan.interval]) : null;
+  return tier ? dollars(PRICES[tier][plan.interval]) : null;
 }
 
 /**
