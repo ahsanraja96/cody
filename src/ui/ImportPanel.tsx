@@ -220,7 +220,7 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
     );
   } else if (step.kind === 'done') {
     const { title: line, details } = importSummary(step.outcome);
-    title = `From ${step.source.name}`;
+    title = `From ${step.source.name.replace(/^A /, 'a ')}`;
     body = (
       <div role="status" className="flex flex-col gap-1">
         <p className="m-0 text-section font-semibold">{line}</p>
@@ -288,7 +288,7 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
     );
   } else {
     const source = step.source;
-    title = `From ${source.name}`;
+    title = `From ${source.name.replace(/^A /, 'a ')}`;
     body = (
       <>
         {back}
