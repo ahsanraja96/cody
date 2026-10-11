@@ -11,7 +11,7 @@ import {
   type SaveOutcome,
   type TabRef,
 } from '../messages';
-import { deleteSessionsForever, findSavedCopies, removeTabs, saveCapture, type SaveResult } from '../repo';
+import { deleteSessionsForever, findSavedCopies, putBackTabs, removeTabs, saveCapture, type SaveResult } from '../repo';
 import { getSettings, type Settings } from '../settings';
 import { getDeviceId, lastAction, UNDO_WINDOW_MS, windowNames, type LastAction } from '../state';
 import type { CapturedTab, TabRecord } from '../types';
@@ -27,6 +27,7 @@ import {
 import { singleFlight } from './singleFlight';
 import { takeSnapshot } from './snapshots';
 import { restoreWindows } from './restore';
+import { ensureRoomFor } from './room';
 import type { RestoreTab, RestoreWindow } from './restorePlan';
 import { rememberPendingTitles } from './titles';
 
@@ -145,6 +146,26 @@ export interface CloseOptions {
 }
 
 /**
+ * Tabs Tabfold itself is closing (a fold, a save, "Fold the group"), so tabs.onRemoved listeners can
+ * tell them from tabs the person closed: a live folder keeps the saved copy of a tab Tabfold folded,
+ * and drops the one of a tab the person closed. Entries go when the listener takes them, or after a minute.
+ */
+const closingByTabfold = new Map<number, number>();
+const CLOSING_TTL_MS = 60_000;
+
+export function noteClosingByTabfold(tabIds: Iterable<number>, now = Date.now()): void {
+  for (const [id, until] of closingByTabfold) if (until < now) closingByTabfold.delete(id);
+  for (const id of tabIds) closingByTabfold.set(id, now + CLOSING_TTL_MS);
+}
+
+/** Was this tab closed by Tabfold? Answers once per tab. */
+export function takeClosingByTabfold(tabId: number): boolean {
+  const until = closingByTabfold.get(tabId);
+  closingByTabfold.delete(tabId);
+  return until !== undefined && until >= Date.now();
+}
+
+/**
  * tabs.remove, but never waiting long: Chrome holds the call for a batch until a "Leave site?"
  * dialog in it is answered (the other tabs close at once).
  */
@@ -186,6 +207,7 @@ export async function closeTabsSafely(
     .filter((w) => w.id !== undefined && planned.has(w.id))
     .flatMap((w) => (w.tabs ?? []).filter((t) => t.id !== undefined && t.id !== keeper && !closing.has(t.id) && !planned.get(w.id!)!.has(t.id)))
     .length;
+  noteClosingByTabfold(tabIds);
   const size = options.batchSize ?? 50;
   let closedSoFar = 0;
   for (let i = 0; i < tabIds.length; i += size) {
@@ -258,6 +280,8 @@ export async function recordUndo(input: {
   freedBytes: number;
   /** Browser tabs that never closed. */
   stillOpen: Set<number>;
+  /** Tabs already folded that this action changed (moved into a folder, snoozed): Undo puts these back. */
+  patches?: LastAction['patches'];
 }): Promise<string | null> {
   const { result, plan, close, stillOpen } = input;
   const reopenOnly: NonNullable<LastAction['reopenOnly']> = close
@@ -271,7 +295,8 @@ export async function recordUndo(input: {
           ...(s.incognito ? { incognito: true as const } : {}),
         }))
     : [];
-  if (result.savedTabIds.length === 0 && reopenOnly.length === 0) return null;
+  const patches = input.patches ?? [];
+  if (result.savedTabIds.length === 0 && reopenOnly.length === 0 && patches.length === 0) return null;
   const actionId = crypto.randomUUID();
   const notClosedTabIds = [...stillOpen].map((id) => result.tabIdMap.get(id)).filter((id): id is string => !!id);
   const action: LastAction = {
@@ -292,9 +317,55 @@ export async function recordUndo(input: {
     closed: close,
     ...(reopenOnly.length ? { reopenOnly } : {}),
     ...(notClosedTabIds.length ? { notClosedTabIds } : {}),
+    ...(patches.length ? { patches } : {}),
   };
   await lastAction.set(action);
   return actionId;
+}
+
+/**
+ * Remember an action that changed tabs already folded without saving or closing anything (snoozing
+ * folded tabs, a tab closed in a live folder's group), so Undo can put them back.
+ */
+export async function recordChangeUndo(change: {
+  patches?: LastAction['patches'];
+  putBack?: LastAction['putBack'];
+  sessionId?: string;
+  now?: number;
+}): Promise<string | null> {
+  if (!change.patches?.length && !change.putBack?.tabs.length) return null;
+  const now = change.now ?? Date.now();
+  const action: LastAction = {
+    id: crypto.randomUUID(),
+    kind: 'save',
+    at: now,
+    expiresAt: Date.now() + UNDO_WINDOW_MS,
+    sessionId: change.sessionId ?? '',
+    sessionName: '',
+    savedTabs: 0,
+    closedTabs: 0,
+    freedBytes: 0,
+    keptOpen: { pinned: 0, audible: 0 },
+    intoUnsorted: false,
+    savedTabIds: [],
+    createdSession: false,
+    windowSources: {},
+    closed: false,
+    ...(change.patches?.length ? { patches: change.patches } : {}),
+    ...(change.putBack?.tabs.length ? { putBack: change.putBack } : {}),
+  };
+  await lastAction.set(action);
+  return action.id;
+}
+
+/** Put back fields an action changed on tabs that were already folded (a missing field is unset again). */
+export async function applyPatches(patches: NonNullable<LastAction['patches']>): Promise<void> {
+  if (patches.length === 0) return;
+  await db.transaction('rw', db.tabs, async () => {
+    for (const { id, before } of patches) {
+      await db.tabs.update(id, { folderId: before.folderId, snoozeUntil: before.snoozeUntil, snoozedOn: before.snoozedOn });
+    }
+  });
 }
 
 export function handleSave(command: SaveCommand): Promise<SaveOutcome> {
@@ -318,6 +389,8 @@ export function handleSave(command: SaveCommand): Promise<SaveOutcome> {
       newTabsLeftOpen: 0,
     };
     if (plan.windows.length === 0) return empty;
+    // The free list's limit: all of it fits, or nothing is saved or closed.
+    await ensureRoomFor(plan.windows, duplicates === 'skip');
 
     if (command.close && command.scope !== 'tabs') {
       await takeSnapshot('before-bulk-close').catch((error) => console.warn('[tabfold] safety snapshot failed', error));
@@ -449,5 +522,7 @@ export async function handleUndo(actionId: string): Promise<{ undone: boolean; r
   }
   if (action.createdSession) await deleteSessionsForever([action.sessionId]);
   else if (action.savedTabIds.length) await removeTabs(action.savedTabIds);
+  if (action.patches?.length) await applyPatches(action.patches);
+  if (action.putBack?.tabs.length) await putBackTabs(action.putBack);
   return { undone: true };
 }

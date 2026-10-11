@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser';
 import type { FoldOutcome, TabRef } from './messages';
-import type { CapturedWindow } from './types';
+import type { CapturedWindow, TabRecord, WindowRecord } from './types';
 import type { SiteKinds } from './categories';
 
 /**
@@ -36,6 +36,13 @@ export interface LastAction {
   reopenOnly?: Array<{ url: string; title: string; pinned: boolean; sourceWindowId?: number; incognito?: true }>;
   /** Saved tabs whose browser tab refused to close ("Leave site?"). Undo removes them but doesn't reopen them. */
   notClosedTabIds?: string[];
+  /**
+   * Fields this action changed on tabs that were already folded (snoozing them, a fold "into" a
+   * folder moving the copy already there): Undo puts these values back. A missing field was unset.
+   */
+  patches?: Array<{ id: string; before: Pick<TabRecord, 'folderId' | 'snoozeUntil' | 'snoozedOn'> }>;
+  /** Tabs this action removed from the list (a tab closed in a live folder's group): Undo puts them back. */
+  putBack?: { tabs: TabRecord[]; windows: WindowRecord[] };
 }
 
 /** A restore in progress, so a popup opened mid-restore can show it and offer Cancel. */
@@ -70,6 +77,9 @@ export interface ActiveFold {
   error?: string;
   /** Only this window is being folded. */
   windowId?: number;
+  /** Why it failed, for the page to show the right card (e.g. 'list-full'), with `details` as in CommandError. */
+  code?: string;
+  details?: Record<string, number>;
 }
 
 /**
@@ -320,6 +330,8 @@ export interface LiveFolder {
   groupId: number;
   windowId: number;
   openedAt: number;
+  /** The fold that tabs added to the group are saved in (made when the first one joins). */
+  liveSessionId?: string;
 }
 
 const LIVE_FOLDERS = 'liveFolders';
@@ -330,6 +342,17 @@ export const liveFolders = {
   set: (value: Record<string, LiveFolder>) => browser.storage.session.set({ [LIVE_FOLDERS]: value }),
   watch: (callback: (value: Record<string, LiveFolder>) => void) =>
     watchKey('session', LIVE_FOLDERS, (value) => callback((value as Record<string, LiveFolder> | undefined) ?? {})),
+};
+
+/** When each auto-fold rule last ran and how many tabs it folded, by rule id ("Last ran today 14:00 · folded 6 tabs"). */
+export type AutoFoldRuns = Record<string, { at: number; folded: number }>;
+
+const AUTO_FOLD_LAST = 'autoFoldLast';
+export const autoFoldLast = {
+  get: async (): Promise<AutoFoldRuns> => ((await browser.storage.local.get(AUTO_FOLD_LAST))[AUTO_FOLD_LAST] as AutoFoldRuns | undefined) ?? {},
+  set: (value: AutoFoldRuns) => browser.storage.local.set({ [AUTO_FOLD_LAST]: value }),
+  watch: (callback: (value: AutoFoldRuns) => void) =>
+    watchKey('local', AUTO_FOLD_LAST, (value) => callback((value as AutoFoldRuns | undefined) ?? {})),
 };
 
 /** One suggestion in Pro AI's weekly tidy-up. */
