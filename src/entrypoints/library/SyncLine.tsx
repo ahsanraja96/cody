@@ -20,9 +20,12 @@ export function SyncLine({
   compact = false,
   className,
   onSyncAll,
+  onMakeRoom,
 }: {
   status: SyncStatus | undefined;
   enabled: boolean;
+  /** Free with a full list: tabs from other computers wait in Chrome sync ("12 waiting: make room"). */
+  onMakeRoom?: () => void;
   /** In the top bar: below 1180px wide the "older stay on this computer" part moves into the tooltip. */
   compact?: boolean;
   className?: string;
@@ -107,6 +110,23 @@ export function SyncLine({
             )
           ) : (
             <span className="truncate">Synced with Chrome</span>
+          )}
+          {!!status.waiting && status.waiting > 0 && (
+            <>
+              <span aria-hidden>·</span>
+              <span
+                className="shrink-0 text-amber"
+                title={`${status.waiting.toLocaleString()} folded ${status.waiting === 1 ? 'tab' : 'tabs'} from your other computers wait in Chrome sync: your free list is full`}
+              >
+                {status.waiting.toLocaleString()} waiting
+                {onMakeRoom ? ':' : ''}
+              </span>
+              {onMakeRoom && (
+                <button type="button" onClick={onMakeRoom} className="shrink-0 font-semibold text-accent-text hover:underline">
+                  make room
+                </button>
+              )}
+            </>
           )}
         </span>
       );

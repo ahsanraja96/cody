@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Check, Cloud, History, LoaderCircle, LogIn, Sparkles } from 'lucide-react';
+import { Check, Cloud, FolderOpen, History, LoaderCircle, LogIn, Sparkles, UserPlus, Users } from 'lucide-react';
 import { send } from '@/lib/messages';
 import { AI_RUNS_PER_MONTH } from '@/lib/pro/types';
 import { useCloudSyncStatus, useNeedsSignIn, usePlan } from '@/ui/hooks';
-import { paidTier, tierName } from '@/ui/pro';
+import { isLifetime, paidTier, teamLine, tierName } from '@/ui/pro';
 import { openSignIn } from './AccountDialogs';
 
 /** While the payment isn't confirmed yet: ask again this often, for this long. */
@@ -28,14 +28,19 @@ function OnItem({ icon, title, children }: { icon: ReactNode; title: string; chi
  * The page the Stripe checkout tab turns into after paying (Stripe-Welcome, `#/pro/welcome`):
  * "Confirming your payment" until the server has the subscription (asked every 3 s for up to 2
  * minutes; after that it says it can take a minute and Pro switches on by itself), then what is
- * now on, with "Organise my tabs" (Pro AI) and "Back to your list". When the payment went to an
- * email that already had an account, this computer signs in with a code first ("Sign in").
+ * now on, with "Organise my tabs" (Pro AI) and "Back to your list". Pro for life says "You’re on
+ * Tabfold Pro, for life"; a Teams plan says "Your team is ready" with "Invite people". When the
+ * payment went to an email that already had an account, this computer signs in with a code first.
  */
-export function WelcomePage({ onBack, onOrganise }: { onBack: () => void; onOrganise: () => void }) {
+export function WelcomePage({ onBack, onOrganise, onTeam }: { onBack: () => void; onOrganise: () => void; onTeam: () => void }) {
   const plan = usePlan();
   const cloud = useCloudSyncStatus();
   const signInAs = useNeedsSignIn();
-  const paid = paidTier(plan);
+  const lifetime = isLifetime(plan);
+  const team = plan.team ?? null;
+  const tier = paidTier(plan);
+  // Pro for life and a team count as paid even without a subscription on this account.
+  const paid = tier ?? (team ? 'pro-ai' : lifetime ? 'pro' : null);
   const [slow, setSlow] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const needsSignIn = !paid && !!signInAs;
@@ -110,6 +115,7 @@ export function WelcomePage({ onBack, onOrganise }: { onBack: () => void; onOrga
   }
 
   const ai = paid === 'pro-ai';
+  const title = team ? 'Your team is ready' : lifetime && !tier ? 'You’re on Tabfold Pro, for life' : `You’re on Tabfold ${tierName(paid)}`;
   const synced = cloud?.state === 'synced' ? `${cloud.syncedTabs.toLocaleString()} ${cloud.syncedTabs === 1 ? 'tab' : 'tabs'} synced` : null;
   const account = [plan.email ? `Signed in as ${plan.email}` : null, synced, 'Chrome sync takes a rest'].filter(Boolean).join(' · ');
   const secondary =
@@ -123,12 +129,22 @@ export function WelcomePage({ onBack, onOrganise }: { onBack: () => void; onOrga
           <Check size={24} strokeWidth={2.4} />
         </span>
         <h1 id="welcome-h" ref={headingRef} tabIndex={-1} className="mt-4 mb-0 text-[22px] leading-[1.45] font-semibold outline-none">
-          You’re on Tabfold {tierName(paid)}
+          {title}
         </h1>
         <p role="status" className="mt-1.5 mb-0 text-text-2">
           {plan.email ? `Thank you! Stripe has emailed your receipt to ${plan.email}.` : 'Thank you! Stripe has emailed your receipt.'}
         </p>
         <ul className="m-0 mt-6 w-full list-none p-0 text-left">
+          {team && (
+            <OnItem icon={<Users size={16} strokeWidth={1.75} />} title={teamLine(plan) ?? 'Your team'}>
+              Everyone in it gets Pro AI. Team folders come next; invite people by email.
+            </OnItem>
+          )}
+          {lifetime && !tier && (
+            <OnItem icon={<FolderOpen size={16} strokeWidth={1.75} />} title="No limits, for life">
+              Unlimited tabs, folders, snoozes and rules, live folders and sharing. One payment, no renewal.
+            </OnItem>
+          )}
           <OnItem icon={<Cloud size={16} strokeWidth={1.75} />} title="Every folded tab syncs with your Tabfold account">
             {account}
           </OnItem>
@@ -137,22 +153,32 @@ export function WelcomePage({ onBack, onOrganise }: { onBack: () => void; onOrga
           </OnItem>
           {ai && (
             <OnItem icon={<Sparkles size={16} strokeWidth={1.75} />} title="Organise with AI">
-              Sorts your folded tabs into projects. {AI_RUNS_PER_MONTH} runs a month.
+              Puts your folded tabs into folders. {AI_RUNS_PER_MONTH} runs a month.
             </OnItem>
           )}
         </ul>
         <div className="mt-5 flex flex-wrap justify-center gap-2">
-          {ai && (
+          {team && team.role === 'owner' && (
+            <button type="button" onClick={onTeam} className={primary}>
+              <UserPlus size={16} strokeWidth={1.75} aria-hidden />
+              Invite people
+            </button>
+          )}
+          {ai && !team && (
             <button type="button" onClick={onOrganise} className={primary}>
               <Sparkles size={16} strokeWidth={1.75} aria-hidden />
               Organise my tabs
             </button>
           )}
-          <button type="button" onClick={onBack} className={ai ? secondary : primary}>
+          <button type="button" onClick={onBack} className={ai || (team && team.role === 'owner') ? secondary : primary}>
             Back to your list
           </button>
         </div>
-        <p className="mt-4 mb-0 text-small text-text-3">Change plan, update your card or cancel anytime: Settings › Your plan › Manage billing.</p>
+        <p className="mt-4 mb-0 text-small text-text-3">
+          {lifetime && !tier
+            ? 'Your receipt and invoice are in the email from Stripe.'
+            : 'Change plan, update your card or cancel anytime: Settings › Your plan › Manage billing.'}
+        </p>
       </section>
     </div>
   );

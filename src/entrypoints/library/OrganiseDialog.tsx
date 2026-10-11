@@ -4,13 +4,15 @@ import { send } from '@/lib/messages';
 import { proConfigured } from '@/lib/pro/config';
 import { hasProAi } from '@/lib/pro/tiers';
 import { AI_RUNS_PER_MONTH, TRIAL_DAYS, type AiGroup, type OrganiseResult } from '@/lib/pro/types';
-import type { TabGroupColor, TabRecord } from '@/lib/types';
+import type { FolderRecord, TabGroupColor, TabRecord } from '@/lib/types';
 import { displayHost } from '@/lib/urls';
 import { Favicon } from '@/ui/components/Favicon';
 import { FaviconStrip } from '@/ui/components/FoldedList';
+import { FolderIcon } from '@/ui/components/FolderIcon';
+import { Chip } from '@/ui/components/ProBits';
 import { toast, ToastViewport } from '@/ui/components/Toast';
 import { cx } from '@/ui/cx';
-import { useAiRuns, usePlan, useSettings } from '@/ui/hooks';
+import { useAiRuns, usePlan } from '@/ui/hooks';
 import { errorCode, proErrorText, runsLine, shortDate, trialUsed } from '@/ui/pro';
 import { startTrialFlow } from './AccountDialogs';
 import { count } from './format';
@@ -22,7 +24,7 @@ type Phase =
   | { kind: 'preview'; result: OrganiseResult }
   | { kind: 'error'; code?: string; message: string };
 
-/** Rows an open project shows before "Show N more". */
+/** Rows an open folder shows before "Show N more". */
 const FIRST_ROWS = 4;
 
 const PRIMARY =
@@ -30,9 +32,6 @@ const PRIMARY =
 const SECONDARY = 'inline-flex shrink-0 items-center justify-center gap-1.5 rounded-control border border-border-strong bg-surface px-3.5 text-text hover:bg-hover';
 const CLOSE = 'inline-flex size-8 shrink-0 items-center justify-center rounded-control text-text-2 hover:bg-hover hover:text-text';
 
-function Dot({ color, size = 10 }: { color: TabGroupColor; size?: number }) {
-  return <span aria-hidden className="shrink-0 rounded-full" style={{ width: size, height: size, background: `var(--cg-${color})` }} />;
-}
 
 /** The 16px tick from the Pro-Organise board, on a real (visually hidden) checkbox. */
 function Tick({
@@ -86,12 +85,13 @@ function IconTile({ size = 36 }: { size?: 32 | 36 }) {
 }
 
 /**
- * "Organise with AI" (Pro-Organise): the AI proposes projects for the folded tabs, people untick
- * what should stay sorted by site, and "Group my list by project" applies it. Without Pro AI it is
- * the teaser from Pro-States ("Organise with AI · free plan"); when the trial starts while it is
- * open, the first run follows straight away.
+ * "Organise with AI" (Pro-Organise, Fo-Folders-States): the AI puts the folded tabs into folders,
+ * the person's own (matched by name) and new ones marked "new"; people untick what should stay
+ * where it is, and "Put them in folders" applies it. Without Pro AI it is the teaser from
+ * Pro-States ("Organise with AI · free plan"); when the trial starts while it is open, the first
+ * run follows straight away.
  */
-export function OrganiseDialog({ open, onClose, tabs }: { open: boolean; onClose: () => void; tabs: TabRecord[] }) {
+export function OrganiseDialog({ open, onClose, tabs, folders }: { open: boolean; onClose: () => void; tabs: TabRecord[]; folders: FolderRecord[] }) {
   const ref = useRef<HTMLDialogElement>(null);
   const plan = usePlan();
   const proAi = hasProAi(plan);
@@ -170,8 +170,8 @@ export function OrganiseDialog({ open, onClose, tabs }: { open: boolean; onClose
                 </h1>
                 <p className="mt-1 mb-0 text-text-2">
                   {phase.kind === 'preview'
-                    ? `${count(tabs.length, 'folded tab')} → ${count(phase.result.groups.length, 'project')}. Untick anything to leave it sorted by site. Nothing changes until you choose.`
-                    : 'Groups your folded tabs by project, not just by kind of site. You see the groups first and choose.'}
+                    ? `${count(tabs.length, 'folded tab')} → ${count(phase.result.groups.length, 'folder')}. Untick anything to leave it where it is. Nothing changes until you choose.`
+                    : 'Puts your folded tabs into folders, not just by kind of site. You see the folders first and choose.'}
                 </p>
               </div>
               <button type="button" aria-label="Close" title="Close" onClick={onClose} className={CLOSE}>
@@ -183,7 +183,7 @@ export function OrganiseDialog({ open, onClose, tabs }: { open: boolean; onClose
             ) : phase.kind === 'error' ? (
               <Failed phase={phase} onRetry={() => void run()} onClose={onClose} />
             ) : (
-              <Preview result={phase.result} tabs={tabs} onClose={onClose} />
+              <Preview result={phase.result} tabs={tabs} folders={folders} onClose={onClose} />
             )}
           </div>
         ))}
@@ -242,7 +242,7 @@ function Failed({ phase, onRetry, onClose }: { phase: Extract<Phase, { kind: 'er
             <div className="min-w-0">
               <div className="font-semibold">You’ve used this month’s {(runs?.limit ?? AI_RUNS_PER_MONTH).toLocaleString()} AI runs</div>
               <div className="text-small text-text-2">
-                They start again {runs?.resetsAt ? `on ${shortDate(runs.resetsAt)}` : 'next month'}. Your projects stay as they are; new tabs are sorted by
+                They start again {runs?.resetsAt ? `on ${shortDate(runs.resetsAt)}` : 'next month'}. Your folders stay as they are; new tabs are sorted by
                 site until then.
               </div>
             </div>
@@ -281,25 +281,41 @@ function Failed({ phase, onRetry, onClose }: { phase: Extract<Phase, { kind: 'er
   );
 }
 
-interface ProposedGroup extends AiGroup {
+interface ProposedGroup {
+  group: AiGroup;
+  name: string;
+  color: TabGroupColor;
+  /** One of the person's folders (the AI's match, or the same name); else a new folder. */
+  folder: FolderRecord | null;
   tabs: TabRecord[];
 }
 
-function Preview({ result, tabs, onClose }: { result: OrganiseResult; tabs: TabRecord[]; onClose: () => void }) {
-  const [, updateSettings] = useSettings();
+function Preview({ result, tabs, folders, onClose }: { result: OrganiseResult; tabs: TabRecord[]; folders: FolderRecord[]; onClose: () => void }) {
   const groups = useMemo<ProposedGroup[]>(() => {
     const byId = new Map(tabs.map((t) => [t.id, t]));
+    const byName = new Map(folders.map((f) => [f.name.trim().toLowerCase(), f]));
     return result.groups
-      .map((g) => ({ ...g, tabs: g.tabIds.map((id) => byId.get(id)).filter((t): t is TabRecord => !!t).sort((a, b) => b.savedAt - a.savedAt) }))
+      .map((g) => {
+        const matchedId = g.folderId;
+        const folder = (matchedId ? folders.find((f) => f.id === matchedId) : undefined) ?? byName.get(g.name.trim().toLowerCase()) ?? null;
+        return {
+          group: g,
+          name: folder?.name ?? g.name,
+          color: folder?.color ?? g.color,
+          folder,
+          tabs: g.tabIds.map((id) => byId.get(id)).filter((t): t is TabRecord => !!t).sort((a, b) => b.savedAt - a.savedAt),
+        };
+      })
       .filter((g) => g.tabs.length > 0);
-  }, [result, tabs]);
+  }, [result, tabs, folders]);
   const [unticked, setUnticked] = useState<Set<string>>(() => new Set());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(groups[0] ? [groups[0].name] : []));
   const [showAll, setShowAll] = useState<Set<string>>(() => new Set());
   const [applying, setApplying] = useState(false);
 
-  const kept = groups
-    .map((g) => ({ name: g.name, color: g.color, tabIds: g.tabs.filter((t) => !unticked.has(t.id)).map((t) => t.id) }))
+  // The AI's group as it came (with the folder it matched, when it did), minus the unticked tabs.
+  const kept: AiGroup[] = groups
+    .map((g) => ({ ...g.group, tabIds: g.tabs.filter((t) => !unticked.has(t.id)).map((t) => t.id) }))
     .filter((g) => g.tabIds.length > 0);
   const keptTabs = kept.reduce((n, g) => n + g.tabIds.length, 0);
   const keptIds = new Set(kept.flatMap((g) => g.tabIds));
@@ -324,9 +340,8 @@ function Preview({ result, tabs, onClose }: { result: OrganiseResult; tabs: TabR
   const apply = async () => {
     setApplying(true);
     try {
-      await send({ type: 'ai-apply', groups: kept });
-      updateSettings({ groupBy: 'project' });
-      toast(`Grouped ${count(keptTabs, 'tab')} into ${count(kept.length, 'project')}.`, { tone: 'success' });
+      const result = await send({ type: 'ai-apply', groups: kept });
+      toast(`Put ${count(result.applied || keptTabs, 'tab')} into ${count(result.folders ?? kept.length, 'folder')}.`, { tone: 'success' });
       onClose();
     } catch (error) {
       toast(proErrorText(error), { tone: 'error' });
@@ -346,7 +361,7 @@ function Preview({ result, tabs, onClose }: { result: OrganiseResult; tabs: TabR
       <div className="scroll-thin flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-6 py-3.5">
         {groups.length === 0 && (
           <p role="status" className="m-0 rounded-card border border-border bg-bg-subtle px-3.5 py-3 text-text-2">
-            The AI didn’t find projects in these tabs. They stay sorted by site.
+            The AI didn’t find folders for these tabs. They stay where they are.
           </p>
         )}
         {groups.map((group) => {
@@ -360,7 +375,7 @@ function Preview({ result, tabs, onClose }: { result: OrganiseResult; tabs: TabR
                 <Tick
                   checked={on === group.tabs.length}
                   mixed={on > 0 && on < group.tabs.length}
-                  label={`Keep “${group.name}” as a project`}
+                  label={`Put these tabs in “${group.name}”`}
                   onChange={() => setTicked(group.tabs.map((t) => t.id), on < group.tabs.length)}
                 />
                 <button
@@ -370,10 +385,11 @@ function Preview({ result, tabs, onClose }: { result: OrganiseResult; tabs: TabR
                   onClick={() => setExpanded((s) => toggle(s, group.name))}
                   className="flex h-full min-w-0 flex-1 items-center gap-2.5 pr-3 text-left focus-visible:outline-offset-[-2px]"
                 >
-                  <Dot color={group.color} />
+                  <FolderIcon color={group.color} />
                   <span dir="auto" className="min-w-0 flex-1 truncate font-semibold">
                     {group.name}
                   </span>
+                  {!group.folder && <Chip tone="neutral">new</Chip>}
                   {!isOpen && <FaviconStrip tabs={group.tabs} />}
                   <span className="shrink-0 text-small text-text-3 tabular-nums">{count(group.tabs.length, 'tab')}</span>
                   {isOpen ? (
@@ -423,14 +439,14 @@ function Preview({ result, tabs, onClose }: { result: OrganiseResult; tabs: TabR
         </button>
         <button type="button" disabled={kept.length === 0 || applying} onClick={() => void apply()} className={cx(PRIMARY, 'h-9')}>
           {applying && <LoaderCircle size={16} aria-hidden className="tf-spin" />}
-          Group my list by project
+          Put them in folders
         </button>
       </Footer>
     </>
   );
 }
 
-/** The dashed "Everything else · stays sorted by site" row: what no project keeps. */
+/** The dashed "Everything else · stays where it is" row: what no folder gets. */
 function EverythingElse({ tabs }: { tabs: TabRecord[] }) {
   const [open, setOpen] = useState(false);
   const [all, setAll] = useState(false);
@@ -445,7 +461,7 @@ function EverythingElse({ tabs }: { tabs: TabRecord[] }) {
         className="flex h-11 w-full items-center gap-2.5 px-3 text-left focus-visible:outline-offset-[-2px]"
       >
         <span aria-hidden className="w-4 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-text-2">Everything else · stays sorted by site</span>
+        <span className="min-w-0 flex-1 truncate text-text-2">Everything else · stays where it is</span>
         <span className="shrink-0 text-small text-text-3 tabular-nums">{count(tabs.length, 'tab')}</span>
         {open ? (
           <ChevronDown size={16} strokeWidth={2} aria-hidden className="shrink-0 text-text-3" />
@@ -511,13 +527,13 @@ function Teaser({ onClose }: { onClose: () => void }) {
         </button>
       </div>
       <p className="m-0 text-text-2">
-        Pro AI groups your folded tabs by project, like “Checkout app” or “Holiday in Lisbon”, not just by kind of site. You see the groups first and
-        choose.
+        Pro AI puts your folded tabs into folders, like “Checkout app” or “Holiday in Lisbon”, not just by kind of site. You see the folders first
+        and choose.
       </p>
       <div aria-hidden className="flex flex-wrap items-center gap-2">
         {EXAMPLES.map((p) => (
           <span key={p.name} className="inline-flex h-6 items-center gap-1.5 rounded-md border border-border px-2 text-small">
-            <Dot color={p.color} size={8} />
+            <FolderIcon color={p.color} size={13} />
             {p.name}
           </span>
         ))}

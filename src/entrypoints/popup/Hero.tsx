@@ -3,6 +3,7 @@ import { AppWindow, Archive, CircleAlert, Layers, MemoryStick, RotateCcw, X, typ
 import { send } from '@/lib/messages';
 import type { ActiveFold } from '@/lib/state';
 import { Favicon } from '@/ui/components/Favicon';
+import { FullCard, NeedsRoomCard, SpacesLeft } from '@/ui/components/LimitCards';
 import { BigNumber, formatGb, FreedNumber, MemoryCapsule, type TabKind } from '@/ui/components/MemoryCapsule';
 import { cx } from '@/ui/cx';
 import { useLastAction, useNow } from '@/ui/hooks';
@@ -156,6 +157,15 @@ export interface FoldAskProps {
   onFocusChange: (choice: 'this' | 'all') => void;
 }
 
+/** The free list's room on Free (null on paid plans): full pauses Fold, near says how much is left. */
+export interface HeroLimit {
+  full: boolean;
+  near: boolean;
+  room: number;
+  onUpgrade: () => void;
+  onMakeRoom: () => void;
+}
+
 export function Hero({
   view,
   stats,
@@ -166,6 +176,7 @@ export function Hero({
   windowCount,
   currentWindowId,
   milestone,
+  limit,
 }: {
   view: FoldView;
   stats: OpenTabStats;
@@ -177,6 +188,7 @@ export function Hero({
   currentWindowId?: number;
   /** The occasional "You've freed 12.4 GB this month" card after a fold (Pro-Popup-Milestone). */
   milestone?: ReactNode;
+  limit?: HeroLimit | null;
 }) {
   // The last "freed so far" shown, so the finished number rolls up from it.
   const freedSoFar = useRef(0);
@@ -226,18 +238,47 @@ export function Hero({
     <section aria-label="Memory and Fold" className="flex flex-none flex-col px-4 pt-1 pb-5">
       <InUseHead stats={stats} ready={ready} windowCount={windowCount} />
       <MemoryCapsule className="mt-3.5" stayed={stats.kinds} label={capsuleLabel(stats)} />
-      {view.kind === 'failed' ? (
+      {view.kind === 'failed' && view.failure.code === 'list-full' && limit ? (
+        <NeedsRoomCard
+          className="mt-4"
+          needed={view.failure.details?.needed}
+          room={view.failure.details?.room ?? limit.room}
+          onUpgrade={limit.onUpgrade}
+          onMakeRoom={limit.onMakeRoom}
+        />
+      ) : view.kind === 'failed' ? (
         <FoldFailed error={view.fold.error} onRetry={onFold} />
+      ) : limit?.full ? (
+        <>
+          {/* Fo-Popup-Full: Fold waits for room; nothing is ever deleted or hidden. */}
+          <button
+            type="button"
+            disabled
+            aria-describedby="fold-full"
+            className="mt-4 flex h-11 w-full items-center justify-center gap-2 rounded-control bg-hover px-4 font-semibold text-text-3"
+          >
+            <Archive size={16} strokeWidth={1.75} aria-hidden />
+            Fold tabs
+          </button>
+          <span id="fold-full" className="sr-only">
+            Paused: your free list is full.
+          </span>
+          <FullCard className="mt-3.5" onUpgrade={limit.onUpgrade} onMakeRoom={limit.onMakeRoom} />
+        </>
       ) : (
         <>
           <FoldButton className="mt-4" count={foldCount} ready={ready} shortcut={shortcut} onFold={onFold} asks={asks} />
-          <FoldNote>
-            {ready && foldCount === 0
-              ? 'Only pinned and playing tabs are open.'
-              : asks
-                ? 'Asks which windows. Pinned and playing tabs stay open.'
-                : 'Saves and closes them. Pinned and playing tabs stay open.'}
-          </FoldNote>
+          {limit?.near && !(ready && foldCount === 0) ? (
+            <SpacesLeft id="fold-note" room={limit.room} onUpgrade={limit.onUpgrade} />
+          ) : (
+            <FoldNote>
+              {ready && foldCount === 0
+                ? 'Only pinned and playing tabs are open.'
+                : asks
+                  ? 'Asks which windows. Pinned and playing tabs stay open.'
+                  : 'Saves and closes them. Pinned and playing tabs stay open.'}
+            </FoldNote>
+          )}
         </>
       )}
     </section>

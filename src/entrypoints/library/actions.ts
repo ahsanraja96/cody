@@ -4,10 +4,11 @@ import { resetDataGuard } from '@/lib/dataGuard';
 import { exportCsv, exportFileName, exportHtml, exportJson, exportMarkdown } from '@/lib/exporters';
 import { send } from '@/lib/messages';
 import { PROFILE_KEY } from '@/lib/pro/account';
+import { listLiveFolders } from '@/lib/folders';
 import { clearAllData, exportGraphs, putBackTabs, removeTabsWithSnapshot, type RemovedTabs } from '@/lib/repo';
 import { DEFAULT_SETTINGS } from '@/lib/settings';
 import { lastAction, recoveryOffer, snapshotMirror, UNDO_WINDOW_MS } from '@/lib/state';
-import type { SessionGraph, SessionRecord, TabGroupColor, TabRecord } from '@/lib/types';
+import type { FolderRecord, SessionGraph, SessionRecord, TabGroupColor, TabRecord } from '@/lib/types';
 import { dismissToast, toast } from '@/ui/components/Toast';
 import { copyText } from '@/ui/hooks';
 import { errorCode, proErrorText } from '@/ui/pro';
@@ -169,11 +170,12 @@ export function downloadText(fileName: string, text: string, type = 'text/html;c
 
 export type ExportFormat = 'html' | 'markdown' | 'csv' | 'json';
 
-const EXPORTS: Record<ExportFormat, { extension: string; type: string; make: (graphs: SessionGraph[]) => string }> = {
-  html: { extension: 'html', type: 'text/html;charset=utf-8', make: (graphs) => exportHtml(graphs) },
-  markdown: { extension: 'md', type: 'text/markdown;charset=utf-8', make: (graphs) => exportMarkdown(graphs) },
-  csv: { extension: 'csv', type: 'text/csv;charset=utf-8', make: (graphs) => exportCsv(graphs) },
-  json: { extension: 'json', type: 'application/json;charset=utf-8', make: (graphs) => exportJson(graphs) },
+/** Folders go into every export (a column, a heading; HTML lists them first). */
+const EXPORTS: Record<ExportFormat, { extension: string; type: string; make: (graphs: SessionGraph[], folders: FolderRecord[]) => string }> = {
+  html: { extension: 'html', type: 'text/html;charset=utf-8', make: (graphs, folders) => exportHtml(graphs, Date.now(), { folders }) },
+  markdown: { extension: 'md', type: 'text/markdown;charset=utf-8', make: (graphs, folders) => exportMarkdown(graphs, Date.now(), { folders }) },
+  csv: { extension: 'csv', type: 'text/csv;charset=utf-8', make: (graphs, folders) => exportCsv(graphs, { folders }) },
+  json: { extension: 'json', type: 'application/json;charset=utf-8', make: (graphs, folders) => exportJson(graphs, Date.now(), { folders }) },
 };
 
 /**
@@ -189,7 +191,8 @@ export async function exportAll(format: ExportFormat = 'html'): Promise<number> 
       return 0;
     }
     const { extension, type, make } = EXPORTS[format];
-    downloadText(exportFileName().replace(/\.html$/, `.${extension}`), make(graphs), type);
+    const folders = await listLiveFolders().catch(() => []);
+    downloadText(exportFileName().replace(/\.html$/, `.${extension}`), make(graphs, folders), type);
     toast(`Exported ${count(tabs, 'tab')}.`);
     return tabs;
   } catch (error) {

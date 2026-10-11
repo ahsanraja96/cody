@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { browser, type Browser } from 'wxt/browser';
 import { extUrl } from '@/lib/extUrl';
 import { ESTIMATED_BYTES_PER_LOADED_TAB, estimateBytes } from '@/lib/format';
-import { send, type TabRef } from '@/lib/messages';
+import { CommandError, send, type TabRef } from '@/lib/messages';
 import type { ActiveFold, LastAction } from '@/lib/state';
 import { classifyUrl, displayHost, unwrapViewerUrl } from '@/lib/urls';
 import type { TabKind } from '@/ui/components/MemoryCapsule';
 import { useActiveFold, useLastAction, useWorkerEvents, type OpenWindow } from '@/ui/hooks';
+import { listFullFrom } from '@/ui/limits';
 
 export function tabUrl(tab: Browser.tabs.Tab): string {
   return unwrapViewerUrl(tab.url || tab.pendingUrl || '');
@@ -83,11 +84,17 @@ const STALE_FOLD_MS = 10 * 60_000;
 /** A finished fold stays on screen when the popup is reopened shortly after. */
 export const FINISHED_FOLD_SHOWN_MS = 60_000;
 
+/** Why a fold failed, when it was the free list's limit ('list-full': { room, needed, limit }). */
+export interface FoldFailure {
+  code?: string;
+  details?: Record<string, number>;
+}
+
 export type FoldView =
   | { kind: 'rest' }
   | { kind: 'folding'; fold: ActiveFold }
   | { kind: 'done'; fold: ActiveFold; seenRunning: boolean }
-  | { kind: 'failed'; fold: ActiveFold };
+  | { kind: 'failed'; fold: ActiveFold; failure: FoldFailure };
 
 /**
  * The fold to show: the worker's (from session storage and `fold-progress` events), so a popup
@@ -124,15 +131,22 @@ export function useFold() {
       seenRunning.current = true;
       view = { kind: 'folding', fold };
     } else if (!running && finishedAt >= openedAt.current - FINISHED_FOLD_SHOWN_MS && !undone(fold, action)) {
-      view =
-        fold.phase === 'failed'
-          ? { kind: 'failed', fold }
-          : { kind: 'done', fold, seenRunning: seenRunning.current };
+      if (fold.phase === 'failed') {
+        // The worker keeps the failure's code ('list-full' with { room, needed, limit }); an older
+        // worker only gave its message.
+        const parsed = fold.code ? null : listFullFrom(fold.error);
+        const value: FoldFailure = fold.code
+          ? { code: fold.code, details: fold.details }
+          : parsed
+            ? { code: 'list-full', details: Object.fromEntries(Object.entries(parsed).filter(([, v]) => v !== undefined)) as Record<string, number> }
+            : {};
+        view = { kind: 'failed', fold, failure: value };
+      } else view = { kind: 'done', fold, seenRunning: seenRunning.current };
     }
   }
 
   /** Fold every window, or one (`windowId`); `total` is how many tabs that should fold, for the progress shown first. */
-  const start = async (options: { windowId?: number; keepWindowOpen?: boolean }, total: number) => {
+  const start = async (options: { windowId?: number; keepWindowOpen?: boolean; tabIds?: number[]; intoFolderId?: string }, total: number) => {
     const startedAt = Date.now();
     const pending: ActiveFold = {
       foldId: `local-${startedAt}`,
@@ -150,7 +164,11 @@ export function useFold() {
       const outcome = await send({ type: 'fold', ...options });
       settle({ phase: 'done', foldId: outcome.foldId, total: outcome.savedTabs + outcome.skippedDuplicates, closed: outcome.closedTabs, outcome });
     } catch (error) {
-      settle({ phase: 'failed', error: error instanceof Error ? error.message : 'Something went wrong. Please try again.' });
+      settle({
+        phase: 'failed',
+        error: error instanceof Error ? error.message : 'Something went wrong. Please try again.',
+        ...(error instanceof CommandError && error.code ? { code: error.code, details: error.details } : {}),
+      });
     }
   };
 

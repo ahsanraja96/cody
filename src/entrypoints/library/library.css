@@ -68,12 +68,23 @@
   display: none;
 }
 .tf-row:hover .tf-row-actions,
-.tf-row:focus-within .tf-row-actions {
+.tf-row:focus-within .tf-row-actions,
+.tf-row-on .tf-row-actions {
   display: flex;
 }
 .tf-row:hover .tf-row-time,
-.tf-row:focus-within .tf-row-time {
+.tf-row:focus-within .tf-row-time,
+.tf-row-on .tf-row-time {
   display: none;
+}
+/* The drag grip shows with the actions (Up-Move-States). */
+.tf-row .tf-row-grip {
+  visibility: hidden;
+}
+.tf-row:hover .tf-row-grip,
+.tf-row:focus-within .tf-row-grip,
+.tf-row-on .tf-row-grip {
+  visibility: visible;
 }
 
 /* A small dark tooltip under an icon button, on hover or keyboard focus. */

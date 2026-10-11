@@ -18,6 +18,7 @@ import { listLiveSessions } from '@/lib/repo';
 import type { FolderRecord, SessionRecord, TabRecord } from '@/lib/types';
 import type { SiteKinds } from '@/lib/categories';
 import { FREE_LIMITS } from '@/lib/limits';
+import { hasFreeLimits } from '@/lib/pro/tiers';
 import {
   autoFoldNotice as autoFoldNoticeState,
   liveFolders as liveFoldersState,
@@ -489,11 +490,9 @@ export function useFoldedCount(): { tabs: number; folders: number } | undefined 
 
 /**
  * The Free limits apply to this plan (src/lib/limits.ts FREE_LIMITS)? False on Pro, Pro AI, a
- * Teams plan or Pro for life.
+ * Teams plan or Pro for life. One rule for the worker and the pages (src/lib/pro/tiers.ts).
  */
-export function hasFreeLimits(plan: PlanState): boolean {
-  return plan.tier === 'free' && !plan.lifetime && !plan.team;
-}
+export { hasFreeLimits };
 
 /** The free list's state: room left, near the limit (450+), or full. Null on paid plans. */
 export function useListRoom(): { tabs: number; limit: number; room: number; near: boolean; full: boolean } | null | undefined {
@@ -523,4 +522,13 @@ export function useAutoFoldNotice(): AutoFoldNotice | undefined {
 /** Pro AI's weekly tidy-up. */
 export function useTidy(): TidyState | undefined {
   return useStored(tidyStateItem.get, tidyStateItem.watch);
+}
+
+// ---- 0.6 screens (UI) ------------------------------------------------------------------------------
+
+import { autoFoldLast as autoFoldLastState, type AutoFoldRuns } from '@/lib/state';
+
+/** When each auto-fold rule last ran and what it folded, by rule id ("Last ran today 14:00 · folded 6 tabs"). */
+export function useAutoFoldLast(): AutoFoldRuns {
+  return useStored(autoFoldLastState.get, autoFoldLastState.watch) ?? {};
 }

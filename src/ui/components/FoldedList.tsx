@@ -1,8 +1,10 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, RotateCcw, X } from 'lucide-react';
-import { groupByCategory, type Category, type CategoryGroup } from '@/lib/categories';
+import type { Category, SiteKinds } from '@/lib/categories';
 import { putBackTabs, removeTabsWithSnapshot, type RemovedTabs } from '@/lib/repo';
-import type { TabRecord } from '@/lib/types';
+import type { FolderRecord, TabGroupColor, TabRecord } from '@/lib/types';
+import { groupTabs } from '../folders';
+import { FolderIcon } from './FolderIcon';
 import { displayHost } from '@/lib/urls';
 import { IncognitoMark } from './IncognitoMark';
 import { cx } from '../cx';
@@ -10,10 +12,11 @@ import { Favicon } from './Favicon';
 import './FoldedList.css';
 
 /**
- * The folded list grouped by kind of site (Min-Popup board): group rows with a colour dot, count,
- * a favicon strip when collapsed and "Open all" on hover or focus; rows open the tab (it stays in
- * the list) and × removes it at once, leaving an Undo line in its place for 10 seconds.
- * Groups are ordered by their newest tab, newest first inside each group.
+ * The folded list (Min-Popup, Fo-Popup): the person's folders first (folder icon, name, count),
+ * then the other tabs by kind of site (colour dot). Group rows have a favicon strip when collapsed
+ * and "Open all" on hover or focus; rows open the tab (it stays in the list) and × removes it at
+ * once, leaving an Undo line in its place for 10 seconds. Kinds are ordered by their newest tab,
+ * newest first inside each group. Snoozed tabs wait in the full list.
  */
 
 export const REMOVE_UNDO_MS = 10_000;
@@ -146,30 +149,54 @@ export function useRemoveWithUndo(): RemoveWithUndo {
   return useMemo(() => ({ removed, remove, undo, undoLast }), [removed, remove, undo, undoLast]);
 }
 
+/** A group "Open all" opens as a Chrome tab group of the same name and colour. */
+export interface OpenableGroup {
+  name: string;
+  color: TabGroupColor;
+  items: TabRecord[];
+}
+
+interface ListGroup extends OpenableGroup {
+  id: string;
+  folder: boolean;
+  items: ListedTab[];
+}
+
 export interface FoldedListProps {
   tabs: TabRecord[];
+  /** The person's folders, in their order (shown first when they have tabs). */
+  folders?: FolderRecord[];
+  /** Sites moved to another kind. */
+  siteKinds?: SiteKinds;
   removal: RemoveWithUndo;
   /** Tabs saved at or after this time are new: "+N" on their group and a dot on their row. */
   newSince?: number;
   /** A fold is still adding tabs: groups start collapsed and the group receiving tabs pulses. */
   live?: boolean;
   onOpen: (tab: TabRecord, background: boolean) => void;
-  onOpenAll: (group: CategoryGroup<TabRecord>) => void;
+  onOpenAll: (group: OpenableGroup) => void;
 }
 
 interface ListedTab extends TabRecord {
   removedPlaceholder?: boolean;
 }
 
-export function FoldedList({ tabs, removal, newSince, live = false, onOpen, onOpenAll }: FoldedListProps) {
-  const groups = useMemo(() => {
+const NO_FOLDERS: FolderRecord[] = [];
+
+export function FoldedList({ tabs, folders = NO_FOLDERS, siteKinds, removal, newSince, live = false, onOpen, onOpenAll }: FoldedListProps) {
+  const { groups, folderCount } = useMemo(() => {
     const { removed } = removal;
     const items: ListedTab[] = removed.size ? tabs.filter((t) => !removed.has(t.id)) : [...tabs];
     for (const entry of removed.values()) items.push(entry.restoring ? entry.tab : { ...entry.tab, removedPlaceholder: true });
     // Tabs folded together share a time; a fixed tie-break keeps a removed row's Undo line in its place.
     items.sort((a, b) => b.savedAt - a.savedAt || a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-    return groupByCategory(items, (t) => t.url, (t) => t.savedAt);
-  }, [tabs, removal]);
+    const grouped = groupTabs(items, folders, siteKinds);
+    const inFolders: ListGroup[] = grouped.folders
+      .filter((g) => g.items.length > 0)
+      .map((g) => ({ id: g.id, name: g.name, color: g.color, folder: true, items: g.items as ListedTab[] }));
+    const bySite: ListGroup[] = grouped.sites.map((g) => ({ id: g.id, name: g.name, color: g.color, folder: false, items: g.items as ListedTab[] }));
+    return { groups: [...inFolders, ...bySite], folderCount: inFolders.length };
+  }, [tabs, folders, siteKinds, removal]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [shown, setShown] = useState<Record<string, number>>({});
   const now = Date.now();
@@ -177,27 +204,31 @@ export function FoldedList({ tabs, removal, newSince, live = false, onOpen, onOp
   return (
     <div>
       {groups.map((group, index) => {
-        const id = group.category.id;
-        const isOpen = expanded[id] ?? (index === 0 && !live);
+        const id = group.id;
+        // Folders start closed (the board's popup); the newest kind of site opens when there are no folders.
+        const isOpen = expanded[id] ?? (index === 0 && !live && folderCount === 0);
         const real = group.items.filter((t) => !t.removedPlaceholder);
         const fresh = newSince === undefined ? 0 : real.filter((t) => t.savedAt >= newSince).length;
+        const firstSite = index === folderCount && folderCount > 0;
         return (
-          <FoldedGroup
-            key={id}
-            group={group}
-            tabs={real}
-            fresh={fresh}
-            receiving={live && index === 0 && fresh > 0}
-            expanded={isOpen}
-            shown={shown[id] ?? FIRST_ROWS}
-            newSince={newSince}
-            now={now}
-            removal={removal}
-            onToggle={() => setExpanded((e) => ({ ...e, [id]: !isOpen }))}
-            onMore={(count) => setShown((s) => ({ ...s, [id]: (s[id] ?? FIRST_ROWS) + count }))}
-            onOpen={onOpen}
-            onOpenAll={() => onOpenAll({ ...group, items: real })}
-          />
+          <div key={id}>
+            {firstSite && <div aria-hidden className="mx-2 my-1 h-px bg-border" />}
+            <FoldedGroup
+              group={group}
+              tabs={real}
+              fresh={fresh}
+              receiving={live && fresh > 0 && groups.findIndex((g) => g.items.some((t) => newSince !== undefined && t.savedAt >= newSince)) === index}
+              expanded={isOpen}
+              shown={shown[id] ?? FIRST_ROWS}
+              newSince={newSince}
+              now={now}
+              removal={removal}
+              onToggle={() => setExpanded((e) => ({ ...e, [id]: !isOpen }))}
+              onMore={(count) => setShown((s) => ({ ...s, [id]: (s[id] ?? FIRST_ROWS) + count }))}
+              onOpen={onOpen}
+              onOpenAll={() => onOpenAll({ name: group.name, color: group.color, items: real })}
+            />
+          </div>
         );
       })}
     </div>
@@ -219,7 +250,7 @@ function FoldedGroup({
   onOpen,
   onOpenAll,
 }: {
-  group: CategoryGroup<ListedTab>;
+  group: ListGroup;
   /** The group's tabs without Undo lines. */
   tabs: TabRecord[];
   fresh: number;
@@ -234,17 +265,18 @@ function FoldedGroup({
   onOpen: (tab: TabRecord, background: boolean) => void;
   onOpenAll: () => void;
 }) {
-  const { category, items } = group;
+  const { items } = group;
+  const name = group.name;
   const count = tabs.length;
   const visible = expanded ? items.slice(0, shown) : [];
   const more = expanded ? Math.min(items.length - visible.length, MORE_ROWS) : 0;
   return (
-    <div role="group" aria-label={`${category.name}, ${count} ${count === 1 ? 'tab' : 'tabs'}${expanded ? '' : ', collapsed'}`} className="group/fold">
+    <div role="group" aria-label={`${name}, ${count} ${count === 1 ? 'tab' : 'tabs'}${expanded ? '' : ', collapsed'}`} className="group/fold">
       <div className={cx('flex h-9 items-center gap-2 rounded-control px-2', receiving && 'bg-accent-soft')}>
         <button
           type="button"
           aria-expanded={expanded}
-          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${category.name}`}
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`}
           onClick={onToggle}
           className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-control text-left"
         >
@@ -253,8 +285,10 @@ function FoldedGroup({
           ) : (
             <ChevronRight size={14} strokeWidth={2} aria-hidden className="flex-none text-text-3" />
           )}
-          <CategoryDot category={category} />
-          <span className="truncate font-semibold">{category.name}</span>
+          {group.folder ? <FolderIcon color={group.color} size={15} /> : <span aria-hidden="true" className={cx('tf-cg-dot', `tf-cg-${group.color}`)} style={{ width: 10, height: 10 }} />}
+          <span dir="auto" className="truncate font-semibold">
+            {name}
+          </span>
           <span className="tabular-nums flex-none text-text-3">· {count.toLocaleString()}</span>
           {fresh > 0 && <NewBadge count={fresh} receiving={receiving} />}
         </button>

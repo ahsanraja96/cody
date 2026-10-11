@@ -15,11 +15,15 @@ export function Kbd({ children }: { children: ReactNode }) {
   );
 }
 
-export function SectionLabel({ children, count }: { children: ReactNode; count?: number }) {
+export function SectionLabel({ children, count, countText }: { children: ReactNode; count?: number; countText?: ReactNode }) {
   return (
     <div className="flex h-9 items-center gap-1.5 px-2">
       <h2 className="text-meta font-semibold tracking-[.04em] text-text-3 uppercase">{children}</h2>
-      {count !== undefined && <span className="text-meta text-text-3 tabular-nums">· {count.toLocaleString()}</span>}
+      {countText !== undefined ? (
+        <span className="text-meta text-text-3 tabular-nums">· {countText}</span>
+      ) : (
+        count !== undefined && <span className="text-meta text-text-3 tabular-nums">· {count.toLocaleString()}</span>
+      )}
     </div>
   );
 }
@@ -130,6 +134,28 @@ export function SyncLine({ status, cloud = false }: { status: SyncStatus | undef
           className="font-semibold no-underline hover:underline"
         >
           Sync all
+        </a>
+      </span>
+    );
+  }
+  if (status.waiting && status.waiting > 0) {
+    // Free with a full list: tabs from other computers wait in Chrome sync until there's room.
+    return (
+      <span role="status" className={base}>
+        {check}
+        Synced
+        <span aria-hidden>·</span>
+        <span className="text-amber">{status.waiting.toLocaleString()} waiting:</span>
+        <a
+          href="#/room"
+          title="Tabs from your other computers wait in Chrome sync: your free list is full"
+          onClick={(e) => {
+            e.preventDefault();
+            void openLibrary('#/room').finally(() => window.close());
+          }}
+          className="font-semibold no-underline hover:underline"
+        >
+          make room
         </a>
       </span>
     );

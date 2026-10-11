@@ -1,149 +1,169 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronDown, ChevronRight, ClipboardCopy, Ellipsis, ExternalLink, RotateCcw, Trash, X } from 'lucide-react';
-import { groupByCategory } from '@/lib/categories';
-import type { Project } from '@/lib/pro/types';
-import type { TabGroupColor, TabRecord } from '@/lib/types';
+import { ChevronDown, ChevronRight, Clock, Ellipsis, ExternalLink, GripVertical, Radio, RotateCcw, X } from 'lucide-react';
+import { categorize, siteKey, type SiteKinds } from '@/lib/categories';
+import type { PlanState } from '@/lib/pro/types';
+import type { LiveFolder } from '@/lib/state';
+import type { FolderRecord, TabRecord } from '@/lib/types';
 import { displayHost } from '@/lib/urls';
 import { Favicon } from '@/ui/components/Favicon';
+import { ColorDot, FolderIcon } from '@/ui/components/FolderIcon';
 import { IncognitoMark } from '@/ui/components/IncognitoMark';
-import { ProTag } from '@/ui/components/ProBits';
+import { anchorBelow, Menu, type MenuAnchor, type MenuEntry } from '@/ui/components/Menu';
 import { cx } from '@/ui/cx';
+import { groupTabs, type TabGroup } from '@/ui/folders';
 import { modKey, useNow } from '@/ui/hooks';
-import { copyAsContext, openFolded, openGroup, removeGroup, removeOne, undoRemoval, useRemovals, type Removal } from './actions';
+import { formatSnoozeTime } from '@/ui/snooze';
+import { openFolded, openGroup, removeOne, undoRemoval, useRemovals, type Removal } from './actions';
+import { dropOnGroup, focusLive, foldLive, renameFolder, wakeTabs } from './folderActions';
 import { ago, count } from './format';
-import { goToPlans } from './router';
+import { folderMenu, siteGroupMenu, tabMenu, type MenuContext } from './menus';
+import { dropHandlers, Sidebar, type DropTarget } from './Sidebar';
+import { TAB_DRAG_TYPE, useDrag, useLibraryUi } from './uiStore';
 
 /** Rows a group shows before "Show N more". */
 const FIRST_ROWS = 6;
-/** The newest groups start open (by site); by project only the first one does. */
-const OPEN_GROUPS = { site: 2, project: 1 } as const;
 
-export type GroupBy = 'site' | 'project';
-
-/** A group in the list: a kind of site, or (Pro AI, By project) a project or "Everything else". */
-export interface ListGroup {
-  id: string;
-  name: string;
-  color: TabGroupColor;
-  /** Newest first. */
-  items: TabRecord[];
-}
-
-export const EVERYTHING_ELSE = 'Everything else';
-
-/**
- * Group folded tabs by kind of site (groups ordered by their newest tab), or by project in the
- * projects' order with a grey "Everything else" last for tabs in no project.
- */
-export function groupTabs(tabs: TabRecord[], by: GroupBy, projects: Project[]): ListGroup[] {
-  if (by === 'site' || projects.length === 0) {
-    return groupByCategory(tabs, (t) => t.url, (t) => t.savedAt).map((g) => ({
-      id: `site:${g.category.id}`,
-      name: g.category.name,
-      color: g.category.color,
-      items: g.items,
-    }));
-  }
-  const byName = new Map<string, TabRecord[]>(projects.map((p) => [p.name, []]));
-  const rest: TabRecord[] = [];
-  for (const tab of tabs) {
-    const list = tab.project !== undefined ? byName.get(tab.project) : undefined;
-    (list ?? rest).push(tab);
-  }
-  const newestFirst = (a: TabRecord, b: TabRecord) => b.savedAt - a.savedAt;
-  const groups: ListGroup[] = projects
-    .map((p) => ({ id: `project:${p.name}`, name: p.name, color: p.color, items: byName.get(p.name)!.sort(newestFirst) }))
-    .filter((g) => g.items.length > 0);
-  if (rest.length) groups.push({ id: 'project:*', name: EVERYTHING_ELSE, color: 'grey', items: rest.sort(newestFirst) });
-  return groups;
-}
-
-const SIZE = { head: 48, row: 34, more: 32, end: 8 } as const;
-const NO_PROJECTS: Project[] = [];
+const SIZE = { head: 48, row: 34, more: 32, end: 8, label: 36, live: 30, empty: 34 } as const;
 
 type Item =
-  | { type: 'head'; key: string; group: ListGroup; live: TabRecord[]; first: boolean; expanded: boolean }
-  | { type: 'row'; key: string; tab: TabRecord }
-  | { type: 'removed'; key: string; removal: Removal }
-  | { type: 'more'; key: string; id: string; hidden: number }
-  | { type: 'end'; key: string };
+  | { type: 'snooze-head'; key: string; n: number; expanded: boolean; first: boolean }
+  | { type: 'snoozed'; key: string; tab: TabRecord }
+  | { type: 'head'; key: string; group: TabGroup; live: TabRecord[]; first: boolean; expanded: boolean }
+  | { type: 'live-line'; key: string; group: TabGroup }
+  | { type: 'empty'; key: string; group: TabGroup }
+  | { type: 'label'; key: string }
+  | { type: 'row'; key: string; tab: TabRecord; group: TabGroup }
+  | { type: 'removed'; key: string; removal: Removal; group: TabGroup }
+  | { type: 'more'; key: string; group: TabGroup; hidden: number }
+  | { type: 'end'; key: string; group?: TabGroup };
 
 function sizeOf(item: Item): number {
   switch (item.type) {
+    case 'snooze-head':
     case 'head':
       return SIZE.head + (item.first ? 0 : 1);
     case 'row':
     case 'removed':
+    case 'snoozed':
       return SIZE.row;
     case 'more':
       return SIZE.more;
     case 'end':
       return SIZE.end;
+    case 'label':
+      return SIZE.label;
+    case 'live-line':
+      return SIZE.live;
+    case 'empty':
+      return SIZE.empty;
   }
 }
 
 export const SECONDARY_SM =
   'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-border-strong bg-surface px-2.5 text-small font-semibold text-text hover:bg-hover';
 
+const ICON_BTN = 'inline-flex size-7 items-center justify-center rounded-md text-text-2 hover:bg-border hover:text-text';
+
+interface OpenMenu {
+  key: string;
+  anchor: MenuAnchor;
+  entries: MenuEntry[];
+  label: string;
+  width?: number;
+  returnFocus: HTMLElement | null;
+}
+
 /**
- * Every folded tab, grouped by kind of site (Min-List): groups ordered by their newest tab, newest
- * first inside a group, the two newest groups open. By project (Pro-List-Projects), the projects
- * come in their own order with "Everything else" last. A slim index on the left jumps to a group.
- * The list is virtualised (only the rows on screen exist), so 10,000+ tabs scroll smoothly.
+ * Every folded tab (Fo-List): snoozed tabs first when there are any, then the person's folders,
+ * then "By site" with the kinds of site (groups ordered by their newest tab, newest first inside
+ * a group). A left column jumps to a group and takes dropped tabs. Rows have a grip to drag them
+ * onto another group and a ⋯ menu (also right-click and Shift+F10) with Move to, Snooze, Open in
+ * background and Remove. The list is virtualised (only the rows on screen exist), so 10,000+
+ * tabs scroll smoothly.
  */
 export function GroupedList({
   tabs,
+  folders,
+  siteKinds,
+  liveFolders,
+  plan,
+  windowLabel,
   scrollRef,
-  groupBy = 'site',
-  projects = NO_PROJECTS,
   canCopyContext = false,
 }: {
   tabs: TabRecord[];
+  folders: FolderRecord[];
+  siteKinds: SiteKinds;
+  liveFolders: Record<string, LiveFolder>;
+  plan: PlanState;
+  /** "Window 2" for a browser window id. */
+  windowLabel: (windowId: number) => string;
   scrollRef: RefObject<HTMLElement | null>;
-  groupBy?: GroupBy;
-  projects?: Project[];
-  /** Pro AI: "Copy as context for AI" in a group's menu (others see a Pro AI tag that opens the plans). */
   canCopyContext?: boolean;
 }) {
   const removals = useRemovals((s) => s.removals);
   const [expanded, setExpanded] = useState<Partial<Record<string, boolean>>>({});
   const [showAll, setShowAll] = useState<Partial<Record<string, boolean>>>({});
-  const [menuFor, setMenuFor] = useState<string | null>(null);
-  const by: GroupBy = groupBy === 'project' && projects.length > 0 ? 'project' : 'site';
-  // By site the projects don't matter: a stable empty list keeps the grouping memoised.
-  const used = by === 'project' ? projects : NO_PROJECTS;
-  // Times ("2 min ago") refresh every minute.
+  const [menu, setMenu] = useState<OpenMenu | null>(null);
   const now = useNow(true, 60_000);
 
   // Removed rows stay in place (as "Removed … · Undo") until their undo runs out.
-  const { groups, liveIds } = useMemo(() => {
+  const { shown, counted, liveIds } = useMemo(() => {
     const live = new Set(tabs.map((t) => t.id));
     const ghosts = [...removals.values()].filter((r) => !live.has(r.tab.id)).map((r) => r.tab);
-    return { groups: groupTabs([...tabs, ...ghosts], by, used), liveIds: live };
-  }, [tabs, removals, by, used]);
+    return {
+      shown: groupTabs(ghosts.length ? [...tabs, ...ghosts] : tabs, folders, siteKinds),
+      counted: ghosts.length ? groupTabs(tabs, folders, siteKinds) : null,
+      liveIds: live,
+    };
+  }, [tabs, removals, folders, siteKinds]);
+  const real = counted ?? shown;
 
-  const { items, heads } = useMemo(() => {
+  const ctx: MenuContext = useMemo(
+    () => ({ folders, siteKinds, plan, liveFolders, canCopyContext }),
+    [folders, siteKinds, plan, liveFolders, canCopyContext],
+  );
+  const ctxRef = useRef(ctx);
+  ctxRef.current = ctx;
+
+  const { items, heads, order } = useMemo(() => {
     const out: Item[] = [];
     const headIndex = new Map<string, number>();
-    groups.forEach((group, index) => {
+    const ids: string[] = [];
+    if (shown.snoozed.length) {
+      const open = expanded.snoozed ?? true;
+      headIndex.set('snoozed', 0);
+      ids.push('snoozed');
+      out.push({ type: 'snooze-head', key: 'h:snoozed', n: shown.snoozed.length, expanded: open, first: true });
+      if (open) for (const tab of shown.snoozed) out.push({ type: 'snoozed', key: `z:${tab.id}`, tab });
+      out.push({ type: 'end', key: 'e:snoozed' });
+    }
+    const push = (group: TabGroup, openByDefault: boolean) => {
       const id = group.id;
       const live = group.items.filter((t) => liveIds.has(t.id));
-      const isOpen = expanded[id] ?? index < OPEN_GROUPS[by];
+      const isOpen = expanded[id] ?? openByDefault;
+      const previous = out[out.length - 1];
       headIndex.set(id, out.length);
-      out.push({ type: 'head', key: `h:${id}`, group, live, first: index === 0, expanded: isOpen });
+      ids.push(id);
+      out.push({ type: 'head', key: `h:${id}`, group, live, first: !previous || previous.type === 'label', expanded: isOpen });
       if (!isOpen) return;
+      if (group.folder && liveFolders[group.folder.id]) out.push({ type: 'live-line', key: `l:${id}`, group });
+      if (group.items.length === 0) out.push({ type: 'empty', key: `n:${id}`, group });
       const visible = showAll[id] ? group.items : group.items.slice(0, FIRST_ROWS);
       for (const tab of visible) {
         const removal = removals.get(tab.id);
-        out.push(removal ? { type: 'removed', key: `x:${tab.id}`, removal } : { type: 'row', key: tab.id, tab });
+        out.push(removal ? { type: 'removed', key: `x:${tab.id}`, removal, group } : { type: 'row', key: tab.id, tab, group });
       }
       const hidden = group.items.length - visible.length;
-      if (hidden > 0) out.push({ type: 'more', key: `m:${id}`, id, hidden });
-      out.push({ type: 'end', key: `e:${id}` });
-    });
-    return { items: out, heads: headIndex };
-  }, [groups, liveIds, expanded, showAll, removals, by]);
+      if (hidden > 0) out.push({ type: 'more', key: `m:${id}`, group, hidden });
+      out.push({ type: 'end', key: `e:${id}`, group });
+    };
+    shown.folders.forEach((group, index) => push(group, index < 2));
+    if (shown.folders.length && shown.sites.length) out.push({ type: 'label', key: 'label' });
+    shown.sites.forEach((group, index) => push(group, index < (shown.folders.length ? 1 : 2)));
+    return { items: out, heads: headIndex, order: ids };
+  }, [shown, liveIds, expanded, showAll, removals, liveFolders]);
 
   const listRef = useRef<HTMLDivElement>(null);
   const [listTop, setListTop] = useState(0);
@@ -161,101 +181,131 @@ export function GroupedList({
     scrollMargin: listTop,
   });
 
-  // The group at the top of the screen is the current one in the index; scrolled to the end, the
-  // last group whose header is on screen (short groups at the end can't reach the top).
+  // The group at the top of the screen is the current one in the left column; scrolled to the
+  // end, the last group whose header is on screen (short groups at the end can't reach the top).
   const scroller = scrollRef.current;
   const atEnd = !!scroller && scroller.scrollTop > 0 && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
   const offset = (virtualizer.scrollOffset ?? 0) - listTop + (atEnd ? (scroller?.clientHeight ?? 0) - 48 : 32);
-  let current: string | undefined = groups[0]?.id;
-  for (const group of groups) {
-    const index = heads.get(group.id) ?? 0;
-    const start = virtualizer.measurementsCache[index]?.start;
-    if (start !== undefined && start - listTop <= offset) current = group.id;
+  let current: string | undefined = order[0];
+  for (const id of order) {
+    const start = virtualizer.measurementsCache[heads.get(id) ?? 0]?.start;
+    if (start !== undefined && start - listTop <= offset) current = id;
   }
 
-  const jump = (id: string) => {
-    setExpanded((e) => ({ ...e, [id]: true }));
-    const index = heads.get(id);
-    if (index !== undefined) requestAnimationFrame(() => virtualizer.scrollToIndex(index, { align: 'start' }));
-  };
+  const jump = useCallback(
+    (id: string) => {
+      setExpanded((e) => ({ ...e, [id]: true }));
+      const index = heads.get(id);
+      if (index !== undefined) requestAnimationFrame(() => virtualizer.scrollToIndex(index, { align: 'start' }));
+    },
+    [heads, virtualizer],
+  );
 
-  // A click outside or Escape closes the group menu.
+  // "See snoozed tabs" and the like ask for a group from elsewhere on the page.
+  const jumpTo = useLibraryUi((s) => s.jumpTo);
   useEffect(() => {
-    if (!menuFor) return;
-    const close = (e: Event) => {
-      if (e instanceof KeyboardEvent && e.key !== 'Escape') return;
-      if (e instanceof MouseEvent && (e.target as HTMLElement).closest?.('[data-group-menu]')) return;
-      setMenuFor(null);
-    };
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', close);
+    if (!jumpTo) return;
+    jump(jumpTo);
+    useLibraryUi.getState().setJumpTo(null);
+  }, [jumpTo, jump]);
+
+  // Dragging ends however it ends (dropped outside, the row scrolled away, Esc).
+  useEffect(() => {
+    const end = () => useDrag.getState().end();
+    document.addEventListener('dragend', end);
+    document.addEventListener('drop', end);
     return () => {
-      document.removeEventListener('mousedown', close);
-      document.removeEventListener('keydown', close);
+      document.removeEventListener('dragend', end);
+      document.removeEventListener('drop', end);
     };
-  }, [menuFor]);
+  }, []);
+
+  const target: DropTarget = useMemo(
+    () => ({
+      canDrop: (group) => {
+        const tab = useDrag.getState().tab;
+        if (!tab) return false;
+        if (group.kind === 'folder') return !!group.folder && tab.folderId !== group.folder.id;
+        return !!tab.folderId || categorize(tab.url, ctxRef.current.siteKinds) !== group.categoryId;
+      },
+      onDrop: (group, tab) => void dropOnGroup(tab, group, ctxRef.current.siteKinds, ctxRef.current.folders),
+    }),
+    [],
+  );
+
+  const openTabMenu = useCallback((tab: TabRecord, anchor: MenuAnchor, returnFocus: HTMLElement | null) => {
+    setMenu({ key: tab.id, anchor, entries: tabMenu(tab, ctxRef.current), label: `More for ${tab.title || tab.url}`, returnFocus });
+  }, []);
+  const openGroupMenu = useCallback((group: TabGroup, anchor: MenuAnchor, returnFocus: HTMLElement | null) => {
+    const entries = group.kind === 'folder' ? folderMenu(group, ctxRef.current) : siteGroupMenu(group, ctxRef.current);
+    setMenu({ key: group.id, anchor, entries, label: `More for ${group.name}`, width: group.kind === 'folder' ? 320 : 280, returnFocus });
+  }, []);
+  const closeMenu = useCallback(() => setMenu(null), []);
 
   return (
     <>
-      <nav
-        aria-label={by === 'project' ? 'Jump to a project' : 'Jump to a group'}
-        className="sticky top-6 col-start-1 row-start-2 mt-[9px] flex w-44 flex-col gap-0.5 self-start max-[1319px]:hidden"
-      >
-        {groups.map((group) => {
-          const id = group.id;
-          const head = items[heads.get(id) ?? -1];
-          const n = head?.type === 'head' ? head.live.length : 0;
-          const active = id === current;
-          return (
-            <a
-              key={id}
-              href={`#/`}
-              aria-current={active ? 'true' : undefined}
-              onClick={(e) => {
-                e.preventDefault();
-                jump(id);
-              }}
-              className={cx(
-                'flex h-[30px] items-center gap-2.5 rounded-control px-2.5 no-underline hover:bg-hover',
-                active ? 'bg-hover font-semibold text-text' : 'text-text-2',
-              )}
-            >
-              <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ background: `var(--cg-${group.color})` }} />
-              <span dir="auto" className="min-w-0 flex-1 truncate">
-                {group.name}
-              </span>
-              <span className="text-small font-normal text-text-3">{n.toLocaleString()}</span>
-            </a>
-          );
-        })}
-      </nav>
+      <Sidebar
+        snoozed={real.snoozed.length}
+        folders={folders}
+        folderGroups={real.folders}
+        sites={real.sites}
+        current={current}
+        liveFolders={liveFolders}
+        plan={plan}
+        target={target}
+        onJump={jump}
+      />
 
       <div ref={listRef} className="relative col-start-2 row-start-2" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map((v) => {
           const item = items[v.index]!;
-          const menuOpen = item.type === 'head' && menuFor === item.group.id;
+          const menuOpen = !!menu && (item.type === 'head' ? menu.key === item.group.id : item.type === 'row' && menu.key === item.tab.id);
+          const groupOf = 'group' in item ? item.group : undefined;
           return (
             <div
               key={v.key}
               className={cx('absolute inset-x-0 top-0', menuOpen ? 'z-20' : 'hover:z-10 focus-within:z-10')}
               style={{ transform: `translateY(${v.start - listTop}px)`, height: v.size }}
+              {...(groupOf ? dropHandlers(groupOf, target) : {})}
             >
               {item.type === 'head' ? (
                 <GroupHead
                   item={item}
                   menuOpen={menuOpen}
-                  canCopyContext={canCopyContext}
+                  live={item.group.folder ? liveFolders[item.group.folder.id] : undefined}
+                  windowLabel={windowLabel}
+                  siteKinds={siteKinds}
                   onToggle={() => setExpanded((e) => ({ ...e, [item.group.id]: !item.expanded }))}
-                  onMenu={(open) => setMenuFor(open ? item.group.id : null)}
+                  onMenu={openGroupMenu}
                 />
               ) : item.type === 'row' ? (
-                <Row tab={item.tab} now={now} />
+                <Row tab={item.tab} now={now} menuOpen={menuOpen} onMenu={openTabMenu} />
               ) : item.type === 'removed' ? (
                 <RemovedRow removal={item.removal} />
+              ) : item.type === 'snooze-head' ? (
+                <SnoozeHead
+                  n={item.n}
+                  expanded={item.expanded}
+                  first={item.first}
+                  onToggle={() => setExpanded((e) => ({ ...e, snoozed: !item.expanded }))}
+                />
+              ) : item.type === 'snoozed' ? (
+                <SnoozedRow tab={item.tab} now={now} />
+              ) : item.type === 'label' ? (
+                <div className="flex h-9 items-end justify-between border-t border-border px-2 pb-1.5">
+                  <h2 className="label-caps m-0">By site</h2>
+                  <span className="text-small text-text-3">Tabs not in a folder</span>
+                </div>
+              ) : item.type === 'live-line' ? (
+                <LiveLine group={item.group} />
+              ) : item.type === 'empty' ? (
+                <div className="flex h-[34px] items-center pr-2 pl-[62px] text-small text-text-3">
+                  No tabs yet. Drag tabs here, or use a tab’s ⋯ › Move to.
+                </div>
               ) : item.type === 'more' ? (
                 <button
                   type="button"
-                  onClick={() => setShowAll((s) => ({ ...s, [item.id]: true }))}
+                  onClick={() => setShowAll((s) => ({ ...s, [item.group.id]: true }))}
                   className="flex h-8 items-center rounded-control pr-2 pl-[62px] text-small text-text-2 hover:text-text hover:underline"
                 >
                   Show {item.hidden.toLocaleString()} more
@@ -265,161 +315,288 @@ export function GroupedList({
           );
         })}
       </div>
+      {menu && <Menu anchor={menu.anchor} entries={menu.entries} label={menu.label} width={menu.width} onClose={closeMenu} returnFocus={menu.returnFocus} />}
     </>
+  );
+}
+
+function SnoozeHead({ n, expanded, first, onToggle }: { n: number; expanded: boolean; first: boolean; onToggle: () => void }) {
+  return (
+    <div className={cx('flex h-12 items-center gap-2 px-2', !first && 'border-t border-border')}>
+      <h2 className="m-0 flex h-full min-w-0 flex-1 text-body font-semibold">
+        <button type="button" aria-expanded={expanded} onClick={onToggle} className="flex h-full min-w-0 flex-1 items-center gap-2.5 text-left">
+          {expanded ? (
+            <ChevronDown size={16} strokeWidth={2} aria-hidden className="shrink-0 text-text-3" />
+          ) : (
+            <ChevronRight size={16} strokeWidth={2} aria-hidden className="shrink-0 text-text-3" />
+          )}
+          <Clock size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-text-2" />
+          <span>Snoozed</span>
+          <span className="shrink-0 font-normal text-text-3">{count(n, 'tab')} · come back on their own</span>
+        </button>
+      </h2>
+    </div>
+  );
+}
+
+/** A snoozed tab (Mx-Auto "Snoozed tabs"): when it comes back, and Wake now. */
+function SnoozedRow({ tab, now }: { tab: TabRecord; now: number }) {
+  const title = tab.title || tab.url;
+  const when = tab.snoozeUntil ?? now;
+  return (
+    <div role="listitem" className="flex h-[34px] items-center gap-2.5 rounded-control px-2 hover:bg-hover">
+      <span className="w-4 shrink-0" />
+      <button
+        type="button"
+        aria-label={`Open ${title} (stays snoozed)`}
+        title={tab.url}
+        onClick={() => void openFolded(tab, true)}
+        className="flex h-full min-w-0 flex-1 items-center gap-3 text-left"
+      >
+        <Favicon url={tab.url} size={16} />
+        <span dir="auto" className="min-w-0 flex-1 truncate">
+          {title}
+        </span>
+      </button>
+      <span className="inline-flex shrink-0 items-center gap-1.5 text-small text-text-2" title={when < now ? 'Comes back on the computer that snoozed it' : undefined}>
+        <Clock size={13} strokeWidth={1.75} aria-hidden className="text-text-3" />
+        {formatSnoozeTime(when, now)}
+      </span>
+      <button type="button" onClick={() => void wakeTabs([tab])} className={cx(SECONDARY_SM, 'ml-1.5 h-[26px]')}>
+        Wake now
+      </button>
+    </div>
+  );
+}
+
+/** Under a live folder's header (Mx-Live): a quiet line instead of the board's tab-strip picture. */
+function LiveLine({ group }: { group: TabGroup }) {
+  return (
+    <div className="flex h-[30px] items-center gap-2 pr-2 pl-[34px] text-small text-text-3">
+      <Radio size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-green" />
+      <span>Open as a Chrome tab group · changes save here ·</span>
+      <button type="button" onClick={() => void foldLive(group.folder!)} className="font-semibold text-accent-text hover:underline">
+        Fold the group
+      </button>
+    </div>
   );
 }
 
 function GroupHead({
   item,
   menuOpen,
-  canCopyContext,
+  live,
+  windowLabel,
+  siteKinds,
   onToggle,
   onMenu,
 }: {
   item: Extract<Item, { type: 'head' }>;
   menuOpen: boolean;
-  canCopyContext: boolean;
+  live: LiveFolder | undefined;
+  windowLabel: (windowId: number) => string;
+  siteKinds: SiteKinds;
   onToggle: () => void;
-  onMenu: (open: boolean) => void;
+  onMenu: (group: TabGroup, anchor: MenuAnchor, returnFocus: HTMLElement | null) => void;
 }) {
-  const { group, live, expanded, first } = item;
-  const name = group.name;
+  const { group, live: tabs, expanded, first } = item;
+  const folder = group.folder;
   const trigger = useRef<HTMLButtonElement>(null);
-  const wasOpen = useRef(false);
-  // Closing the menu with Escape (or after its action) puts focus back on ⋯.
-  useEffect(() => {
-    if (wasOpen.current && !menuOpen && (document.activeElement === document.body || !document.activeElement)) trigger.current?.focus();
-    wasOpen.current = menuOpen;
-  }, [menuOpen]);
-  const n = live.length;
+  const renaming = useLibraryUi((s) => (folder && s.renaming?.id === folder.id && s.renaming.where === 'list' ? true : false));
+  const setRenaming = useLibraryUi((s) => s.setRenaming);
+  const dragTab = useDrag((s) => (s.over === group.id ? s.tab : null));
+  const n = tabs.length;
   const hosts = useMemo(() => {
     const seen = new Map<string, string>();
-    for (const tab of live) {
+    for (const tab of tabs) {
       const host = displayHost(tab.url);
       if (!seen.has(host)) seen.set(host, tab.url);
       if (seen.size >= 4) break;
     }
     return [...seen.values()];
-  }, [live]);
+  }, [tabs]);
+
+  let dropText = '';
+  if (dragTab) {
+    const sameKind = group.kind === 'site' && categorize(dragTab.url, siteKinds) === group.categoryId;
+    dropText = group.kind === 'folder' || sameKind ? 'Drop to move this tab here' : `Drop to move ${siteKey(dragTab.url)} here`;
+  }
+
   return (
-    <div className={cx('flex h-12 items-center gap-2 px-2', !first && 'border-t border-border')}>
-      <h2 className="m-0 flex h-full min-w-0 flex-1 text-body font-semibold">
-        <button
-          type="button"
-          aria-expanded={expanded}
-          onClick={onToggle}
-          className="flex h-full min-w-0 flex-1 items-center gap-2.5 text-left"
-        >
-          {expanded ? (
-            <ChevronDown size={16} strokeWidth={2} aria-hidden className="shrink-0 text-text-3" />
+    <div className={cx('h-12', !first && 'border-t border-border')}>
+      <div
+        className={cx(
+          'flex h-full items-center gap-2 px-2',
+          dragTab && 'rounded-card bg-accent-soft outline-2 outline-offset-[-2px] outline-accent outline-dashed',
+        )}
+      >
+        <h2 className="m-0 flex h-full min-w-0 flex-1 text-body font-semibold">
+          {renaming && folder ? (
+            <span className="flex h-full min-w-0 flex-1 items-center gap-2.5">
+              <span className="w-4 shrink-0" />
+              <FolderIcon color={group.color} />
+              <RenameInput folder={folder} onDone={() => setRenaming(null)} />
+            </span>
           ) : (
-            <ChevronRight size={16} strokeWidth={2} aria-hidden className="shrink-0 text-text-3" />
+            <button
+              type="button"
+              aria-expanded={expanded}
+              onClick={onToggle}
+              onDoubleClick={folder ? () => setRenaming({ id: folder.id, where: 'list' }) : undefined}
+              className="flex h-full min-w-0 flex-1 items-center gap-2.5 text-left"
+            >
+              {expanded ? (
+                <ChevronDown size={16} strokeWidth={2} aria-hidden className="shrink-0 text-text-3" />
+              ) : (
+                <ChevronRight size={16} strokeWidth={2} aria-hidden className="shrink-0 text-text-3" />
+              )}
+              {folder ? <FolderIcon color={group.color} /> : <ColorDot color={group.color} />}
+              <span dir="auto" className="truncate">
+                {group.name}
+              </span>
+              <span className="shrink-0 font-normal text-text-3">{count(n, 'tab')}</span>
+              {live && (
+                <span className="inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-green-soft px-2 text-meta font-semibold text-green">
+                  <span aria-hidden className="size-1.5 rounded-full bg-green" />
+                  Live · {windowLabel(live.windowId)}
+                </span>
+              )}
+            </button>
           )}
-          <span aria-hidden className="size-2.5 shrink-0 rounded-full" style={{ background: `var(--cg-${group.color})` }} />
-          <span dir="auto" className="truncate">
-            {name}
+        </h2>
+        {dragTab ? (
+          <span role="status" className="shrink-0 text-small font-semibold text-accent-text">
+            {dropText}
           </span>
-          <span className="shrink-0 font-normal text-text-3">{count(n, 'tab')}</span>
-        </button>
-      </h2>
-      {expanded ? (
-        <>
-          <button
-            type="button"
-            title={`Opens all ${count(n, 'tab')} in this window. They stay in the list.`}
-            disabled={n === 0}
-            onClick={() => void openGroup(live, group)}
-            className={SECONDARY_SM}
-          >
-            Open all
-          </button>
-          <span className="relative flex" data-group-menu>
+        ) : null}
+        {expanded || menuOpen ? (
+          <>
+            {!dragTab &&
+              (live && folder ? (
+                <button type="button" onClick={() => void focusLive(folder)} className={SECONDARY_SM}>
+                  Go to window
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  title={`Opens all ${count(n, 'tab')} in this window. They stay in the list.`}
+                  disabled={n === 0}
+                  onClick={() => void openGroup(tabs, group)}
+                  className={cx(SECONDARY_SM, 'disabled:cursor-default disabled:text-text-3')}
+                >
+                  Open all
+                </button>
+              ))}
             <button
               ref={trigger}
               type="button"
-              aria-label={`More for ${name}`}
-              title={`More for ${name}`}
+              aria-label={`More for ${group.name}`}
+              title={`More for ${group.name}`}
               aria-haspopup="menu"
               aria-expanded={menuOpen}
-              onClick={() => onMenu(!menuOpen)}
-              className={cx(
-                'inline-flex size-7 items-center justify-center rounded-md text-text-2 hover:bg-hover hover:text-text',
-                menuOpen && 'bg-hover',
-              )}
+              onClick={(e) => onMenu(group, anchorBelow(e.currentTarget), e.currentTarget)}
+              className={cx('inline-flex size-7 shrink-0 items-center justify-center rounded-md text-text-2 hover:bg-hover hover:text-text', menuOpen && 'bg-hover')}
             >
               <Ellipsis size={16} strokeWidth={1.75} aria-hidden />
             </button>
-            {menuOpen && (
-              <div
-                role="menu"
-                aria-label={`More for ${name}`}
-                onKeyDown={(e) => {
-                  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-                  e.preventDefault();
-                  const items = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[role=menuitem]:not(:disabled)')];
-                  const at = items.indexOf(document.activeElement as HTMLButtonElement);
-                  items[(at + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
-                }}
-                className="anim-in absolute top-[34px] right-0 z-30 w-[290px] rounded-card border border-border bg-surface p-1 shadow-pop"
-              >
-                <button
-                  type="button"
-                  role="menuitem"
-                  autoFocus
-                  disabled={n === 0}
-                  onClick={() => {
-                    onMenu(false);
-                    if (canCopyContext) void copyAsContext(live, name);
-                    else goToPlans();
-                  }}
-                  className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left hover:bg-hover focus-visible:bg-hover focus-visible:outline-none disabled:opacity-50"
-                >
-                  <ClipboardCopy size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-accent-text" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-semibold">Copy as context for AI</span>
-                    <span className="block text-meta text-text-3">Titles and links, ready for Claude, ChatGPT or Cursor</span>
-                  </span>
-                  {!canCopyContext && <ProTag label="Pro AI" />}
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={n === 0}
-                  onClick={() => {
-                    onMenu(false);
-                    void removeGroup(live);
-                  }}
-                  className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-red hover:bg-hover focus-visible:bg-hover focus-visible:outline-none"
-                >
-                  <Trash size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />
-                  <span className="flex-1">
-                    <span className="block font-semibold">Remove all {count(n, 'tab')}</span>
-                    <span className="block text-meta text-text-3">You can undo for 10 seconds</span>
-                  </span>
-                </button>
-              </div>
-            )}
-          </span>
-        </>
-      ) : (
-        <span aria-hidden className="flex shrink-0 gap-[3px]">
-          {hosts.map((url) => (
-            <Favicon key={url} url={url} size={14} />
-          ))}
-        </span>
-      )}
+          </>
+        ) : (
+          !dragTab && (
+            <span aria-hidden className="flex shrink-0 gap-[3px]">
+              {hosts.map((url) => (
+                <Favicon key={url} url={url} size={14} />
+              ))}
+            </span>
+          )
+        )}
+      </div>
     </div>
   );
 }
 
-const Row = memo(function Row({ tab, now }: { tab: TabRecord; now: number }) {
-  const title = tab.title || tab.url;
+function RenameInput({ folder, onDone }: { folder: FolderRecord; onDone: () => void }) {
+  const [name, setName] = useState(folder.name);
+  const done = useRef(false);
+  const finish = (save: boolean) => {
+    if (done.current) return;
+    done.current = true;
+    if (save) void renameFolder(folder, name);
+    onDone();
+  };
   return (
-    <div className="tf-row flex h-[34px] items-center gap-2.5 rounded-control px-2 hover:bg-hover focus-within:bg-hover">
-      <span className="w-4 shrink-0" />
+    <input
+      autoFocus
+      aria-label={`Rename ${folder.name}`}
+      value={name}
+      maxLength={60}
+      onFocus={(e) => e.currentTarget.select()}
+      onChange={(e) => setName(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          finish(true);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          finish(false);
+        }
+      }}
+      onBlur={() => finish(true)}
+      className="h-8 min-w-0 max-w-[360px] flex-1 rounded-control border border-accent bg-surface px-2 font-semibold text-text shadow-[0_0_0_3px_var(--tf-accent-line)] outline-none"
+    />
+  );
+}
+
+const Row = memo(function Row({
+  tab,
+  now,
+  menuOpen,
+  onMenu,
+}: {
+  tab: TabRecord;
+  now: number;
+  menuOpen: boolean;
+  onMenu: (tab: TabRecord, anchor: MenuAnchor, returnFocus: HTMLElement | null) => void;
+}) {
+  const title = tab.title || tab.url;
+  const more = useRef<HTMLButtonElement>(null);
+  const dragging = useDrag((s) => s.tab?.id === tab.id);
+  const openMenuFromKeys = (e: React.KeyboardEvent) => {
+    if ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu') {
+      e.preventDefault();
+      const el = more.current ?? (e.target as HTMLElement);
+      onMenu(tab, anchorBelow(el), e.target as HTMLElement);
+    }
+  };
+  return (
+    <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData(TAB_DRAG_TYPE, tab.id);
+        e.dataTransfer.setData('text/uri-list', tab.url);
+        e.dataTransfer.setData('text/plain', tab.url);
+        e.dataTransfer.effectAllowed = 'copyMove';
+        useDrag.getState().start(tab);
+      }}
+      onDragEnd={() => useDrag.getState().end()}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu(tab, { x: e.clientX, y: e.clientY }, (e.target as HTMLElement).closest('button') ?? more.current);
+      }}
+      onKeyDown={openMenuFromKeys}
+      className={cx(
+        'tf-row flex h-[34px] items-center gap-2.5 rounded-control px-2 hover:bg-hover focus-within:bg-hover',
+        menuOpen && 'tf-row-on bg-hover',
+        dragging && 'opacity-35 outline-[1.5px] outline-offset-[-2px] outline-border-strong outline-dashed',
+      )}
+    >
+      <span title="Drag to another group" aria-hidden className="tf-row-grip flex w-4 shrink-0 cursor-grab justify-center text-text-3">
+        <GripVertical size={14} strokeWidth={2} />
+      </span>
       <button
         type="button"
         aria-label={`Open ${title}${tab.incognito ? ' in Incognito' : ''} (stays in the list)`}
+        aria-keyshortcuts="Shift+F10"
         title={tab.url}
         onClick={(e) => void openFolded(tab, !(e.metaKey || e.ctrlKey))}
         onKeyDown={(e) => {
@@ -442,23 +619,24 @@ const Row = memo(function Row({ tab, now }: { tab: TabRecord; now: number }) {
       <span className="tf-row-time w-24 shrink-0 text-right text-small text-text-3">{ago(tab.savedAt, now)}</span>
       <span className="tf-row-actions w-24 shrink-0 justify-end gap-0.5">
         <span className="tf-tip">
-          <button
-            type="button"
-            aria-label="Open in background"
-            onClick={() => void openFolded(tab, false)}
-            className="inline-flex size-7 items-center justify-center rounded-md text-text-2 hover:bg-border hover:text-text"
-          >
+          <button type="button" aria-label="Open in background" onClick={() => void openFolded(tab, false)} className={ICON_BTN}>
             <ExternalLink size={16} strokeWidth={1.75} aria-hidden />
           </button>
           <span role="tooltip">Open in background · {modKey}↵</span>
         </span>
         <button
+          ref={more}
           type="button"
-          aria-label="Remove from list"
-          title="Remove from list"
-          onClick={() => void removeOne(tab)}
-          className="inline-flex size-7 items-center justify-center rounded-md text-text-2 hover:bg-border hover:text-text"
+          aria-label={`More for ${title}`}
+          title="Move to, snooze and more"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={(e) => onMenu(tab, anchorBelow(e.currentTarget), e.currentTarget)}
+          className={cx(ICON_BTN, menuOpen && 'bg-border text-text')}
         >
+          <Ellipsis size={16} strokeWidth={1.75} aria-hidden />
+        </button>
+        <button type="button" aria-label="Remove from list" title="Remove from list" onClick={() => void removeOne(tab)} className={ICON_BTN}>
           <X size={16} strokeWidth={1.75} aria-hidden />
         </button>
       </span>
