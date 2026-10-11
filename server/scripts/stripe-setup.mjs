@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Sets up Stripe for Tabfold Pro: the two products and four prices, a billing portal
-// configuration and the webhook endpoint. Safe to run again: it only adds what's missing and
-// brings the portal settings up to date. Run it once in test mode and once in live mode.
+// Sets up Stripe for Tabfold Pro: the products and prices (Pro, Pro AI, Pro for life, Teams), a
+// billing portal configuration and the webhook endpoint. Safe to run again: it only adds what's
+// missing and brings the portal settings up to date. Run it once in test mode and once in live mode.
 //
 //   STRIPE_SECRET_KEY=sk_test_… node server/scripts/stripe-setup.mjs \
 //     --webhook-url https://<project id>.supabase.co/functions/v1/tabfold/stripe/webhook
@@ -14,17 +14,28 @@ const STRIPE_VERSION = '2024-06-20';
 const PRODUCTS = {
   pro: 'Tabfold Pro',
   'pro-ai': 'Tabfold Pro AI',
+  'pro-lifetime': 'Tabfold Pro for life',
+  teams: 'Tabfold Teams',
 };
 
+// interval null: one payment. Teams prices are per person: the subscription's quantity is its seats.
 const PRICES = [
   { lookupKey: 'pro-monthly', tier: 'pro', amount: 500, interval: 'month', nickname: 'Pro, monthly' },
   { lookupKey: 'pro-yearly', tier: 'pro', amount: 4800, interval: 'year', nickname: 'Pro, yearly' },
   { lookupKey: 'pro-ai-monthly', tier: 'pro-ai', amount: 900, interval: 'month', nickname: 'Pro AI, monthly' },
   { lookupKey: 'pro-ai-yearly', tier: 'pro-ai', amount: 8400, interval: 'year', nickname: 'Pro AI, yearly' },
+  { lookupKey: 'pro-lifetime', tier: 'pro-lifetime', amount: 9900, interval: null, nickname: 'Pro for life' },
+  { lookupKey: 'teams-monthly', tier: 'teams', amount: 1000, interval: 'month', nickname: 'Teams, monthly, per person' },
+  { lookupKey: 'teams-yearly', tier: 'teams', amount: 9600, interval: 'year', nickname: 'Teams, yearly, per person' },
 ];
+
+// People switch between these in the billing portal. A Teams plan's seats change through Tabfold,
+// and Pro for life is one payment, so the portal only shows their invoices, card and cancelling.
+const SWITCHABLE = ['pro', 'pro-ai'];
 
 const EVENTS = [
   'checkout.session.completed',
+  'checkout.session.async_payment_succeeded',
   'customer.subscription.created',
   'customer.subscription.updated',
   'customer.subscription.deleted',
@@ -130,6 +141,10 @@ async function listAll(path, params = {}) {
 }
 
 const dollars = (cents) => `$${(cents / 100).toFixed(2)}`;
+const priceLabel = (spec) =>
+  spec.interval === null
+    ? `${dollars(spec.amount)} once`
+    : `${dollars(spec.amount)} a ${spec.interval}${spec.tier === 'teams' ? ' per person' : ''}`;
 
 async function setUpPrices() {
   const existing = await stripe('GET', '/v1/prices', {
@@ -169,7 +184,7 @@ async function setUpPrices() {
         product: products[spec.tier],
         currency: 'usd',
         unit_amount: spec.amount,
-        recurring: { interval: spec.interval },
+        recurring: spec.interval ? { interval: spec.interval } : undefined,
         lookup_key: spec.lookupKey,
         transfer_lookup_key: true,
         nickname: spec.nickname,
@@ -178,7 +193,7 @@ async function setUpPrices() {
       state = 'created';
       byKey.set(spec.lookupKey, price);
     }
-    rows.push({ what: `Price ${spec.lookupKey} (${dollars(spec.amount)} a ${spec.interval})`, id: price.id, state });
+    rows.push({ what: `Price ${spec.lookupKey} (${priceLabel(spec)})`, id: price.id, state });
   }
   return { products, prices: byKey, rows };
 }
@@ -195,7 +210,7 @@ async function setUpPortal(products, prices) {
         enabled: true,
         default_allowed_updates: ['price'],
         proration_behavior: 'create_prorations',
-        products: Object.keys(PRODUCTS).map((tier) => ({
+        products: SWITCHABLE.map((tier) => ({
           product: products[tier],
           prices: PRICES.filter((spec) => spec.tier === tier).map((spec) => prices.get(spec.lookupKey).id),
         })),

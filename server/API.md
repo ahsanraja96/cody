@@ -76,21 +76,24 @@ JSON `{ "error": <code>, "message": <text for people>, ... }`, codes as in `ProE
 | 400 | `wrong-code` | `POST /signin/finish`: the code doesn't match (body also has `triesLeft`) |
 | 400 | `code-expired` | `POST /signin/finish`: no code for that email, it's older than 10 minutes, or 5 wrong tries used it up |
 | 401 | `not-signed-in` | Missing or malformed token; a Pro route from a computer that isn't signed in; an unknown profile key |
-| 402 | `needs-pro` / `needs-pro-ai` | The plan doesn't include it |
+| 402 | `needs-pro` / `needs-pro-ai` | The plan doesn't include it (0.6: also a team's routes once its plan has ended) |
+| 403 | `server` | 0.6: a team member (not the owner) asking for an owner's team route |
+| 404 | `server` | No such route, backup or shared folder; 0.6: a team route from someone in no team |
 | 409 | `conflict` | `POST /sync` with an out-of-date `baseVersion` (body also has `version`) |
 | 409 | `already-subscribed` | `POST /checkout` when the account already has a live subscription (use `POST /billing`) |
 | 413 | `server` | Request too large |
 | 429 | `runs-used-up` | 300 AI runs used this month (body also has `runs`) |
-| 429 | `rate-limited` | Too many codes asked for, or too many checkouts started (body also has `retryAfter`, seconds) |
+| 429 | `rate-limited` | Too many codes asked for, checkouts started, team invitations or public share reads (body also has `retryAfter`, seconds) |
 | 502 | `ai-failed` | The model refused, failed twice, or returned invalid JSON twice (the run isn't counted) |
-| 502 | `send-failed` | The email with the code couldn't be sent |
+| 502 | `send-failed` | The email with the code (0.6: or a team invitation) couldn't be sent |
 | 502 | `server` | Stripe couldn't be reached or refused |
 | 500 | `server` | Anything else |
 
 CORS: every response (and `OPTIONS` preflight) has `Access-Control-Allow-Origin` set to the
 request's `Origin` when it is a `chrome-extension://` origin listed in `ALLOWED_ORIGINS` (comma
 separated; `*` allows any extension during development), `Access-Control-Allow-Headers:
-authorization, content-type`, `Access-Control-Allow-Methods: GET, POST, OPTIONS`.
+authorization, content-type`, `Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS`
+(0.6 adds the last three). The one exception is `GET /public/shares/<id>`: `Access-Control-Allow-Origin: *`.
 
 ## Routes: account and payments
 
@@ -243,10 +246,20 @@ Two more things a checkout can buy (`POST /checkout`, `tier`):
   `purchases` table. The plan then reads `lifetime: true`, and the tier is at least `pro` forever
   (a live Pro AI subscription or the trial still gives `pro-ai`). 409 `already-subscribed` when the
   account already has it.
+  Body `{ tier: "pro-lifetime" }`; an `interval` is ignored. Stripe always makes a customer for it
+  (billing portal: receipts, card). A completed payment is processed like a subscription checkout
+  (the webhook and the `GET /me` check, the same sign-in protections for a computer that wasn't
+  signed in), once it is paid: a bank debit that completes unpaid is recorded on
+  `checkout.session.async_payment_succeeded`. A live subscription doesn't stop it (someone on Pro
+  can buy it, then cancel the subscription).
 - **`teams`**: body `{ tier: "teams", interval, seats, teamName }` (seats 1–100, default 3; name ≤ 60
   characters). A subscription with `quantity = seats` (lookup keys `teams-monthly` $10 a person,
   `teams-yearly` $96 a person). When it completes, the server makes the team with the payer as
   its owner. 409 `already-subscribed` when the account already owns a team.
+  An account is in one team at most, so the 409 also covers a member of a team whose plan is on.
+  A name that is missing or blank is "My team"; a longer one is cut to 60 characters. When the
+  owner of a team whose plan ended pays again, that same team (its people and folders) takes the
+  new subscription; a member of an ended team who pays starts their own team and leaves the old one.
 
 `PlanState` gains two optional fields (`src/lib/pro/types.ts`):
 
@@ -255,32 +268,54 @@ lifetime?: boolean;                 // Pro for life
 team?: { id: string; name: string; role: 'owner' | 'member'; seats: number } | null;
 ```
 
+The server sends `lifetime` only when it is true and `team` only while the team's subscription is
+live; otherwise they are left out (read them as false and null).
+
 Plan rules, in addition to the ones above: a lifetime purchase makes the tier at least `pro`
 (`lifetime: true`, `renewsAt` null unless a subscription renews). Belonging to a team whose
 subscription is live makes the tier `pro-ai` and sets `team`; for the owner, `interval`, `status`,
 `cancelAt` and `renewsAt` describe the team's subscription. When a team's subscription ends, its
 members fall back to their own plans; the team's folders stay readable for 30 days.
+For a member, `interval`, `status`, `cancelAt` and `renewsAt` describe their own subscription, if
+any. While a team gives Pro AI, `trial` is null and a trial isn't started (it keeps for later).
 
 ## Teams
 
-Every member's requests carry their own device token, as now.
+Every member's requests carry their own device token, as now. Not signed in: 401. Signed in but in
+no team: 404 `server`. An owner's route asked by a member: 403 `server`.
 
 - `GET /team` (a member) → `{ team: { id, name, seats, role }, members: [{ id, email, role, joinedAt }], invites: [{ email, invitedAt }] }`. 404 `server` when not in a team.
-- `PATCH /team` (owner) body `{ name }` → `{ team }`.
+  `team.status` is also there: `active`, `past_due` (still on) or `ended`. Members come owner
+  first, then in the order they joined; invitations oldest first. A member's `id` is what
+  `DELETE /team/members/<id>` takes.
+- `PATCH /team` (owner) body `{ name }` → `{ team }`. Blank: 400; longer than 60 characters: cut.
 - `POST /team/invites` (owner) body `{ emails: string[] }` (at most 20 at a time) → `{ invited: number }`.
   Emails each address an invitation ("<owner> invited you to <team> on Tabfold"). Inviting someone
   already in the team or already invited is a no-op.
-- `DELETE /team/invites/<email>` (owner) → `{ ok: true }`.
+  `invited` counts the new invitations. Emails are trimmed and lower-cased; one that isn't an
+  email address: 400 `invalid-email` (nobody is invited). A team has at most 100 people,
+  invitations included (400). At most 100 invitations are emailed a day per team (429
+  `rate-limited`, with `retryAfter` and `invited`). An invitation whose email couldn't be sent
+  isn't kept: 502 `send-failed`, with `invited`. Needs the team's plan on (402 `needs-pro-ai`).
+- `DELETE /team/invites/<email>` (owner) → `{ ok: true }`. The email URL-encoded; fine if there was
+  no such invitation.
 - `DELETE /team/members/<id>` (owner; not themself) → `{ ok: true }`. The Stripe quantity goes down
   (prorated).
+  By one seat, never below the people left or 1. Someone not in the team: 404; the owner: 400.
 - `POST /team/leave` (a member who isn't the owner) → `{ ok: true }`.
+  The Stripe quantity goes down the same way. The owner: 400 (they cancel the plan in billing).
 - **Joining**: when someone signs in with a code (`POST /signin/finish`) and that email has an
   invitation, they join the team (role `member`), the invitation goes, and if the team now has more
   members than seats the Stripe quantity goes up to match (prorated). The answer's plan shows the
   team.
+  The oldest invitation from a team whose plan is on wins; someone already in a team stays there
+  (their other invitations wait). If Stripe can't be reached, the sign-in still works (the server
+  logs it and the next change catches up).
 - `GET /team/sync`, `POST /team/sync` (a member): the team's shared folders, exactly like `/sync`
   (same item format and limits, `baseVersion`, 409 `conflict`), kept per team. Items are opaque to
   the server.
+  No daily backups. After the team's plan ends, `GET` works for 30 days and `POST` answers 402
+  `needs-pro-ai`; after the 30 days, both do.
 
 ## Share a folder (Pro)
 
@@ -291,12 +326,19 @@ its pages' titles and addresses; nothing else.
 - `POST /shares` (Pro) body `{ name, color, tabs: [{ title, url }], live: boolean }` (at most 1,000
   tabs; titles cut to 200 characters, addresses longer than 2,000 left out) → `{ id, url }`. `id`:
   10 random letters and digits.
+  Only `http:` and `https:` addresses are kept (others left out), without a user name or password.
+  `color` is one of Chrome's tab group colours (anything else is `grey`); `name` is cut to 60
+  characters (blank: 400); `live` is false unless `true`. An account has at most 500 shares (400).
 - `PUT /shares/<id>` (its owner, Pro) same body → `{ id, url, views, live }`. Replaces the contents.
 - `GET /shares/<id>` (its owner) → `{ id, url, views, live, updatedAt }`.
 - `DELETE /shares/<id>` (its owner) → `{ ok: true }`. The link stops working at once.
+  Fine to ask twice. `GET` and `DELETE` need no plan, only the owner signed in; anyone else's
+  share answers 404 (and isn't touched).
 - `GET /public/shares/<id>` (no token; CORS `*`) → `{ name, color, tabs: [{ title, url }], updatedAt }`;
   each read counts a view. 404 when there's no such share. At most 60 reads a minute per address
   (429).
+  The address is `CF-Connecting-IP`, else the first `X-Forwarded-For` entry, kept only as a hash
+  in the rate limit. Times (`updatedAt`) are ms.
 - A share outlives the plan (people may already have the link), but only Pro can change it.
 
 ## AI tasks (Pro AI), in addition to organise, name and context
@@ -305,14 +347,25 @@ its pages' titles and addresses; nothing else.
   Finds the tabs that best answer the question, from titles and sites only: at most 8, best first,
   each `reason` ≤ 80 characters ("Folded 6 days ago · pricing page"). The query is cut to 200
   characters. Counts against the 1,000-a-month cap for light tasks.
+  The model sees no dates, so `reason` is the part after the dot ("Pricing page"); the extension
+  can put "Folded 6 days ago · " before it. A blank query: 400. No match is a fine answer
+  (`matches: []`, still counted).
 - `{ "task": "tidy", "tabs": AiTab[], "folders": [{ "id": string, "name": string }] }` →
   `{ "suggestions": [{ "summary": string, "folderId": string | null, "folderName": string, "tabIds": string[] }] }`.
   Groups tabs nobody has opened in a month by what they're about, and says where each group
   belongs: an existing folder (`folderId`) or a new one (`folderName`). At most 3 suggestions of at
   least 5 tabs each; `summary` ≤ 80 characters ("38 tabs about Lisbon"). Counts one run.
+  Like organise, the answer also has `runs`. `folders` may be left out (at most 200 are used, names
+  cut to 60 characters). An existing folder's `folderName` is its name; a new one's is ≤ 32
+  characters, and a new one named like an existing folder comes back as that folder. The count at
+  the start of `summary` is the real one. Fewer than 5 tabs: `{ suggestions: [], runs }` without
+  asking the model or counting a run. No suggestion is a fine answer (still counted).
 
 ## Secrets added
 
 | Name | What |
 | --- | --- |
-| `SHARE_BASE_URL` | Where shared pages live, e.g. `https://tabfold.app` (the `web/` site) |
+| `SHARE_BASE_URL` | Where shared pages live, e.g. `https://tabfold.app` (the `web/` site); also the link in team invitations. Default `https://tabfold.app` |
+
+The Stripe webhook also handles `checkout.session.async_payment_succeeded` (a Pro for life payment
+that completed before it was paid); `server/scripts/stripe-setup.mjs` adds it to the endpoint.

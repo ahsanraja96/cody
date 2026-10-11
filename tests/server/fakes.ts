@@ -6,7 +6,7 @@ import { createFakeStripe, type StripeObject } from './fakeStripe.ts';
 import { memoryMailer } from './memoryMailer.ts';
 import { MemoryStore } from './memoryStore.ts';
 
-/** Fakes for the server tests: an in-memory Store, a fake Stripe (no network), a mailer that keeps codes, the model. */
+/** Fakes for the server tests: an in-memory Store, a fake Stripe (no network), a mailer that keeps codes and invitations, the model. */
 
 export const DAY = 24 * 60 * 60 * 1000;
 export const NOW = Date.UTC(2026, 9, 10, 12, 0, 0);
@@ -141,7 +141,24 @@ export function createServer(options: { allowedOrigins?: string[]; automaticTax?
     return request('POST', '/signin/finish', { key: token, body: { email, code, startTrial } });
   }
 
-  return { store, stripe, mailer, payments, callJson, log, clock, deps, ready, request, webhook, signIn };
+  let delivered = 0;
+  /** Sends the fake Stripe's events that haven't been sent yet to the webhook, oldest first; their answers' statuses. */
+  async function deliverEvents() {
+    const statuses: number[] = [];
+    while (delivered < stripe.events.length) statuses.push((await webhook(stripe.events[delivered++]!)).status);
+    return statuses;
+  }
+
+  /** Starts a checkout from a computer, pays it on the fake Stripe's page (with `email` when signed out) and sends the events. */
+  async function buy(key: UserName | string, body: Record<string, unknown>, email?: string) {
+    const res = await request('POST', '/checkout', { key, body });
+    if (res.status !== 200) throw new Error(`Checkout answered ${res.status}: ${res.text}`);
+    const paid = await stripe.completeSession(res.json.sessionId, { email });
+    await deliverEvents();
+    return { sessionId: res.json.sessionId as string, ...paid };
+  }
+
+  return { store, stripe, mailer, payments, callJson, log, clock, deps, ready, request, webhook, signIn, deliverEvents, buy };
 }
 
 export type Server = ReturnType<typeof createServer>;

@@ -1,5 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
-import { codeEmail, createResendMailer, RESEND_URL } from '../../server/supabase/functions/tabfold/mail.ts';
+import { codeEmail, createResendMailer, inviteEmail, RESEND_URL } from '../../server/supabase/functions/tabfold/mail.ts';
+
+describe('the invitation email', () => {
+  it('says who invited whom to what, and how to join', () => {
+    const email = inviteEmail('Truewidgets', 'hello@truewidgets.com', 'https://tabfold.app/');
+    expect(email.subject).toBe('hello@truewidgets.com invited you to Truewidgets on Tabfold');
+    expect(email.text).toBe(
+      'hello@truewidgets.com invited you to Truewidgets on Tabfold. Install Tabfold and sign in with this email to join.\n\n' +
+        'https://tabfold.app\n\nIf you don’t know them, you can ignore this email.\n',
+    );
+    expect(email.html).toContain('<a href="https://tabfold.app"');
+    expect(email.html).toContain('Install Tabfold and sign in with this email to join.');
+  });
+
+  it('escapes the team’s name and keeps it on one line', () => {
+    const email = inviteEmail('<b>Evil</b>\r\nBcc: x@y.z', 'a@b.co', 'https://tabfold.app');
+    expect(email.subject).toBe('a@b.co invited you to <b>Evil</b> Bcc: x@y.z on Tabfold');
+    expect(email.subject).not.toMatch(/[\r\n]/);
+    expect(email.html).toContain('&lt;b&gt;Evil&lt;/b&gt;');
+    expect(email.html).not.toContain('<b>Evil');
+  });
+});
 
 describe('the code email', () => {
   it('says what the code is for', () => {
@@ -43,6 +64,27 @@ describe('createResendMailer', () => {
       subject: 'Your Tabfold code: 481920',
       text: expect.stringContaining('start your 7-day Pro AI trial'),
       html: expect.stringContaining('481920'),
+    });
+  });
+
+  it('sends invitations through Resend, linking to the site it was given', async () => {
+    const fetch = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ok());
+    const mailer = createResendMailer({ apiKey: 're_123', from: 'Tabfold <hello@tabfold.app>', siteUrl: 'https://share.example.org', fetch });
+    await mailer.sendInvite('sara@example.com', 'Truewidgets', 'hello@truewidgets.com');
+    const body = JSON.parse(fetch.mock.calls[0]![1]!.body as string);
+    expect(body).toEqual({
+      from: 'Tabfold <hello@tabfold.app>',
+      to: ['sara@example.com'],
+      subject: 'hello@truewidgets.com invited you to Truewidgets on Tabfold',
+      text: expect.stringContaining('https://share.example.org'),
+      html: expect.stringContaining('Truewidgets'),
+    });
+    // Without a site, the default.
+    await createResendMailer({ apiKey: 're_123', from: 'x@tabfold.app', fetch }).sendInvite('a@b.co', 'T', 'o@b.co');
+    expect(JSON.parse(fetch.mock.calls[1]![1]!.body as string).text).toContain('https://tabfold.app');
+    const refused = vi.fn(async () => new Response('{}', { status: 500 }));
+    await expect(createResendMailer({ apiKey: 're_1', from: 'x@tabfold.app', fetch: refused }).sendInvite('a@b.co', 'T', 'o@b.co')).rejects.toMatchObject({
+      name: 'MailError',
     });
   });
 

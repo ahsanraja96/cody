@@ -291,7 +291,8 @@ describe('sign-in codes', () => {
   });
 
   it('answers 500 when the mailer isn’t set up', async () => {
-    server.deps.mailer = { sendCode: async () => Promise.reject(new Error('RESEND_API_KEY is not set')) };
+    const notSetUp = async () => Promise.reject(new Error('RESEND_API_KEY is not set'));
+    server.deps.mailer = { sendCode: notSetUp, sendInvite: notSetUp };
     const res = await start(token, 'sam@example.com');
     expect(res.status).toBe(500);
     expect(server.log).toHaveBeenCalledWith(expect.stringContaining('RESEND_API_KEY is not set'));
@@ -876,7 +877,7 @@ describe('CORS', () => {
     expect(res.status).toBe(204);
     expect(res.headers.get('access-control-allow-origin')).toBe(EXTENSION);
     expect(res.headers.get('access-control-allow-headers')).toBe('authorization, content-type');
-    expect(res.headers.get('access-control-allow-methods')).toBe('GET, POST, OPTIONS');
+    expect(res.headers.get('access-control-allow-methods')).toBe('GET, POST, PUT, PATCH, DELETE, OPTIONS');
   });
 
   it('sets the headers on every response, errors included', async () => {
@@ -885,7 +886,7 @@ describe('CORS', () => {
     expect(good.headers.get('access-control-allow-origin')).toBe(EXTENSION);
     expect(refused.status).toBe(401);
     expect(refused.headers.get('access-control-allow-origin')).toBe(EXTENSION);
-    expect(refused.headers.get('access-control-allow-methods')).toBe('GET, POST, OPTIONS');
+    expect(refused.headers.get('access-control-allow-methods')).toBe('GET, POST, PUT, PATCH, DELETE, OPTIONS');
   });
 
   it('leaves out other origins', async () => {
