@@ -230,3 +230,89 @@ reaches the extension.
 | `CODE_SECRET` | Optional: the key for hashing sign-in codes (defaults to the service role key) |
 | `PUBLIC_URL` | Optional: the function's public URL (defaults to `$SUPABASE_URL/functions/v1/tabfold`) |
 | `STRIPE_API_BASE` | Test only: a fake Stripe for the end-to-end test |
+
+---
+
+# 0.6 additions
+
+## Plans: Pro for life and Teams
+
+Two more things a checkout can buy (`POST /checkout`, `tier`):
+
+- **`pro-lifetime`**: one payment (`mode=payment`, price lookup key `pro-lifetime`, $99). Stored in a
+  `purchases` table. The plan then reads `lifetime: true`, and the tier is at least `pro` forever
+  (a live Pro AI subscription or the trial still gives `pro-ai`). 409 `already-subscribed` when the
+  account already has it.
+- **`teams`**: body `{ tier: "teams", interval, seats, teamName }` (seats 1–100, default 3; name ≤ 60
+  characters). A subscription with `quantity = seats` (lookup keys `teams-monthly` $10 a person,
+  `teams-yearly` $96 a person). When it completes, the server makes the team with the payer as
+  its owner. 409 `already-subscribed` when the account already owns a team.
+
+`PlanState` gains two optional fields (`src/lib/pro/types.ts`):
+
+```ts
+lifetime?: boolean;                 // Pro for life
+team?: { id: string; name: string; role: 'owner' | 'member'; seats: number } | null;
+```
+
+Plan rules, in addition to the ones above: a lifetime purchase makes the tier at least `pro`
+(`lifetime: true`, `renewsAt` null unless a subscription renews). Belonging to a team whose
+subscription is live makes the tier `pro-ai` and sets `team`; for the owner, `interval`, `status`,
+`cancelAt` and `renewsAt` describe the team's subscription. When a team's subscription ends, its
+members fall back to their own plans; the team's folders stay readable for 30 days.
+
+## Teams
+
+Every member's requests carry their own device token, as now.
+
+- `GET /team` (a member) → `{ team: { id, name, seats, role }, members: [{ id, email, role, joinedAt }], invites: [{ email, invitedAt }] }`. 404 `server` when not in a team.
+- `PATCH /team` (owner) body `{ name }` → `{ team }`.
+- `POST /team/invites` (owner) body `{ emails: string[] }` (at most 20 at a time) → `{ invited: number }`.
+  Emails each address an invitation ("<owner> invited you to <team> on Tabfold"). Inviting someone
+  already in the team or already invited is a no-op.
+- `DELETE /team/invites/<email>` (owner) → `{ ok: true }`.
+- `DELETE /team/members/<id>` (owner; not themself) → `{ ok: true }`. The Stripe quantity goes down
+  (prorated).
+- `POST /team/leave` (a member who isn't the owner) → `{ ok: true }`.
+- **Joining**: when someone signs in with a code (`POST /signin/finish`) and that email has an
+  invitation, they join the team (role `member`), the invitation goes, and if the team now has more
+  members than seats the Stripe quantity goes up to match (prorated). The answer's plan shows the
+  team.
+- `GET /team/sync`, `POST /team/sync` (a member): the team's shared folders, exactly like `/sync`
+  (same item format and limits, `baseVersion`, 409 `conflict`), kept per team. Items are opaque to
+  the server.
+
+## Share a folder (Pro)
+
+A shared folder is a public, read-only page at `<SHARE_BASE_URL>/s/<id>` (default
+`https://tabfold.app`, a small static site in `web/`). Anyone with the link sees the folder's name and
+its pages' titles and addresses; nothing else.
+
+- `POST /shares` (Pro) body `{ name, color, tabs: [{ title, url }], live: boolean }` (at most 1,000
+  tabs; titles cut to 200 characters, addresses longer than 2,000 left out) → `{ id, url }`. `id`:
+  10 random letters and digits.
+- `PUT /shares/<id>` (its owner, Pro) same body → `{ id, url, views, live }`. Replaces the contents.
+- `GET /shares/<id>` (its owner) → `{ id, url, views, live, updatedAt }`.
+- `DELETE /shares/<id>` (its owner) → `{ ok: true }`. The link stops working at once.
+- `GET /public/shares/<id>` (no token; CORS `*`) → `{ name, color, tabs: [{ title, url }], updatedAt }`;
+  each read counts a view. 404 when there's no such share. At most 60 reads a minute per address
+  (429).
+- A share outlives the plan (people may already have the link), but only Pro can change it.
+
+## AI tasks (Pro AI), in addition to organise, name and context
+
+- `{ "task": "ask", "query": string, "tabs": AiTab[] }` → `{ "matches": [{ "id": string, "reason": string }] }`.
+  Finds the tabs that best answer the question, from titles and sites only: at most 8, best first,
+  each `reason` ≤ 80 characters ("Folded 6 days ago · pricing page"). The query is cut to 200
+  characters. Counts against the 1,000-a-month cap for light tasks.
+- `{ "task": "tidy", "tabs": AiTab[], "folders": [{ "id": string, "name": string }] }` →
+  `{ "suggestions": [{ "summary": string, "folderId": string | null, "folderName": string, "tabIds": string[] }] }`.
+  Groups tabs nobody has opened in a month by what they're about, and says where each group
+  belongs: an existing folder (`folderId`) or a new one (`folderName`). At most 3 suggestions of at
+  least 5 tabs each; `summary` ≤ 80 characters ("38 tabs about Lisbon"). Counts one run.
+
+## Secrets added
+
+| Name | What |
+| --- | --- |
+| `SHARE_BASE_URL` | Where shared pages live, e.g. `https://tabfold.app` (the `web/` site) |

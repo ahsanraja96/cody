@@ -1,7 +1,10 @@
 import { isQuotaError } from '../db';
 import { CommandError, type Command, type CommandResponse, type CommandResults } from '../messages';
 import { syncNow } from '../sync/engine';
+import { handleAutomationCommand } from './automation';
 import { handleFold } from './fold';
+import { handleFolderCommand } from './folders';
+import { handleLiveCommand } from './live';
 import { handleProCommand } from './pro';
 import {
   cancelRestore,
@@ -12,8 +15,10 @@ import {
   handleSnapshotToSession,
 } from './restore';
 import { handleSave, handleUndo, preflightSave } from './save';
+import { handleShareCommand } from './share';
 import { dismissRecovery, recoverFromMirror, takeSnapshot } from './snapshots';
 import { suspendInactive, suspendTab } from './suspend';
+import { handleTidyCommand } from './tidy';
 
 /** Where a command came from: the Tabfold tab that sent it (none for the popup). */
 export interface CommandSource {
@@ -74,6 +79,36 @@ async function dispatch(command: Command, source: CommandSource): Promise<Comman
     case 'reopen-everything':
       // Checkout and billing tabs open next to the Tabfold page that asked.
       return handleProCommand(command, source);
+    case 'folder-create':
+    case 'folder-update':
+    case 'folder-reorder':
+    case 'folder-delete':
+    case 'tabs-move':
+    case 'site-kind-set':
+    case 'room-list':
+    case 'room-free':
+    case 'duplicates-list':
+    case 'duplicates-remove':
+      return handleFolderCommand(command);
+    case 'snooze':
+    case 'snooze-wake':
+    case 'snooze-seen':
+    case 'autofold-run':
+      return handleAutomationCommand(command);
+    case 'live-open':
+    case 'live-fold':
+    case 'live-focus':
+      return handleLiveCommand(command);
+    case 'share-create':
+    case 'share-update':
+    case 'share-stop':
+    case 'share-info':
+      return handleShareCommand(command);
+    case 'ai-ask':
+    case 'tidy-run':
+    case 'tidy-apply':
+    case 'tidy-dismiss':
+      return handleTidyCommand(command);
   }
 }
 

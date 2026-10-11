@@ -55,6 +55,11 @@ export const SITE_RULES: Record<string, CategoryId> = {
   'mail.yahoo.com': 'mail', 'proton.me': 'mail', 'slack.com': 'mail', 'app.slack.com': 'mail',
   'discord.com': 'mail', 'teams.microsoft.com': 'mail', 'web.whatsapp.com': 'mail', 'web.telegram.org': 'mail',
   'messenger.com': 'mail', 'meet.google.com': 'mail', 'zoom.us': 'mail',
+  'mail.zoho.com': 'mail', 'mail.zoho.eu': 'mail', 'mail.zoho.in': 'mail', 'mail.zoho.com.au': 'mail',
+  'cliq.zoho.com': 'mail', 'cliq.zoho.eu': 'mail', 'fastmail.com': 'mail', 'app.fastmail.com': 'mail',
+  'icloud.com': 'mail', 'outlook.com': 'mail', 'gmx.com': 'mail', 'gmx.net': 'mail', 'gmx.de': 'mail',
+  'mail.com': 'mail', 'hey.com': 'mail', 'app.hey.com': 'mail', 'superhuman.com': 'mail', 'front.com': 'mail',
+  'app.frontapp.com': 'mail', 'mail.proton.me': 'mail', 'tuta.com': 'mail', 'app.tuta.com': 'mail',
   // Social
   'x.com': 'social', 'twitter.com': 'social', 'facebook.com': 'social', 'instagram.com': 'social',
   'linkedin.com': 'social', 'reddit.com': 'social', 'threads.net': 'social', 'bsky.app': 'social',
@@ -78,13 +83,26 @@ export const SITE_RULES: Record<string, CategoryId> = {
   'arxiv.org': 'reading', 'economist.com': 'reading', 'cnn.com': 'reading', 'reuters.com': 'reading',
 };
 
-/** The category of a tab's address. */
-export function categorize(url: string): CategoryId {
-  let host = displayHost(url).toLowerCase();
+/**
+ * Sites the person moved to another kind ("Move to › Kind of site", or dragging a tab onto a site
+ * group): host → kind, with when it was set (newest wins between computers). They sync with the
+ * folders (`tf.f`). A host covers its subdomains, like the built-in rules, and wins over them.
+ */
+export type SiteKinds = Record<string, { kind: CategoryId; at: number }>;
+
+/** The host a site-kind override is stored under: lower-case, no "www.", no port. */
+export function siteKey(url: string): string {
+  return displayHost(url).toLowerCase().replace(/^www\./, '').replace(/:\d+$/, '');
+}
+
+/** The category of a tab's address. `overrides` are the sites the person moved (`siteKinds`). */
+export function categorize(url: string, overrides?: SiteKinds): CategoryId {
+  const host = siteKey(url);
   if (!host) return 'other';
-  host = host.replace(/^www\./, '').replace(/:\d+$/, '');
   // Walk from the full host to its parent domains: docs.google.com, then google.com.
   for (let candidate = host; candidate.includes('.') || candidate === 'localhost'; ) {
+    const moved = overrides?.[candidate];
+    if (moved && BY_ID.has(moved.kind)) return moved.kind;
     const hit = SITE_RULES[candidate];
     if (hit) return hit;
     const dot = candidate.indexOf('.');
@@ -105,10 +123,15 @@ export interface CategoryGroup<T> {
  * Group items by category: newest first inside each group, and groups ordered by their newest
  * item, so a fold moves the groups it added to to the top.
  */
-export function groupByCategory<T>(items: T[], urlOf: (item: T) => string, timeOf: (item: T) => number): CategoryGroup<T>[] {
+export function groupByCategory<T>(
+  items: T[],
+  urlOf: (item: T) => string,
+  timeOf: (item: T) => number,
+  overrides?: SiteKinds,
+): CategoryGroup<T>[] {
   const groups = new Map<CategoryId, CategoryGroup<T>>();
   for (const item of items) {
-    const id = categorize(urlOf(item));
+    const id = categorize(urlOf(item), overrides);
     let group = groups.get(id);
     if (!group) {
       group = { category: category(id), items: [], newest: 0 };

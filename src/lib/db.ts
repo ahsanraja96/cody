@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
-import type { MetaRecord, SessionRecord, SnapshotRecord, TabRecord, WindowRecord } from './types';
+import type { FolderRecord, MetaRecord, SessionRecord, SnapshotRecord, TabRecord, WindowRecord } from './types';
 
 export const DB_NAME = 'tabfold';
 
@@ -15,6 +15,7 @@ export class TabfoldDB extends Dexie {
   tabs!: EntityTable<TabRecord, 'id'>;
   snapshots!: EntityTable<SnapshotRecord, 'id'>;
   meta!: EntityTable<MetaRecord, 'key'>;
+  folders!: EntityTable<FolderRecord, 'id'>;
 
   constructor(name = DB_NAME) {
     super(name);
@@ -24,6 +25,12 @@ export class TabfoldDB extends Dexie {
       tabs: 'id, sessionId, windowId, url, *keywords',
       snapshots: '++id, createdAt, reason',
       meta: 'key',
+    });
+    // 0.6: folders, and tabs indexed by folder and snooze time. Moving old AI projects into folders
+    // needs chrome.storage (the project colours), so it runs after opening (migrateProjectsToFolders).
+    this.version(2).stores({
+      tabs: 'id, sessionId, windowId, url, *keywords, folderId, snoozeUntil',
+      folders: 'id, deletedAt, order',
     });
   }
 }

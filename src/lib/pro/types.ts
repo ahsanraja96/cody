@@ -31,7 +31,31 @@ export interface PlanState {
   renewsAt: number | null;
   /** When the server worked this out (ms). 0: never. */
   checkedAt: number;
+  /** Pro for life (a one-time payment): at least Pro, with no renewal. */
+  lifetime?: boolean;
+  /** The Teams plan this account belongs to (members get Pro AI). */
+  team?: TeamInfo | null;
 }
+
+/** A Teams plan (server/API.md, "Teams"). */
+export interface TeamInfo {
+  id: string;
+  name: string;
+  role: 'owner' | 'member';
+  /** Paid seats (members, the owner included). */
+  seats: number;
+}
+
+/** What a checkout buys: a subscription tier, Pro for life (one payment), or a Teams plan (per person). */
+export type CheckoutPlan = Exclude<Tier, 'free'> | 'pro-lifetime' | 'teams';
+
+/** Pro for life, US dollars, one payment (Mx-Plans board). Covers Pro, not Pro AI. */
+export const LIFETIME_PRICE = 99;
+/** Teams, US dollars a person (Mx-Plans board). Everyone in the team gets Pro AI. */
+export const TEAMS_PRICES: Record<BillingInterval, number> = { month: 10, year: 96 };
+/** Stripe Price lookup keys for those (server/scripts/stripe-setup.mjs). */
+export const LIFETIME_LOOKUP_KEY = 'pro-lifetime';
+export const TEAMS_LOOKUP_KEYS: Record<BillingInterval, string> = { month: 'teams-monthly', year: 'teams-yearly' };
 
 export const FREE_PLAN: PlanState = {
   tier: 'free',
@@ -160,7 +184,7 @@ export interface SigninResult {
 export interface CheckoutState {
   tabId: number;
   sessionId: string;
-  tier: Exclude<Tier, 'free'>;
+  tier: CheckoutPlan;
   interval: BillingInterval;
   startedAt: number;
   /** The Tabfold page it was opened from, focused again when the person cancels. */

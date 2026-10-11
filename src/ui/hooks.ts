@@ -15,7 +15,20 @@ import {
 } from '@/lib/pro/state';
 import { FREE_PLAN, type AiRuns, type CheckoutState, type MilestoneState, type PlanState, type ProjectsState } from '@/lib/pro/types';
 import { listLiveSessions } from '@/lib/repo';
-import type { SessionRecord, TabRecord } from '@/lib/types';
+import type { FolderRecord, SessionRecord, TabRecord } from '@/lib/types';
+import type { SiteKinds } from '@/lib/categories';
+import { FREE_LIMITS } from '@/lib/limits';
+import {
+  autoFoldNotice as autoFoldNoticeState,
+  liveFolders as liveFoldersState,
+  siteKinds as siteKindsState,
+  snoozeBack as snoozeBackState,
+  tidyState as tidyStateItem,
+  type AutoFoldNotice,
+  type LiveFolder,
+  type SnoozeBack,
+  type TidyState,
+} from '@/lib/state';
 import {
   activeFold,
   syncStatus,
@@ -447,4 +460,67 @@ export function useCheckout(): CheckoutState | undefined {
 /** A payment from this computer landed on an account it isn't signed in to: the email to sign in with. */
 export function useNeedsSignIn(): string | undefined {
   return useStored(needsSignInState.get, needsSignInState.watch)?.email ?? undefined;
+}
+
+// ---- 0.6: folders, limits, snooze, fold automatically, live folders, tidy-up -----------------------
+
+/** Live folders, in the left column's order. Undefined while loading. */
+export function useFolders(): FolderRecord[] | undefined {
+  return useLiveQuery(async () => (await db.folders.where('deletedAt').equals(0).toArray()).sort((a, b) => a.order - b.order || a.createdAt - b.createdAt), []);
+}
+
+/** Sites the person moved to another kind (pass to `categorize` / `groupByCategory`). */
+export function useSiteKinds(): SiteKinds {
+  return useStored(siteKindsState.get, siteKindsState.watch) ?? {};
+}
+
+/**
+ * Folded tabs and folders in use, from the folds' tab counts (cheap enough for the popup). Snoozed
+ * tabs count. Undefined while loading.
+ */
+export function useFoldedCount(): { tabs: number; folders: number } | undefined {
+  return useLiveQuery(async () => {
+    const folds = await listLiveSessions();
+    const tabs = folds.reduce((sum, fold) => sum + (fold.tabCount || 0), 0);
+    const folders = await db.folders.where('deletedAt').equals(0).count();
+    return { tabs, folders };
+  }, []);
+}
+
+/**
+ * The Free limits apply to this plan (src/lib/limits.ts FREE_LIMITS)? False on Pro, Pro AI, a
+ * Teams plan or Pro for life.
+ */
+export function hasFreeLimits(plan: PlanState): boolean {
+  return plan.tier === 'free' && !plan.lifetime && !plan.team;
+}
+
+/** The free list's state: room left, near the limit (450+), or full. Null on paid plans. */
+export function useListRoom(): { tabs: number; limit: number; room: number; near: boolean; full: boolean } | null | undefined {
+  const plan = usePlan();
+  const count = useFoldedCount();
+  if (!hasFreeLimits(plan)) return null;
+  if (!count) return undefined;
+  const room = Math.max(0, FREE_LIMITS.tabs - count.tabs);
+  return { tabs: count.tabs, limit: FREE_LIMITS.tabs, room, near: count.tabs >= FREE_LIMITS.nearTabs, full: room === 0 };
+}
+
+/** Folders open as live Chrome tab groups (Pro), by folder id. */
+export function useLiveFolders(): Record<string, LiveFolder> {
+  return useStored(liveFoldersState.get, liveFoldersState.watch) ?? {};
+}
+
+/** Snoozed tabs that came back and haven't been looked at. */
+export function useSnoozeBack(): SnoozeBack | undefined {
+  return useStored(snoozeBackState.get, snoozeBackState.watch);
+}
+
+/** The last automatic fold ("Folded 23 tabs at 18:00 (your weekday rule) · Undo"). */
+export function useAutoFoldNotice(): AutoFoldNotice | undefined {
+  return useStored(autoFoldNoticeState.get, autoFoldNoticeState.watch);
+}
+
+/** Pro AI's weekly tidy-up. */
+export function useTidy(): TidyState | undefined {
+  return useStored(tidyStateItem.get, tidyStateItem.watch);
 }

@@ -53,7 +53,7 @@ export async function handleProCommand(command: ProCommand, source: Source = {})
     case 'plan-refresh':
       return refreshPlan({ force: command.force === true });
     case 'checkout-open':
-      return openCheckout(command.tier, command.interval, source);
+      return openCheckout(command.tier, command.interval, source, { seats: command.seats, teamName: command.teamName });
     case 'checkout-focus':
       return focusCheckout();
     case 'billing-open':

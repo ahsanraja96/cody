@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser';
 import type { FoldOutcome, TabRef } from './messages';
 import type { CapturedWindow } from './types';
+import type { SiteKinds } from './categories';
 
 /**
  * Small pieces of state shared between the worker and the pages. Session storage is cleared when
@@ -264,4 +265,97 @@ export const syncStatus = {
   get: () => getKey<SyncStatus>('local', SYNC_STATUS),
   set: (value: SyncStatus) => browser.storage.local.set({ [SYNC_STATUS]: value }),
   watch: (callback: (value: SyncStatus | undefined) => void) => watchKey('local', SYNC_STATUS, callback),
+};
+
+// ---- 0.6: folders, snooze, fold automatically, live folders, tidy-up -------------------------------
+
+/** Sites moved to another kind (src/lib/categories.ts `SiteKinds`), synced in `tf.f`. */
+const SITE_KINDS = 'siteKinds';
+
+export const siteKinds = {
+  get: async (): Promise<SiteKinds> => ((await browser.storage.local.get(SITE_KINDS))[SITE_KINDS] as SiteKinds | undefined) ?? {},
+  set: (value: SiteKinds) => browser.storage.local.set({ [SITE_KINDS]: value }),
+  watch: (callback: (value: SiteKinds) => void) =>
+    watchKey('local', SITE_KINDS, (value) => callback((value as SiteKinds | undefined) ?? {})),
+};
+
+/** Snoozed tabs that came back and haven't been looked at yet: the toolbar icon's number. */
+export interface SnoozeBack {
+  tabRecordIds: string[];
+  titles: string[];
+  at: number;
+}
+
+const SNOOZE_BACK = 'snoozeBack';
+export const snoozeBack = {
+  get: () => getKey<SnoozeBack>('local', SNOOZE_BACK),
+  set: (value: SnoozeBack | null) =>
+    value === null ? browser.storage.local.remove(SNOOZE_BACK) : browser.storage.local.set({ [SNOOZE_BACK]: value }),
+  watch: (callback: (value: SnoozeBack | undefined) => void) => watchKey('local', SNOOZE_BACK, callback),
+};
+
+/** The last automatic fold, for the "Folded 23 tabs at 18:00 (your weekday rule) · Undo" line. */
+export interface AutoFoldNotice {
+  ruleId: string;
+  /** What the rule says, e.g. "your weekday rule". */
+  label: string;
+  folded: number;
+  freedBytes: number;
+  at: number;
+  /** Undo for the fold (lastAction), while it lasts. */
+  actionId: string | null;
+}
+
+const AUTO_FOLD_NOTICE = 'autoFoldNotice';
+export const autoFoldNotice = {
+  get: () => getKey<AutoFoldNotice>('local', AUTO_FOLD_NOTICE),
+  set: (value: AutoFoldNotice | null) =>
+    value === null ? browser.storage.local.remove(AUTO_FOLD_NOTICE) : browser.storage.local.set({ [AUTO_FOLD_NOTICE]: value }),
+  watch: (callback: (value: AutoFoldNotice | undefined) => void) => watchKey('local', AUTO_FOLD_NOTICE, callback),
+};
+
+/** A folder open as a Chrome tab group that saves itself (Pro). Keyed by folder id. */
+export interface LiveFolder {
+  folderId: string;
+  groupId: number;
+  windowId: number;
+  openedAt: number;
+}
+
+const LIVE_FOLDERS = 'liveFolders';
+/** In chrome.storage.session: tab group ids don't survive a browser restart. */
+export const liveFolders = {
+  get: async (): Promise<Record<string, LiveFolder>> =>
+    ((await browser.storage.session.get(LIVE_FOLDERS))[LIVE_FOLDERS] as Record<string, LiveFolder> | undefined) ?? {},
+  set: (value: Record<string, LiveFolder>) => browser.storage.session.set({ [LIVE_FOLDERS]: value }),
+  watch: (callback: (value: Record<string, LiveFolder>) => void) =>
+    watchKey('session', LIVE_FOLDERS, (value) => callback((value as Record<string, LiveFolder> | undefined) ?? {})),
+};
+
+/** One suggestion in Pro AI's weekly tidy-up. */
+export interface TidySuggestion {
+  id: string;
+  kind: 'fold-into' | 'duplicates' | 'remove-old';
+  /** e.g. "38 tabs about Lisbon haven't been opened in a month". */
+  text: string;
+  /** Button label, e.g. "Fold into Holiday", "Remove duplicates". */
+  action: string;
+  tabRecordIds: string[];
+  /** fold-into: an existing folder, or the name for a new one. */
+  folderId?: string;
+  folderName?: string;
+}
+
+export interface TidyState {
+  at: number;
+  suggestions: TidySuggestion[];
+  /** "Not now": hidden until the next week's tidy-up. */
+  dismissedAt?: number;
+}
+
+const TIDY = 'tidyUp';
+export const tidyState = {
+  get: () => getKey<TidyState>('local', TIDY),
+  set: (value: TidyState | null) => (value === null ? browser.storage.local.remove(TIDY) : browser.storage.local.set({ [TIDY]: value })),
+  watch: (callback: (value: TidyState | undefined) => void) => watchKey('local', TIDY, callback),
 };

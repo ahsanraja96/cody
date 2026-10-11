@@ -36,8 +36,34 @@ export interface Settings {
    * computer (never in Chrome sync) and reopen only in Incognito.
    */
   foldIncognito: boolean;
-  /** The full list groups folded tabs by kind of site, or (Pro AI, after organising) by project. */
+  /** Before 0.6 (By site / By project). Unused: folders replaced projects. */
   groupBy: 'site' | 'project';
+  /** Fold automatically (Mx-Auto board). Free runs only the first enabled rule, and only an `idle` one. */
+  autoFold: AutoFoldRule[];
+  /** Pro AI's weekly tidy-up card (Mondays). */
+  tidyUp: boolean;
+}
+
+/**
+ * When an auto-fold rule runs:
+ * - `idle`: tabs not looked at for `days` days (Chrome's tab.lastAccessed).
+ * - `time`: every chosen weekday (0 Sunday … 6 Saturday) at `hour`:`minute`, everything open.
+ * - `site-idle`: tabs from these sites not looked at for `minutes` minutes.
+ */
+export type AutoFoldWhen =
+  | { type: 'idle'; days: number }
+  | { type: 'time'; hour: number; minute: number; weekdays: number[] }
+  | { type: 'site-idle'; hosts: string[]; minutes: number };
+
+/** Where a rule's tabs go: their kind of site (no folder), a folder, or (time rules) one new fold. */
+export type AutoFoldInto = { type: 'site' } | { type: 'folder'; folderId: string };
+
+export interface AutoFoldRule {
+  id: string;
+  enabled: boolean;
+  when: AutoFoldWhen;
+  into: AutoFoldInto;
+  createdAt: number;
 }
 
 /** Calls and meeting sites are never suspended; tabs using a camera or mic can't be detected without reading pages. */
@@ -71,6 +97,8 @@ export const DEFAULT_SETTINGS: Settings = {
   syncWithChrome: true,
   foldIncognito: false,
   groupBy: 'site',
+  autoFold: [],
+  tidyUp: true,
 };
 
 export const AUTO_SUSPEND_CHOICES = [5, 10, 15, 30, 60, 120, 240];

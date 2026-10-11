@@ -4,7 +4,7 @@ import { api, ProError } from './api';
 import { PRO_CONFIG, proConfigured } from './config';
 import { refreshPlan } from './plan';
 import { checkoutNotice, checkoutState, needsSignIn } from './state';
-import type { BillingInterval, CheckoutState, PlanState, Tier } from './types';
+import type { BillingInterval, CheckoutPlan, CheckoutState, PlanState, Tier } from './types';
 
 /**
  * Stripe Checkout and Stripe's billing page, each opened in a tab and watched (Stripe-Checkout
@@ -162,11 +162,17 @@ function schedulePoll(delayMs = CHECKOUT_POLL_MS): void {
  * Open Stripe Checkout for a plan in a new tab and watch it. With a live subscription already
  * (`already-subscribed`), Stripe's billing page opens instead, where plans change.
  */
-export async function openCheckout(tier: Exclude<Tier, 'free'>, interval: BillingInterval, source: Source = {}): Promise<{ opened: boolean; reason?: string }> {
+export async function openCheckout(
+  tier: CheckoutPlan,
+  interval: BillingInterval,
+  source: Source = {},
+  team: { seats?: number; teamName?: string } = {},
+): Promise<{ opened: boolean; reason?: string }> {
   if (!proConfigured()) throw new ProError('not-configured');
   let answer: { url?: unknown; sessionId?: unknown };
   try {
-    answer = await api('/checkout', { method: 'POST', body: { tier, interval } });
+    const body = tier === 'teams' ? { tier, interval, seats: team.seats, teamName: team.teamName } : { tier, interval };
+    answer = await api('/checkout', { method: 'POST', body });
   } catch (error) {
     if (error instanceof ProError && error.code === 'already-subscribed') return openBilling({}, source);
     throw error;

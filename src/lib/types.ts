@@ -118,8 +118,46 @@ export interface TabRecord {
    * reopened only in Incognito.
    */
   incognito?: true;
-  /** The AI project it was put in (Pro AI, By project view). */
+  /**
+   * Before 0.6: the AI project it was put in. Read once by the migration to folders
+   * (`folderId`), then cleared; nothing else uses it.
+   */
   project?: string;
+  /** The folder it's in (`FolderRecord.id`). Unset: it's grouped by kind of site. */
+  folderId?: string;
+  /** Snoozed: hidden in "Snoozed" until this time (ms), then reopened by the computer that snoozed it. */
+  snoozeUntil?: number;
+  /** The device id (`getDeviceId()`) of the computer that snoozed it; only that one reopens it. */
+  snoozedOn?: string;
+  /** Last time it was opened from Tabfold (ms), for the weekly tidy-up's "not opened in a month". */
+  lastOpenedAt?: number;
+}
+
+/**
+ * A folder the person named (Fo-* boards). Folders come first in the list and in the left column;
+ * tabs not in a folder are grouped by kind of site. Free has 3 live folders; paid plans have no
+ * limit. Organise with AI fills folders (it replaced the By project view). Folders sync with the
+ * folded tabs (`tf.f`, src/lib/sync/records.ts).
+ */
+export interface FolderRecord {
+  /** Stable id, the same on every computer: 12 characters [0-9a-z]. */
+  id: string;
+  /** At most 60 characters. */
+  name: string;
+  color: TabGroupColor;
+  /** Position in the left column and the list, ascending. */
+  order: number;
+  createdAt: number;
+  /** Last change to name, colour, order or deletion: when two computers disagree, the newest wins. */
+  updatedAt: number;
+  /** 0 while live; when deleted, its tabs went back to their kind of site. */
+  deletedAt: number;
+  /** Who made it: the person, Organise with AI (Pro AI), or an import. */
+  source?: 'person' | 'ai' | 'import';
+  /** Shared as a link (Pro): the share's id on the server (`POST /shares`). */
+  shareId?: string;
+  /** The shared page follows the folder's changes ("Keep it up to date"). */
+  shareLive?: boolean;
 }
 
 export type SnapshotReason =
