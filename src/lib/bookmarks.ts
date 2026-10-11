@@ -2,8 +2,10 @@ import { browser, type Browser } from 'wxt/browser';
 import { groupByCategory } from './categories';
 import { db, type TabfoldDB } from './db';
 import { formatDay } from './exporters';
+import { importedTab, type ImportedSession } from './importers';
 import { CommandError } from './messages';
 import { listFoldedTabs } from './repo';
+import type { CapturedTab } from './types';
 
 /**
  * "Save them to Chrome bookmarks" before removing Tabfold (Min-Remove board): a bookmarks folder
@@ -56,4 +58,76 @@ export async function saveListToBookmarks(
     }
   }
   return { folderTitle, saved, skippedIncognito: all.length - tabs.length };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Import from a Chrome bookmarks folder (Mx-Ask "Chrome bookmarks: pick a folder"). Runs on the
+// page, after it asked for the optional "bookmarks" permission from the click.
+
+export interface BookmarkFolder {
+  id: string;
+  /** "Bookmarks bar / Work / Clients". */
+  path: string;
+  /** Links inside it, its subfolders' included. */
+  count: number;
+}
+
+function bookmarksApi(): typeof browser.bookmarks {
+  const api = (browser as { bookmarks?: typeof browser.bookmarks }).bookmarks;
+  if (!api?.getTree) {
+    throw new CommandError('Tabfold needs permission to read your bookmarks. Allow it, then try again.', 'bookmarks-permission');
+  }
+  return api;
+}
+
+const isFolder = (node: BookmarkNode) => !node.url;
+
+function linksIn(node: BookmarkNode): CapturedTab[] {
+  return (node.children ?? []).filter((child) => child.url).flatMap((child) => importedTab(child.url!, child.title) ?? []);
+}
+
+function countLinks(node: BookmarkNode): number {
+  return (node.children ?? []).reduce((sum, child) => sum + (child.url ? (importedTab(child.url, child.title) ? 1 : 0) : countLinks(child)), 0);
+}
+
+/** Every bookmarks folder that holds links, with its path, in Chrome's order. */
+export async function listBookmarkFolders(): Promise<BookmarkFolder[]> {
+  const tree = await bookmarksApi().getTree();
+  const folders: BookmarkFolder[] = [];
+  const visit = (node: BookmarkNode, parents: string[]) => {
+    for (const child of node.children ?? []) {
+      if (!isFolder(child)) continue;
+      const path = [...parents, child.title.trim() || 'Untitled'];
+      const count = countLinks(child);
+      if (count > 0) folders.push({ id: child.id, path: path.join(' / '), count });
+      visit(child, path);
+    }
+  };
+  for (const root of tree) visit(root, []);
+  return folders;
+}
+
+/**
+ * A bookmarks folder as collections to import: its own links (named after it), then each
+ * subfolder with links (named by its path inside the folder, "Clients / 2026").
+ */
+export async function readBookmarkFolder(id: string): Promise<ImportedSession[]> {
+  const [root] = await bookmarksApi().getSubTree(id);
+  if (!root || !isFolder(root)) return [];
+  const sessions: ImportedSession[] = [];
+  const add = (node: BookmarkNode, name: string) => {
+    const tabs = linksIn(node);
+    if (tabs.length) sessions.push({ name, createdAt: null, windows: [{ name: '', focused: false, bounds: null, state: null, tabs }] });
+  };
+  const visit = (node: BookmarkNode, path: string[]) => {
+    for (const child of node.children ?? []) {
+      if (!isFolder(child)) continue;
+      const childPath = [...path, child.title.trim() || 'Untitled'];
+      add(child, childPath.join(' / '));
+      visit(child, childPath);
+    }
+  };
+  add(root, root.title.trim() || 'Bookmarks');
+  visit(root, []);
+  return sessions;
 }

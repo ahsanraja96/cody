@@ -138,6 +138,28 @@ export function SyncLine({ status, cloud = false }: { status: SyncStatus | undef
       </span>
     );
   }
+  if (status.waiting && status.waiting > 0) {
+    // Free with a full list: tabs from other computers wait in Chrome sync until there's room.
+    return (
+      <span role="status" className={base}>
+        {check}
+        Synced
+        <span aria-hidden>·</span>
+        <span className="text-amber">{status.waiting.toLocaleString()} waiting:</span>
+        <a
+          href="#/room"
+          title="Tabs from your other computers wait in Chrome sync: your free list is full"
+          onClick={(e) => {
+            e.preventDefault();
+            void openLibrary('#/room').finally(() => window.close());
+          }}
+          className="font-semibold no-underline hover:underline"
+        >
+          make room
+        </a>
+      </span>
+    );
+  }
   return (
     <span role="status" className={base}>
       {check}

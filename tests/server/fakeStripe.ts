@@ -6,6 +6,10 @@ import { signWebhook, STRIPE_VERSION } from '../../server/supabase/functions/tab
  * simple pages standing in for Checkout (`/pay/<session id>`) and the billing portal
  * (`/portal/<id>`). Plain Node, no test-runner imports.
  *
+ * Checkout does subscriptions (with a quantity: a Teams plan's seats) and one-time payments
+ * (`mode=payment`: Pro for life); "Pay" on the page completes either. Changing a subscription
+ * item's quantity (`POST /v1/subscription_items/<id>`) sends `customer.subscription.updated`.
+ *
  * - `createFakeStripe()` answers web-standard Requests (`fake.fetch`), with no network: pass
  *   `fetch: fake.fetch` to createStripe.
  * - `startFakeStripe({ port })` also serves it over HTTP (for a browser, the setup script, or
@@ -31,7 +35,7 @@ export interface FakeStripeOptions {
   webhookUrl?: string;
   /** Signs the events, and is the secret of webhook endpoints made through the API. */
   webhookSecret?: string;
-  /** Start with Tabfold's two products and four prices (`pro-monthly`, …), as the setup script makes them. Default true. */
+  /** Start with Tabfold's products and prices (`pro-monthly`, …, `pro-lifetime`, `teams-*`), as the setup script makes them. Default true. */
   prices?: boolean;
   /** The clock (ms); default Date.now. */
   now?: () => number;
@@ -58,6 +62,8 @@ export interface FakeStripe {
   subscriptions: Map<string, StripeObject>;
   portalSessions: Map<string, StripeObject>;
   portalConfigurations: Map<string, StripeObject>;
+  /** One-time payments' PaymentIntents, by id. */
+  paymentIntents: Map<string, StripeObject>;
   webhookEndpoints: Map<string, StripeObject>;
   /** Every event made, oldest first. */
   events: StripeObject[];
@@ -69,7 +75,7 @@ export interface FakeStripe {
   handle(request: Request): Promise<Response>;
   /** `fetch` for createStripe({ fetch }): no network. */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
-  /** Adds Tabfold's products and four prices (if they aren't there). */
+  /** Adds Tabfold's products and prices (those that aren't there). */
   seedPrices(): void;
   /** The active price with this lookup key. */
   priceFor(lookupKey: string): StripeObject | null;
@@ -83,9 +89,14 @@ export interface FakeStripe {
     currentPeriodEnd?: number;
     cancelAtPeriodEnd?: boolean;
     created?: number;
+    /** Seats (a Teams plan). Default 1. */
+    quantity?: number;
   }): StripeObject;
-  /** What "Subscribe" on the checkout page does. */
-  completeSession(id: string, input?: { email?: string }): Promise<{ session: StripeObject; subscription: StripeObject; redirect: string }>;
+  /** What "Subscribe" or "Pay" on the checkout page does. `subscription` is null for a one-time payment. */
+  completeSession(
+    id: string,
+    input?: { email?: string },
+  ): Promise<{ session: StripeObject; subscription: StripeObject | null; redirect: string }>;
   /** Changes a subscription, then sends `customer.subscription.updated` (or `options.event`; false for none). */
   setSubscription(id: string, patch: StripeObject, options?: { event?: string | false }): Promise<StripeObject | null>;
   /** Makes (and records) an event; sends it to `webhookUrl` if set. */
@@ -103,11 +114,15 @@ export interface RunningFakeStripe extends FakeStripe {
   close(): Promise<void>;
 }
 
+/** Tabfold's prices, as server/scripts/stripe-setup.mjs makes them (`interval` null: one payment). */
 export const TABFOLD_PRICES = [
   { lookupKey: 'pro-monthly', product: 'Tabfold Pro', tier: 'pro', amount: 500, interval: 'month' },
   { lookupKey: 'pro-yearly', product: 'Tabfold Pro', tier: 'pro', amount: 4800, interval: 'year' },
   { lookupKey: 'pro-ai-monthly', product: 'Tabfold Pro AI', tier: 'pro-ai', amount: 900, interval: 'month' },
   { lookupKey: 'pro-ai-yearly', product: 'Tabfold Pro AI', tier: 'pro-ai', amount: 8400, interval: 'year' },
+  { lookupKey: 'pro-lifetime', product: 'Tabfold Pro for life', tier: 'pro-lifetime', amount: 9900, interval: null },
+  { lookupKey: 'teams-monthly', product: 'Tabfold Teams', tier: 'teams', amount: 1000, interval: 'month' },
+  { lookupKey: 'teams-yearly', product: 'Tabfold Teams', tier: 'teams', amount: 9600, interval: 'year' },
 ] as const;
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -159,9 +174,9 @@ function addInterval(seconds: number, interval: string): number {
   return Math.floor(date.getTime() / 1000);
 }
 
-const money = (price: StripeObject) =>
-  `${price.currency === 'usd' ? '$' : `${String(price.currency).toUpperCase()} `}${(price.unit_amount / 100).toFixed(2)}`;
-const period = (price: StripeObject) => `per ${price.recurring?.interval ?? 'month'}`;
+const money = (price: StripeObject, quantity = 1) =>
+  `${price.currency === 'usd' ? '$' : `${String(price.currency).toUpperCase()} `}${((price.unit_amount * quantity) / 100).toFixed(2)}`;
+const period = (price: StripeObject) => (price.recurring ? `per ${price.recurring.interval}` : 'once');
 const dateOf = (seconds: number) => new Date(seconds * 1000).toUTCString().slice(5, 16);
 
 function json(status: number, body: unknown): Response {
@@ -213,6 +228,7 @@ export function createFakeStripe(options: FakeStripeOptions = {}): FakeStripe {
     subscriptions: new Map(),
     portalSessions: new Map(),
     portalConfigurations: new Map(),
+    paymentIntents: new Map(),
     webhookEndpoints: new Map(),
     events: [],
     requests: [],
@@ -288,7 +304,7 @@ export function createFakeStripe(options: FakeStripeOptions = {}): FakeStripe {
         currency: 'usd',
         unit_amount: spec.amount,
         product: product.id,
-        recurring: { interval: spec.interval },
+        recurring: spec.interval ? { interval: spec.interval } : undefined,
         lookup_key: spec.lookupKey,
       });
     }
@@ -303,6 +319,7 @@ export function createFakeStripe(options: FakeStripeOptions = {}): FakeStripe {
   function addSubscription(input: Parameters<FakeStripe['addSubscription']>[0] & { priceId?: string }): StripeObject {
     const price = input.priceId ? fake.prices.get(input.priceId) : priceFor(input.lookupKey);
     if (!price) throw new Error(`The fake Stripe has no price ${input.priceId ?? input.lookupKey}`);
+    if (!price.recurring) throw new Error(`The fake Stripe's price ${price.id} is a one-time price`);
     const created = input.created ?? nowS();
     const trialEnd = input.trialEnd ?? null;
     const periodEnd = input.currentPeriodEnd ?? trialEnd ?? addInterval(created, price.recurring?.interval ?? 'month');
@@ -315,6 +332,7 @@ export function createFakeStripe(options: FakeStripeOptions = {}): FakeStripe {
       cancel_at: input.cancelAtPeriodEnd ? periodEnd : null,
       cancel_at_period_end: input.cancelAtPeriodEnd ?? false,
       canceled_at: null,
+      ended_at: null,
       created,
       current_period_start: created,
       current_period_end: periodEnd,
@@ -329,7 +347,7 @@ export function createFakeStripe(options: FakeStripeOptions = {}): FakeStripe {
             object: 'subscription_item',
             subscription: subscriptionId,
             price: clone(price),
-            quantity: 1,
+            quantity: input.quantity ?? 1,
             current_period_start: created,
             current_period_end: periodEnd,
           },
@@ -396,9 +414,38 @@ export function createFakeStripe(options: FakeStripeOptions = {}): FakeStripe {
     let customerId: string | null = session.customer;
     const email = customerId ? fake.customers.get(customerId)?.email : (session.customer_email ?? input.email?.trim());
     if (!email || !email.includes('@')) throw new Error('Enter an email address');
+    if (session.mode === 'payment') {
+      // A one-time payment: a customer only when asked for (customer_creation=always), and no subscription.
+      if (!customerId && session.customer_creation === 'always') customerId = addCustomer(email).id;
+      const intent = {
+        id: newId('pi'),
+        object: 'payment_intent',
+        amount: price.unit_amount * session.line_items[0].quantity,
+        currency: price.currency,
+        customer: customerId,
+        status: 'succeeded',
+        created: nowS(),
+      };
+      fake.paymentIntents.set(intent.id, intent);
+      Object.assign(session, {
+        status: 'complete',
+        customer: customerId,
+        customer_details: { email },
+        payment_intent: intent.id,
+        payment_status: 'paid',
+      });
+      await emit('checkout.session.completed', session);
+      return { session, subscription: null, redirect: String(session.success_url).replace('{CHECKOUT_SESSION_ID}', id) };
+    }
     if (!customerId) customerId = addCustomer(email).id;
     const trialEnd = session.subscription_data?.trial_end ? Number(session.subscription_data.trial_end) : null;
-    const subscription = addSubscription({ customer: customerId!, lookupKey: '', priceId: price.id, trialEnd });
+    const subscription = addSubscription({
+      customer: customerId!,
+      lookupKey: '',
+      priceId: price.id,
+      trialEnd,
+      quantity: session.line_items[0].quantity,
+    });
     Object.assign(session, {
       status: 'complete',
       customer: customerId,
@@ -486,6 +533,7 @@ export function createFakeStripe(options: FakeStripeOptions = {}): FakeStripe {
     if ((id = idIn('GET', /^\/v1\/subscriptions\/([^/]+)$/))) {
       return fake.subscriptions.has(id) ? json(200, fake.subscriptions.get(id)) : missing('subscription', id);
     }
+    if ((id = idIn('POST', /^\/v1\/subscription_items\/([^/]+)$/))) return updateItem(id, params);
     if (path.startsWith('/v1/billing_portal/')) return portalApi(method, path, params);
     if (is('GET', /^\/v1\/webhook_endpoints$/)) {
       return list(path, [...fake.webhookEndpoints.values()].map(withoutSecret), params);
@@ -521,11 +569,44 @@ export function createFakeStripe(options: FakeStripeOptions = {}): FakeStripe {
     return rest;
   };
 
+  /** A subscription item's quantity (a Teams plan's seats): Stripe sends `customer.subscription.updated`. */
+  async function updateItem(id: string, params: StripeObject): Promise<Response> {
+    for (const subscription of fake.subscriptions.values()) {
+      const item = subscription.items.data.find((entry: StripeObject) => entry.id === id);
+      if (!item) continue;
+      if (params.quantity !== undefined) {
+        const quantity = Number(params.quantity);
+        if (!Number.isInteger(quantity) || quantity < 1) return stripeError(400, 'Invalid quantity.', { param: 'quantity' });
+        item.quantity = quantity;
+      }
+      item.proration_behavior_last = params.proration_behavior ?? null;
+      await emit('customer.subscription.updated', subscription);
+      return json(200, item);
+    }
+    return missing('subscription_item', id);
+  }
+
   function createSession(params: StripeObject): Response {
-    if (params.mode !== 'subscription') return stripeError(400, 'The fake Stripe only does mode=subscription.', { param: 'mode' });
+    if (params.mode !== 'subscription' && params.mode !== 'payment') {
+      return stripeError(400, 'The fake Stripe does mode=subscription and mode=payment.', { param: 'mode' });
+    }
     const item = Array.isArray(params.line_items) ? params.line_items[0] : null;
     const price = item?.price ? fake.prices.get(item.price) : undefined;
     if (!price || !price.active) return missing('price', String(item?.price));
+    if (params.mode === 'subscription' && !price.recurring) {
+      return stripeError(400, 'You must provide at least one recurring price in `subscription` mode.');
+    }
+    if (params.mode === 'payment' && price.recurring) {
+      return stripeError(400, 'You specified `payment` mode but passed a recurring price.');
+    }
+    if (params.customer_creation && (params.mode !== 'payment' || params.customer)) {
+      return stripeError(400, '`customer_creation` can only be used in `payment` mode without `customer`.', { param: 'customer_creation' });
+    }
+    if (params.mode === 'payment' && params.subscription_data) {
+      return stripeError(400, '`subscription_data` can only be used in `subscription` mode.', { param: 'subscription_data' });
+    }
+    const quantity = Number(item.quantity ?? 1);
+    if (!Number.isInteger(quantity) || quantity < 1) return stripeError(400, 'Invalid quantity.', { param: 'line_items[0][quantity]' });
     if (!params.success_url) return stripeError(400, 'Missing required param: success_url.', { param: 'success_url' });
     if (params.customer && params.customer_email) {
       return stripeError(400, 'You may only specify one of these parameters: customer, customer_email.');
@@ -544,7 +625,7 @@ export function createFakeStripe(options: FakeStripeOptions = {}): FakeStripe {
     const session = {
       id,
       object: 'checkout.session',
-      mode: 'subscription',
+      mode: params.mode,
       status: 'open',
       payment_status: 'unpaid',
       url: `${fake.baseUrl}/pay/${id}`,
@@ -553,14 +634,16 @@ export function createFakeStripe(options: FakeStripeOptions = {}): FakeStripe {
       customer: params.customer ?? null,
       customer_email: params.customer_email ?? null,
       customer_details: null,
+      customer_creation: params.customer_creation ?? null,
       subscription: null,
+      payment_intent: null,
       client_reference_id: params.client_reference_id ?? null,
       metadata: { ...(params.metadata ?? {}) },
       allow_promotion_codes: truthy(params.allow_promotion_codes),
       automatic_tax: { enabled: truthy(params.automatic_tax?.enabled) },
       customer_update: params.customer_update ?? null,
       // Not in Stripe's answer, but handy for tests and the page.
-      line_items: [{ price: price.id, quantity: Number(item.quantity ?? 1) }],
+      line_items: [{ price: price.id, quantity }],
       subscription_data: { trial_end: trialEnd },
       created: nowS(),
       expires_at: nowS() + 24 * 3600,
@@ -630,21 +713,25 @@ export function createFakeStripe(options: FakeStripeOptions = {}): FakeStripe {
 
   function payPage(session: StripeObject, error = ''): Response {
     const price = fake.prices.get(session.line_items[0].price)!;
+    const quantity = Number(session.line_items[0].quantity ?? 1);
     const product = fake.products.get(price.product);
     const known = session.customer ? fake.customers.get(session.customer)?.email : session.customer_email;
     const trialEnd = session.subscription_data?.trial_end;
+    const oneTime = session.mode === 'payment';
     if (session.status !== 'open') {
       return htmlPage('Checkout', `<h1>This checkout is ${escapeHtml(session.status)}</h1>`, 400);
     }
+    const each = quantity > 1 ? `<p>${quantity} × ${escapeHtml(money(price))} ${escapeHtml(period(price))}</p>` : '';
     const body = `
-<h1>Subscribe to ${escapeHtml(product?.name ?? 'Tabfold')}</h1>
-<p class="price">${escapeHtml(money(price))} <small>${escapeHtml(period(price))}</small></p>
+<h1>${oneTime ? 'Pay for' : 'Subscribe to'} ${escapeHtml(product?.name ?? 'Tabfold')}</h1>
+<p class="price">${escapeHtml(money(price, quantity))} <small>${escapeHtml(period(price))}</small></p>
+${each}
 ${trialEnd ? `<p>Free until ${escapeHtml(dateOf(trialEnd))}. Billing starts then.</p>` : ''}
 <form method="post" action="/pay/${escapeHtml(session.id)}">
 <label>Email<input type="email" name="email" autocomplete="email" required value="${escapeHtml(known ?? '')}"${known ? ' readonly' : ''}></label>
 <label>Card<input name="card" value="4242 4242 4242 4242" readonly></label>
 ${error ? `<p role="alert">${escapeHtml(error)}</p>` : ''}
-<button type="submit">Subscribe</button>
+<button type="submit">${oneTime ? 'Pay' : 'Subscribe'}</button>
 </form>
 ${session.cancel_url ? `<p><a href="${escapeHtml(session.cancel_url)}">Cancel and go back</a></p>` : ''}
 <p class="note">Promotion codes ${session.allow_promotion_codes ? 'allowed' : 'off'} · Tax ${session.automatic_tax?.enabled ? 'on' : 'off'}</p>`;
@@ -666,9 +753,11 @@ ${session.cancel_url ? `<p><a href="${escapeHtml(session.cancel_url)}">Cancel an
     const rows = subs
       .map((s) => {
         const price = s.items.data[0].price;
+        const quantity = Number(s.items.data[0].quantity ?? 1);
         const product = fake.products.get(price.product);
         const ends = s.cancel_at_period_end || s.cancel_at;
-        return `<p><b>${escapeHtml(product?.name ?? price.lookup_key)}</b> · ${escapeHtml(money(price))} ${escapeHtml(period(price))}<br>${
+        const seats = quantity > 1 ? ` · ${quantity} people` : '';
+        return `<p><b>${escapeHtml(product?.name ?? price.lookup_key)}</b>${seats} · ${escapeHtml(money(price, quantity))} ${escapeHtml(period(price))}<br>${
           ends ? `Ends on ${escapeHtml(dateOf(s.cancel_at ?? s.current_period_end))}` : `Renews on ${escapeHtml(dateOf(s.trial_end ?? s.current_period_end))}`
         }</p>`;
       })

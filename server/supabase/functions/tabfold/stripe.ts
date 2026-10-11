@@ -2,8 +2,9 @@ import type { BillingInterval, Subscription } from '../_shared/plan.ts';
 
 /**
  * A small Stripe client over fetch (no SDK), with only what Tabfold uses: prices by lookup key,
- * Checkout Sessions, subscriptions, billing portal sessions and webhook signatures. Web-standard
- * APIs only, so it runs in the Edge Function, in tests and in plain Node.
+ * Checkout Sessions (subscriptions, and one-time payments for Pro for life), subscriptions and
+ * their seats, billing portal sessions and webhook signatures. Web-standard APIs only, so it runs
+ * in the Edge Function, in tests and in plain Node.
  */
 
 /** The API version every request asks for. */
@@ -30,6 +31,10 @@ export class WebhookSignatureError extends Error {
 
 export interface CheckoutInput {
   lookupKey: string;
+  /** A subscription (default), or one payment (Pro for life). */
+  mode?: 'subscription' | 'payment';
+  /** How many: a Teams plan's seats. Default 1. */
+  quantity?: number;
   successUrl: string;
   cancelUrl: string;
   clientReferenceId?: string;
@@ -46,10 +51,15 @@ export interface CheckoutInput {
 export interface CheckoutInfo {
   id: string;
   status: 'open' | 'complete' | 'expired';
+  mode: 'subscription' | 'payment';
+  /** Stripe's `payment_status`: `paid`, `unpaid` (a bank debit still on its way) or `no_payment_required`. */
+  paymentStatus: string | null;
   customerId: string | null;
   /** What the person typed on Stripe's page, or the email the server gave. */
   email: string | null;
   subscriptionId: string | null;
+  /** A one-time payment's PaymentIntent (`pi_…`). */
+  paymentIntentId: string | null;
   clientReferenceId: string | null;
   metadata: Record<string, string>;
 }
@@ -74,6 +84,8 @@ export interface Payments {
   createCheckout(input: CheckoutInput): Promise<{ id: string; url: string }>;
   getCheckout(id: string): Promise<CheckoutInfo>;
   getSubscription(id: string): Promise<Subscription>;
+  /** Sets a subscription item's quantity (a Teams plan's seats), prorated. */
+  updateQuantity(itemId: string, quantity: number): Promise<void>;
   createPortal(input: PortalInput): Promise<{ url: string }>;
   /** The event, if the signature is right and recent; throws WebhookSignatureError otherwise. */
   verifyWebhook(rawBody: string, signatureHeader: string | null): Promise<StripeEvent>;
@@ -149,6 +161,9 @@ export function readSubscription(object: unknown): Subscription {
     cancelAtPeriodEnd: object.cancel_at_period_end === true,
     trialEnd: ms(object.trial_end),
     createdAt: ms(object.created) ?? 0,
+    quantity: typeof item.quantity === 'number' && Number.isInteger(item.quantity) && item.quantity > 0 ? item.quantity : 1,
+    itemId: text(item.id),
+    endedAt: ms(object.ended_at),
   };
 }
 
@@ -159,9 +174,12 @@ export function readCheckout(object: unknown): CheckoutInfo {
   return {
     id: text(object.id)!,
     status,
+    mode: object.mode === 'payment' ? 'payment' : 'subscription',
+    paymentStatus: text(object.payment_status),
     customerId: idOf(object.customer),
     email: text(details.email) ?? text(object.customer_email),
     subscriptionId: idOf(object.subscription),
+    paymentIntentId: idOf(object.payment_intent),
     clientReferenceId: text(object.client_reference_id),
     metadata: stringMap(object.metadata),
   };
@@ -245,9 +263,10 @@ export function createStripe(options: StripeOptions): Payments {
   return {
     async createCheckout(input) {
       const price = await priceIdFor(input.lookupKey);
+      const mode = input.mode ?? 'subscription';
       const params: Params = {
-        mode: 'subscription',
-        line_items: [{ price, quantity: 1 }],
+        mode,
+        line_items: [{ price, quantity: Math.max(1, Math.floor(input.quantity ?? 1)) }],
         success_url: input.successUrl,
         cancel_url: input.cancelUrl,
         client_reference_id: input.clientReferenceId,
@@ -256,7 +275,9 @@ export function createStripe(options: StripeOptions): Payments {
       };
       if (input.customer) params.customer = input.customer;
       else if (input.customerEmail) params.customer_email = input.customerEmail;
-      if (input.trialEnd) params.subscription_data = { trial_end: Math.floor(input.trialEnd) };
+      // A one-time payment makes a customer only when asked; Tabfold wants one (billing, receipts).
+      if (mode === 'payment' && !input.customer) params.customer_creation = 'always';
+      if (mode === 'subscription' && input.trialEnd) params.subscription_data = { trial_end: Math.floor(input.trialEnd) };
       if (input.automaticTax) {
         params.automatic_tax = { enabled: true };
         // Stripe Tax needs the address on the customer; let Checkout save it there.
@@ -275,6 +296,13 @@ export function createStripe(options: StripeOptions): Payments {
 
     async getSubscription(id) {
       return readSubscription(await call('GET', `/v1/subscriptions/${encodeURIComponent(id)}`));
+    },
+
+    async updateQuantity(itemId, quantity) {
+      await call('POST', `/v1/subscription_items/${encodeURIComponent(itemId)}`, {
+        quantity: Math.max(1, Math.floor(quantity)),
+        proration_behavior: 'create_prorations',
+      });
     },
 
     async createPortal(input) {

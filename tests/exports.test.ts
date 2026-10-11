@@ -133,14 +133,14 @@ describe('exports', () => {
     ]);
     const csv = exportCsv([tricky]);
     expect(csv.split('\r\n')).toEqual([
-      'fold,window,title,url,saved_at,keywords',
-      '"Mixed, ""quoted""",Main,"Says ""hi""","https://a.com/?q=1,2",2026-10-10T12:00:05.000Z,work later',
-      '"Mixed, ""quoted""",Main,"Two\nlines",https://b.com,2026-10-10T12:00:05.000Z,',
-      `"Mixed, ""quoted""",Main,"'=HYPERLINK(""https://evil.example"")",https://c.com,2026-10-10T12:00:05.000Z,`,
-      '"Mixed, ""quoted""",Main,Plain,https://d.com,2026-10-10T12:00:05.000Z,',
+      'fold,window,title,url,saved_at,keywords,folder',
+      '"Mixed, ""quoted""",Main,"Says ""hi""","https://a.com/?q=1,2",2026-10-10T12:00:05.000Z,work later,',
+      '"Mixed, ""quoted""",Main,"Two\nlines",https://b.com,2026-10-10T12:00:05.000Z,,',
+      `"Mixed, ""quoted""",Main,"'=HYPERLINK(""https://evil.example"")",https://c.com,2026-10-10T12:00:05.000Z,,`,
+      '"Mixed, ""quoted""",Main,Plain,https://d.com,2026-10-10T12:00:05.000Z,,',
       '',
     ]);
-    expect(exportCsv([])).toBe('fold,window,title,url,saved_at,keywords\r\n');
+    expect(exportCsv([])).toBe('fold,window,title,url,saved_at,keywords,folder\r\n');
   });
 
   it('JSON: Tabfold’s own format, version 1', () => {

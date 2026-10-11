@@ -109,10 +109,10 @@ describe('Ask your tabs and imports', () => {
   });
 
   it('sums up an import as the board says', () => {
-    expect(importSummary({ tabs: 312, folders: 4, skippedOverLimit: 40, withoutFolder: 2, duplicates: 0 })).toEqual({
+    expect(importSummary({ sessions: 6, intoUnsorted: 0, tabs: 312, folders: 4, skippedOverLimit: 40, withoutFolder: 2, duplicates: 0 })).toEqual({
       title: 'Imported 312 tabs into 4 folders',
       details: ['2 collections went by site (Free has 3 folders)', '40 left out (free list full)'],
     });
-    expect(importSummary({ tabs: 1, folders: 0, skippedOverLimit: 0, withoutFolder: 0, duplicates: 0 }).title).toBe('Imported 1 tab');
+    expect(importSummary({ sessions: 1, intoUnsorted: 0, tabs: 1, folders: 0, skippedOverLimit: 0, withoutFolder: 0, duplicates: 0 }).title).toBe('Imported 1 tab');
   });
 });

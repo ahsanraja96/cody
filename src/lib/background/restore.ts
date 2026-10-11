@@ -1,6 +1,7 @@
 import { browser, type Browser } from 'wxt/browser';
 import { db } from '../db';
 import { refreshDataGuard } from '../dataGuard';
+import { markOpened } from '../folders';
 import type { Command, RestoreFailure, RestoreMode, RestoreOutcome, ScreenArea, WorkerEvent } from '../messages';
 import { getSessionGraph, saveCapture, trashSessions } from '../repo';
 import { getSettings } from '../settings';
@@ -433,6 +434,7 @@ export async function handleOpenTabs(command: OpenTabsCommand): Promise<{ opened
     lazy: settings.lazyRestore,
     currentWindowId: command.windowId,
   });
+  if (result.opened) await markOpened(rows.map((row) => row.id)).catch(() => undefined);
   return { opened: result.opened, ...(result.failed.some((f) => f.reason === 'incognito') ? { reason: INCOGNITO_OFF } : {}) };
 }
 
@@ -459,6 +461,7 @@ export async function handleOpenSavedTab(
     }
     const created = await browser.tabs.create({ url: tab.url, active, windowId: target });
     if (active && created.windowId !== undefined) await browser.windows.update(created.windowId, { focused: true });
+    await markOpened([tab.id]).catch(() => undefined);
     return { opened: true };
   } catch {
     return { opened: false, reason: 'Chrome refused to open this address. Copy it and paste it into the address bar.' };

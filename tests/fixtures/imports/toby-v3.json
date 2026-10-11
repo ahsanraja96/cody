@@ -1,0 +1,52 @@
+{
+  "version": 3,
+  "lists": [
+    {
+      "title": "Getting Started",
+      "cards": [
+        {
+          "title": "Toby Guide",
+          "url": "https://www.gettoby.com/guide",
+          "customTitle": "",
+          "customDescription": ""
+        },
+        {
+          "title": "Keyboard shortcuts",
+          "url": "https://www.gettoby.com/shortcuts",
+          "customTitle": "Shortcuts I keep forgetting",
+          "customDescription": "the ones for spaces"
+        }
+      ],
+      "labels": []
+    },
+    {
+      "title": "Checkout app",
+      "cards": [
+        {
+          "title": "Stripe Webhooks | Stripe Documentation",
+          "url": "https://docs.stripe.com/webhooks",
+          "customTitle": "",
+          "customDescription": ""
+        },
+        {
+          "title": "acme/checkout: Pull request #12",
+          "url": "https://github.com/acme/checkout/pull/12",
+          "customTitle": "",
+          "customDescription": ""
+        },
+        {
+          "title": "A bookmarklet",
+          "url": "javascript:void(document.title)",
+          "customTitle": "",
+          "customDescription": ""
+        }
+      ],
+      "labels": ["work"]
+    },
+    {
+      "title": "Empty list",
+      "cards": [],
+      "labels": []
+    }
+  ]
+}

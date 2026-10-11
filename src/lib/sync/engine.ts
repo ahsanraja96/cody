@@ -1,15 +1,17 @@
 import Dexie from 'dexie';
 import { browser } from 'wxt/browser';
+import type { SiteKinds } from '../categories';
 import { checkWiped } from '../dataGuard';
 import { db, DB_NAME, getSearchVersion, type TabfoldDB } from '../db';
+import { listRoom, storedSiteKinds } from '../folders';
 import { cloudSyncStatus } from '../pro/state';
 import { applySyncChanges, listFoldedTabs } from '../repo';
 import { getSettings } from '../settings';
 import { getDeviceId, syncStatus, type SyncStatus } from '../state';
 import { cloudSyncActive, cloudSyncDeps } from './cloud';
 import { localSyncState, type SyncStateStore } from './localState';
-import { planSync } from './merge';
-import { diffItems, META_KEY, SYNC_LIMITS, SYNC_PREFIX, unpack, type SyncLimits } from './records';
+import { planSync, type LocalFolders } from './merge';
+import { copyHash, diffItems, hash53, META_KEY, SYNC_LIMITS, SYNC_PREFIX, unpack, type SyncLimits } from './records';
 
 /**
  * Chrome sync of folded tabs, run by the service worker. The newest folded tabs go into
@@ -61,6 +63,12 @@ export const chromeSyncArea: SyncArea = {
   remove: (keys) => browser.storage.sync.remove(keys),
 };
 
+/** Sites moved to another kind on this computer, and sites put back (host → when). */
+export interface SiteKindsStore {
+  get(): Promise<{ kinds: SiteKinds; removals: Record<string, number> }>;
+  set(value: { kinds: SiteKinds; removals: Record<string, number> }): Promise<void>;
+}
+
 export interface SyncDeps {
   database: TabfoldDB;
   area: SyncArea;
@@ -72,6 +80,10 @@ export interface SyncDeps {
   now: () => number;
   /** How much the area holds: Chrome sync's limits unless given. */
   limits?: SyncLimits;
+  /** Folders and site kinds travel too (`tf.f`) when given. */
+  siteKinds?: SiteKindsStore;
+  /** How many more tabs the list here takes (a Free list: 500 in all). Unlimited unless given. */
+  room?: () => Promise<number>;
 }
 
 /**
@@ -87,7 +99,23 @@ export function defaultSyncDeps(): SyncDeps {
     enabled: async () => (await getSettings()).syncWithChrome && !(await cloudSyncActive()),
     isWiped: async () => (await checkWiped(db)).wiped,
     now: () => Date.now(),
+    siteKinds: storedSiteKinds,
+    // A Free list never goes over 500 tabs by syncing: the rest wait in Chrome sync.
+    room: async () => (await listRoom(undefined, db)).room,
   };
+}
+
+/** Folders and site kinds here, and a fingerprint of them (to notice a change made here). */
+async function readLocalFolders(deps: SyncDeps): Promise<{ folders: LocalFolders; hash: string } | null> {
+  if (!deps.siteKinds) return null;
+  const [rows, kinds] = await Promise.all([deps.database.folders.toArray(), deps.siteKinds.get()]);
+  const folders = rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const text = JSON.stringify([
+    folders.map((f) => [f.id, f.name, f.color, f.order, f.updatedAt, f.deletedAt]),
+    Object.entries(kinds.kinds).sort(),
+    Object.entries(kinds.removals).sort(),
+  ]);
+  return { folders: { folders, kinds: kinds.kinds, removals: kinds.removals }, hash: hash53(text) };
 }
 
 export type SkipReason = 'off' | 'unchanged' | 'backoff' | 'wiped' | 'partial' | 'rate' | 'raced';
@@ -188,6 +216,7 @@ export async function syncOnce(
   }
   const remote = unpack(items, limits);
   const version = await getSearchVersion(deps.database);
+  const localFolders = await readLocalFolders(deps);
 
   // Nothing changed here or in Chrome sync since the last run (this includes the echo of our own write).
   if (
@@ -195,8 +224,9 @@ export async function syncOnce(
     previous?.state === 'synced' &&
     state.failures === 0 &&
     state.partialRuns === 0 &&
-    (remote.meta?.h ?? null) === state.lastHash &&
-    version === state.lastVersion
+    remote.copyHash === state.lastHash &&
+    version === state.lastVersion &&
+    (localFolders?.hash ?? null) === (state.lastFolders ?? null)
   ) {
     return { status: previous, wrote: false, applied: false, skipped: 'unchanged' };
   }
@@ -220,6 +250,10 @@ export async function syncOnce(
     title: tab.title,
     savedAt: tab.savedAt,
     keywords: tab.keywords,
+    folderId: tab.folderId,
+    snoozeUntil: tab.snoozeUntil,
+    snoozedOn: tab.snoozedOn,
+    placedAt: tab.placedAt,
   }));
   const plan = planSync({
     local,
@@ -230,9 +264,14 @@ export async function syncOnce(
     now,
     budgetFactor: state.budgetFactor,
     limits,
+    folders: localFolders?.folders,
+    room: deps.room ? await deps.room() : undefined,
   });
 
-  const changesHere = plan.remove.length + plan.update.length + plan.adopt.length + plan.insert.length > 0;
+  const folderChanges = plan.folders ? plan.folders.write.length + plan.folders.drop.length > 0 : false;
+  const kindChanges = plan.folders?.kindsChanged === true;
+  const changesHere =
+    plan.remove.length + plan.update.length + plan.adopt.length + plan.insert.length > 0 || folderChanges || kindChanges;
   const diff = diffItems(items, plan.packed.items);
   const needsWrite = Object.keys(diff.set).length > 0 || diff.remove.length > 0;
   if (changesHere || needsWrite) await options.onStatus?.({ state: 'syncing', ...counts, at: now });
@@ -243,7 +282,11 @@ export async function syncOnce(
   const raced = async () => {
     if (deps.area.checksVersion) return (await deps.store.get()).floor !== state.floor;
     const [latestState, latestItems] = await Promise.all([deps.store.get(), deps.area.getAll()]);
-    return latestState.floor !== state.floor || JSON.stringify(latestItems[META_KEY]) !== JSON.stringify(items[META_KEY]);
+    return (
+      latestState.floor !== state.floor ||
+      JSON.stringify(latestItems[META_KEY]) !== JSON.stringify(items[META_KEY]) ||
+      copyHash(latestItems) !== remote.copyHash
+    );
   };
   const retrySoon = (): SyncRunResult => ({
     status: { state: 'syncing', ...counts, at: now },
@@ -263,10 +306,14 @@ export async function syncOnce(
           update: plan.update,
           adopt: plan.adopt.map(({ localId, record }) => ({ localId, tab: record })),
           insert: plan.insert,
+          ...(plan.folders && folderChanges ? { folders: { write: plan.folders.write, drop: plan.folders.drop } } : {}),
         },
         { inboxId, deviceId, now },
         deps.database,
       ));
+      if (plan.folders && kindChanges && deps.siteKinds) {
+        await deps.siteKinds.set({ kinds: plan.folders.kinds, removals: plan.folders.removals });
+      }
     } catch (error) {
       return fail(error, `Couldn’t update your list from ${label}. Trying again later.`);
     }
@@ -327,16 +374,18 @@ export async function syncOnce(
     mine: plan.mine,
     floor: plan.floor,
     inboxId,
-    lastHash: plan.packed.hash,
+    lastHash: copyHash(plan.packed.items),
     lastVersion: await getSearchVersion(deps.database),
+    lastFolders: (await readLocalFolders(deps))?.hash ?? null,
     failures: 0,
     retryAt: 0,
     partialRuns: 0,
     writes: wrote ? [...recentWrites, now].slice(-MAX_WRITES_PER_HOUR) : recentWrites,
   };
   await deps.store.set(state);
+  const { synced, localOnly, waiting } = plan.counts;
   return {
-    status: { state: 'synced', syncedTabs: plan.counts.synced, localOnly: plan.counts.localOnly, at: now },
+    status: { state: 'synced', syncedTabs: synced, localOnly, at: now, ...(waiting ? { waiting } : {}) },
     wrote,
     applied: changesHere,
   };
@@ -367,7 +416,14 @@ export interface SyncRunner {
 }
 
 function sameStatus(a: SyncStatus | undefined, b: SyncStatus): boolean {
-  return !!a && a.state === b.state && a.syncedTabs === b.syncedTabs && a.localOnly === b.localOnly && a.error === b.error;
+  return (
+    !!a &&
+    a.state === b.state &&
+    a.syncedTabs === b.syncedTabs &&
+    a.localOnly === b.localOnly &&
+    a.error === b.error &&
+    (a.waiting ?? 0) === (b.waiting ?? 0)
+  );
 }
 
 function createRunner(
@@ -470,7 +526,10 @@ export async function cloudSyncNow(): Promise<{ ok: boolean }> {
 
 function touchesFolds(parts: Record<string, unknown>): boolean {
   return Object.keys(parts).some(
-    (key) => key.startsWith(`idb://${DB_NAME}/tabs/`) || key.startsWith(`idb://${DB_NAME}/sessions/`),
+    (key) =>
+      key.startsWith(`idb://${DB_NAME}/tabs/`) ||
+      key.startsWith(`idb://${DB_NAME}/sessions/`) ||
+      key.startsWith(`idb://${DB_NAME}/folders/`),
   );
 }
 
@@ -486,6 +545,8 @@ export function setupSync(): void {
         const change = changes.settings as { oldValue?: { syncWithChrome?: boolean }; newValue?: { syncWithChrome?: boolean } };
         if ((change.oldValue?.syncWithChrome ?? true) !== (change.newValue?.syncWithChrome ?? true)) chromeSync.schedule(0);
       }
+      // A site moved to another kind (or put back) travels with the folders.
+      if ('siteKinds' in changes || 'siteKindsRemoved' in changes) scheduleSync();
       // Pro started or ended: one engine pauses and the other picks up.
       if ('plan' in changes) {
         const change = changes.plan as Change;

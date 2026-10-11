@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="light dark">
+<title>A shared folder · Tabfold</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<script src="/config.js" defer></script>
+<script src="/s.js" defer></script>
+</head>
+<body>
+<main class="sheet">
+
+  <div class="card skeleton" id="loading" aria-busy="true" aria-label="Loading the folder">
+    <span></span><span></span><span></span><span></span>
+  </div>
+
+  <article class="card" id="share" hidden>
+    <div class="head">
+      <h1 class="title">
+        <span class="folder-icon cg-grey" id="folder-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+        </span>
+        <span id="name"></span>
+      </h1>
+      <p class="meta" id="meta"></p>
+      <div class="actions" id="actions">
+        <button type="button" class="button primary" id="open-all">Open all</button>
+        <button type="button" class="button secondary" id="copy">Copy links</button>
+      </div>
+      <p class="status" id="status" role="status" aria-live="polite"></p>
+    </div>
+    <ul class="list" id="list"></ul>
+    <p class="empty" id="empty" hidden>This folder is empty.</p>
+    <div class="foot">
+      <span class="logo" aria-hidden="true">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="11" rx="2.5"/><path d="M7 5.5h10"/><path d="M9.5 2.5h5"/></svg>
+      </span>
+      <span class="made">Made with Tabfold: fold your tabs, find them later.</span>
+      <a class="button secondary small" id="save" href="https://chromewebstore.google.com/" data-store-link>Save to my Tabfold</a>
+    </div>
+  </article>
+
+  <section class="card notice" id="gone" hidden>
+    <span class="badge" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/><path d="m3 3 18 18"/></svg>
+    </span>
+    <h1>This link doesn’t work any more</h1>
+    <p>Whoever shared this folder has stopped sharing it, or the link isn’t quite right. Ask them for a new one.</p>
+    <a class="button secondary" href="/">What’s Tabfold?</a>
+  </section>
+
+  <section class="card notice" id="error" hidden>
+    <span class="badge" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+    </span>
+    <h1 id="error-title">Couldn’t load this folder</h1>
+    <p id="error-text">Check your connection and try again.</p>
+    <button type="button" class="button primary" id="retry">Try again</button>
+  </section>
+
+</main>
+</body>
+</html>

@@ -46,6 +46,8 @@ export const TopBar = forwardRef<
     cloudStatus: SyncStatus | undefined;
     /** Free, over Chrome sync's 500: "Latest 500 synced · Sync all" opens the plans page. */
     onSyncAll: () => void;
+    /** Free with a full list and tabs waiting in Chrome sync: "make room". */
+    onMakeRoom: () => void;
     onSettings: () => void;
     /** "✦ Upgrade" and the trial chip open the plans page. */
     onUpgrade: () => void;
@@ -68,6 +70,7 @@ export const TopBar = forwardRef<
     plan,
     cloudStatus,
     onSyncAll,
+    onMakeRoom,
     onSettings,
     onUpgrade,
     askChip,
@@ -140,7 +143,7 @@ export const TopBar = forwardRef<
       {!plan ? null : hasPro(plan) ? (
         <CloudSyncLine status={cloudStatus} className="shrink-0 max-[860px]:hidden" />
       ) : (
-        <SyncLine status={syncStatus} enabled={syncEnabled} compact onSyncAll={onSyncAll} className="shrink-0 max-[860px]:hidden" />
+        <SyncLine status={syncStatus} enabled={syncEnabled} compact onSyncAll={onSyncAll} onMakeRoom={onMakeRoom} className="shrink-0 max-[860px]:hidden" />
       )}
       <span className="w-1 shrink-0" />
       {plan && hasFreeLimits(plan) && <UpgradeButton onClick={onUpgrade} className="max-[560px]:hidden" />}

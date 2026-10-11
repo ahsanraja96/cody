@@ -319,6 +319,7 @@ export function LibraryApp() {
         plan={loadedPlan}
         cloudStatus={cloudStatus}
         onSyncAll={goToPlans}
+        onMakeRoom={makeRoom}
         onSettings={() => navigate('settings')}
         onUpgrade={goToPlans}
         askChip={askable ? <AskChip proAi={proAi} busy={ask?.status === 'loading'} onAsk={runAsk} /> : undefined}

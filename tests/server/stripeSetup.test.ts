@@ -57,14 +57,28 @@ describe('stripe-setup.mjs', () => {
     expect([...fake.products.values()].map((p) => [p.name, p.metadata.tabfold_tier])).toEqual([
       ['Tabfold Pro', 'pro'],
       ['Tabfold Pro AI', 'pro-ai'],
+      ['Tabfold Pro for life', 'pro-lifetime'],
+      ['Tabfold Teams', 'teams'],
     ]);
-    const prices = [...fake.prices.values()].map((p) => [p.lookup_key, p.unit_amount, p.currency, p.recurring.interval, fake.products.get(p.product)!.name]);
+    const prices = [...fake.prices.values()].map((p) => [
+      p.lookup_key,
+      p.unit_amount,
+      p.currency,
+      p.recurring?.interval ?? 'once',
+      fake.products.get(p.product)!.name,
+    ]);
     expect(prices).toEqual([
       ['pro-monthly', 500, 'usd', 'month', 'Tabfold Pro'],
       ['pro-yearly', 4800, 'usd', 'year', 'Tabfold Pro'],
       ['pro-ai-monthly', 900, 'usd', 'month', 'Tabfold Pro AI'],
       ['pro-ai-yearly', 8400, 'usd', 'year', 'Tabfold Pro AI'],
+      ['pro-lifetime', 9900, 'usd', 'once', 'Tabfold Pro for life'],
+      ['teams-monthly', 1000, 'usd', 'month', 'Tabfold Teams'],
+      ['teams-yearly', 9600, 'usd', 'year', 'Tabfold Teams'],
     ]);
+    expect(fake.priceFor('pro-lifetime')!.type).toBe('one_time');
+    expect(out).toContain('Price pro-lifetime ($99.00 once)');
+    expect(out).toContain('Price teams-yearly ($96.00 a year per person)');
 
     const [config] = [...fake.portalConfigurations.values()];
     expect(config!.features).toMatchObject({
@@ -74,6 +88,7 @@ describe('stripe-setup.mjs', () => {
       subscription_cancel: { enabled: 'true', mode: 'at_period_end' },
       subscription_update: { enabled: 'true', default_allowed_updates: ['price'], proration_behavior: 'create_prorations' },
     });
+    // Switching plans covers Pro and Pro AI only: a Teams plan's seats change through Tabfold.
     const pro = fake.priceFor('pro-monthly')!;
     const ai = fake.priceFor('pro-ai-yearly')!;
     expect(config!.features.subscription_update.products).toEqual([
@@ -85,7 +100,13 @@ describe('stripe-setup.mjs', () => {
     expect(endpoint).toMatchObject({
       url: WEBHOOK,
       api_version: '2024-06-20',
-      enabled_events: ['checkout.session.completed', 'customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted'],
+      enabled_events: [
+        'checkout.session.completed',
+        'checkout.session.async_payment_succeeded',
+        'customer.subscription.created',
+        'customer.subscription.updated',
+        'customer.subscription.deleted',
+      ],
     });
 
     expect(out).toContain('test mode');
@@ -97,10 +118,10 @@ describe('stripe-setup.mjs', () => {
   it('changes nothing it doesn’t need to on a second run', async () => {
     await run(['--webhook-url', WEBHOOK]);
     const counts = () => [fake.products.size, fake.prices.size, fake.portalConfigurations.size, fake.webhookEndpoints.size];
-    expect(counts()).toEqual([2, 4, 1, 1]);
+    expect(counts()).toEqual([4, 7, 1, 1]);
     const { code, out } = await run([`--webhook-url=${WEBHOOK}`]);
     expect(code).toBe(0);
-    expect(counts()).toEqual([2, 4, 1, 1]);
+    expect(counts()).toEqual([4, 7, 1, 1]);
     expect(out).toContain('already there');
     expect(out).toContain('updated');
     expect(out).toContain(`supabase secrets set STRIPE_PORTAL_CONFIGURATION=${[...fake.portalConfigurations.keys()][0]}`);
@@ -117,7 +138,22 @@ describe('stripe-setup.mjs', () => {
     const replacement = fake.priceFor('pro-ai-yearly')!;
     expect(replacement.id).not.toBe(aiYearly.id);
     expect(replacement.product).toBe(aiYearly.product);
-    expect(fake.products.size).toBe(2);
+    expect(fake.products.size).toBe(4);
+  });
+
+  it('adds the new plans’ prices to a Stripe set up before them', async () => {
+    // As an earlier version of the script left it: Pro and Pro AI only.
+    fake.seedPrices();
+    for (const key of ['pro-lifetime', 'teams-monthly', 'teams-yearly']) {
+      const price = fake.priceFor(key)!;
+      fake.prices.delete(price.id);
+      if (![...fake.prices.values()].some((p) => p.product === price.product)) fake.products.delete(price.product);
+    }
+    expect([fake.products.size, fake.prices.size]).toEqual([2, 4]);
+    const { code } = await run(['--webhook-url', WEBHOOK]);
+    expect(code).toBe(0);
+    expect([fake.products.size, fake.prices.size]).toEqual([4, 7]);
+    expect(fake.priceFor('teams-monthly')!.recurring).toEqual({ interval: 'month', interval_count: 1 });
   });
 
   it('adds missing events to an existing webhook', async () => {
@@ -125,7 +161,7 @@ describe('stripe-setup.mjs', () => {
     const [endpoint] = [...fake.webhookEndpoints.values()];
     endpoint!.enabled_events = ['checkout.session.completed'];
     await run(['--webhook-url', WEBHOOK]);
-    expect(endpoint!.enabled_events).toHaveLength(4);
+    expect(endpoint!.enabled_events).toHaveLength(5);
   });
 
   it('explains what it needs', async () => {

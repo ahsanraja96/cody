@@ -1,4 +1,4 @@
-import type { Subscription } from '../../server/supabase/functions/_shared/plan.ts';
+import type { Purchase, Subscription, TeamRole } from '../../server/supabase/functions/_shared/plan.ts';
 import {
   RUN_LIMIT_REACHED,
   SYNC_CONFLICT,
@@ -8,16 +8,23 @@ import {
   type BackupInfo,
   type DeviceKind,
   type PendingCheckout,
+  type PublicShare,
+  type ShareContent,
+  type ShareRecord,
   type SigninCode,
   type Store,
+  type TeamInvite,
+  type TeamMember,
+  type TeamMembership,
+  type TeamRecord,
   type UsageKind,
 } from '../../server/supabase/functions/tabfold/app.ts';
 
 /**
  * An in-memory Store for the server tests and the end-to-end Pro test (e2e/pro.mjs), with no
  * test-runner imports so plain Node can load it. Behaves like the SQL in server/supabase/migrations,
- * including its atomic functions. Times come from `now` (default Date.now), as the database's
- * `now()` would.
+ * including its atomic functions (sync and team sync writes, team creation and joining, share
+ * views). Times come from `now` (default Date.now), as the database's `now()` would.
  */
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -34,6 +41,35 @@ export interface DeviceRow {
   lastSeenAt: number;
 }
 
+export interface TeamMemberRow {
+  teamId: string;
+  role: TeamRole;
+  joinedAt: number;
+}
+
+type SyncState = { version: number; items: Record<string, unknown> };
+
+/** `tabfold_sync_write` and `tabfold_team_sync_write`: a compare-and-set write, or a code. */
+function casWrite(
+  map: Map<string, SyncState>,
+  key: string,
+  baseVersion: number,
+  set: Record<string, unknown>,
+  remove: string[],
+  maxBytes: number,
+): number {
+  const state = map.get(key) ?? { version: 0, items: {} };
+  if (state.version !== baseVersion) return SYNC_CONFLICT;
+  const next = { ...state.items };
+  for (const item of remove) delete next[item];
+  Object.assign(next, copy(set));
+  let total = 0;
+  for (const [item, value] of Object.entries(next)) total += bytes(item) + bytes(JSON.stringify(value));
+  if (total > maxBytes) return SYNC_TOO_LARGE;
+  map.set(key, { version: state.version + 1, items: next });
+  return state.version + 1;
+}
+
 export class MemoryStore implements Store {
   now: () => number;
   /** By id. */
@@ -46,9 +82,22 @@ export class MemoryStore implements Store {
   subscriptions = new Map<string, { accountId: string; subscription: Subscription }>();
   pending = new Map<string, PendingCheckout>();
   events = new Set<string>();
-  sync = new Map<string, { version: number; items: Record<string, unknown> }>();
+  sync = new Map<string, SyncState>();
   backups = new Map<string, Map<string, Backup>>();
   usage = new Map<string, { runs: number; light: number }>();
+  /** One-time purchases (Pro for life), by id. */
+  purchases = new Map<string, { accountId: string; purchase: Purchase }>();
+  /** By id. */
+  teams = new Map<string, TeamRecord>();
+  /** By account id: an account is in one team at most. */
+  teamMembersByAccount = new Map<string, TeamMemberRow>();
+  /** By `<team id>|<email>`. */
+  teamInviteRows = new Map<string, { teamId: string; email: string; invitedAt: number }>();
+  /** By team id. */
+  teamSync = new Map<string, SyncState>();
+  /** By id. */
+  shares = new Map<string, ShareRecord>();
+  private seq = 0;
 
   constructor(options: MemoryStoreOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -173,6 +222,19 @@ export class MemoryStore implements Store {
     return [...this.subscriptions.values()].filter((row) => row.accountId === account).map((row) => copy(row.subscription));
   }
 
+  async subscriptionGet(id: string) {
+    const row = this.subscriptions.get(id);
+    return row ? copy(row.subscription) : null;
+  }
+
+  async purchasePut(account: string, purchase: Purchase) {
+    if (!this.purchases.has(purchase.id)) this.purchases.set(purchase.id, { accountId: account, purchase: copy(purchase) });
+  }
+
+  async purchaseList(account: string) {
+    return [...this.purchases.values()].filter((row) => row.accountId === account).map((row) => copy(row.purchase));
+  }
+
   async pendingPut(sessionId: string, tokenHash: string) {
     this.pending.set(sessionId, { sessionId, tokenHash, createdAt: this.now(), signInEmail: null });
   }
@@ -217,16 +279,7 @@ export class MemoryStore implements Store {
   }
 
   async syncWrite(account: string, baseVersion: number, set: Record<string, unknown>, remove: string[], maxBytes: number) {
-    const state = this.sync.get(account) ?? { version: 0, items: {} };
-    if (state.version !== baseVersion) return SYNC_CONFLICT;
-    const next = { ...state.items };
-    for (const key of remove) delete next[key];
-    Object.assign(next, copy(set));
-    let total = 0;
-    for (const [key, value] of Object.entries(next)) total += bytes(key) + bytes(JSON.stringify(value));
-    if (total > maxBytes) return SYNC_TOO_LARGE;
-    this.sync.set(account, { version: state.version + 1, items: next });
-    return state.version + 1;
+    return casWrite(this.sync, account, baseVersion, set, remove, maxBytes);
   }
 
   async syncVersion(account: string) {
@@ -277,7 +330,149 @@ export class MemoryStore implements Store {
     return row[kind];
   }
 
+  // ---- Teams ----
+
+  private nextId(prefix: string) {
+    this.seq += 1;
+    return `${prefix}-${this.seq}`;
+  }
+
+  async teamCreate(owner: string, name: string, subscriptionId: string) {
+    for (const team of this.teams.values()) if (team.subscriptionId === subscriptionId) return team.id;
+    for (const team of this.teams.values()) {
+      if (team.ownerId === owner) {
+        team.subscriptionId = subscriptionId;
+        team.name = name;
+        return team.id;
+      }
+    }
+    const team: TeamRecord = { id: this.nextId('team'), name, ownerId: owner, subscriptionId, createdAt: this.now() };
+    this.teams.set(team.id, team);
+    // Leaves a team it was a member of: one team per account.
+    this.teamMembersByAccount.set(owner, { teamId: team.id, role: 'owner', joinedAt: this.now() });
+    return team.id;
+  }
+
+  async teamOf(account: string): Promise<TeamMembership | null> {
+    const row = this.teamMembersByAccount.get(account);
+    const team = row && this.teams.get(row.teamId);
+    return row && team ? { team: copy(team), role: row.role, joinedAt: row.joinedAt } : null;
+  }
+
+  async teamGet(team: string) {
+    const row = this.teams.get(team);
+    return row ? copy(row) : null;
+  }
+
+  async teamRename(team: string, name: string) {
+    const row = this.teams.get(team);
+    if (row) row.name = name;
+  }
+
+  async teamMembers(team: string): Promise<TeamMember[]> {
+    return [...this.teamMembersByAccount]
+      .filter(([, row]) => row.teamId === team)
+      .map(([accountId, row]) => ({ id: accountId, email: this.accounts.get(accountId)?.email ?? '', role: row.role, joinedAt: row.joinedAt }))
+      .sort((a, b) => (a.role === b.role ? a.joinedAt - b.joinedAt : a.role === 'owner' ? -1 : 1));
+  }
+
+  async teamInvites(team: string): Promise<TeamInvite[]> {
+    return [...this.teamInviteRows.values()]
+      .filter((row) => row.teamId === team)
+      .sort((a, b) => a.invitedAt - b.invitedAt)
+      .map(({ email, invitedAt }) => ({ email, invitedAt }));
+  }
+
+  async teamInvitePut(team: string, email: string) {
+    const key = `${team}|${email}`;
+    if (this.teamInviteRows.has(key)) return false;
+    this.teamInviteRows.set(key, { teamId: team, email, invitedAt: this.now() });
+    return true;
+  }
+
+  async teamInviteDelete(team: string, email: string) {
+    return this.teamInviteRows.delete(`${team}|${email}`);
+  }
+
+  async teamInvitesFor(email: string) {
+    return [...this.teamInviteRows.values()]
+      .filter((row) => row.email === email)
+      .sort((a, b) => a.invitedAt - b.invitedAt)
+      .map((row) => row.teamId);
+  }
+
+  async teamJoin(team: string, account: string, email: string) {
+    if (this.teamMembersByAccount.has(account)) return false;
+    if (!this.teamInviteRows.delete(`${team}|${email}`)) return false;
+    this.teamMembersByAccount.set(account, { teamId: team, role: 'member', joinedAt: this.now() });
+    return true;
+  }
+
+  async teamLeave(team: string, account: string) {
+    const row = this.teamMembersByAccount.get(account);
+    if (!row || row.teamId !== team || row.role !== 'member') return false;
+    this.teamMembersByAccount.delete(account);
+    return true;
+  }
+
+  async teamSyncRead(team: string) {
+    const state = this.teamSync.get(team);
+    return { items: copy(state?.items ?? {}), version: state?.version ?? 0 };
+  }
+
+  async teamSyncWrite(team: string, baseVersion: number, set: Record<string, unknown>, remove: string[], maxBytes: number) {
+    return casWrite(this.teamSync, team, baseVersion, set, remove, maxBytes);
+  }
+
+  async teamSyncVersion(team: string) {
+    return this.teamSync.get(team)?.version ?? 0;
+  }
+
+  // ---- Shared folders ----
+
+  async shareCreate(id: string, account: string, content: ShareContent) {
+    if (this.shares.has(id)) return false;
+    const now = this.now();
+    this.shares.set(id, { ...copy(content), id, accountId: account, views: 0, createdAt: now, updatedAt: now });
+    return true;
+  }
+
+  async shareGet(id: string) {
+    const share = this.shares.get(id);
+    return share ? copy(share) : null;
+  }
+
+  async shareUpdate(id: string, account: string, content: ShareContent) {
+    const share = this.shares.get(id);
+    if (!share || share.accountId !== account) return null;
+    Object.assign(share, copy(content), { updatedAt: this.now() });
+    return copy(share);
+  }
+
+  async shareDelete(id: string, account: string) {
+    if (this.shares.get(id)?.accountId !== account) return false;
+    return this.shares.delete(id);
+  }
+
+  async shareCount(account: string) {
+    return [...this.shares.values()].filter((share) => share.accountId === account).length;
+  }
+
+  async shareView(id: string): Promise<PublicShare | null> {
+    const share = this.shares.get(id);
+    if (!share) return null;
+    share.views += 1;
+    return { name: share.name, color: share.color, tabs: copy(share.tabs), updatedAt: share.updatedAt };
+  }
+
   // ---- Test helpers ----
+
+  /** The team an email's account is in (test set-up and checks), or null. */
+  teamOfEmail(email: string): TeamRecord | null {
+    const account = [...this.accounts.values()].find((a) => a.email === email);
+    const row = account && this.teamMembersByAccount.get(account.id);
+    return row ? (this.teams.get(row.teamId) ?? null) : null;
+  }
 
   /** The account a device token's hash is linked to (any kind), or null. */
   linkedAccount(tokenHash: string): Account | null {

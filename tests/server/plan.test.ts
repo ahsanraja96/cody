@@ -6,11 +6,17 @@ import {
   bestSubscription,
   hasPro,
   hasProAi,
+  isLive,
+  LIFETIME_LOOKUP_KEY,
   planFor,
+  TEAMS_LOOKUP_KEYS,
   tierOfLookupKey,
   TRIAL_DAYS,
   type PlanInput,
+  type Purchase,
   type Subscription,
+  type TeamInput,
+  type TeamRole,
 } from '../../server/supabase/functions/_shared/plan.ts';
 import { DAY, NOW } from './fakes';
 
@@ -187,5 +193,161 @@ describe('plan helpers', () => {
 
   it('keeps the limits', () => {
     expect([TRIAL_DAYS, AI_RUNS_PER_MONTH, AI_MAX_TABS, AI_MAX_TITLE]).toEqual([7, 300, 300, 200]);
+  });
+});
+
+describe('planFor: Pro for life and Teams', () => {
+  const lifetime: Purchase = { id: 'cs_1', lookupKey: 'pro-lifetime', customerId: 'cus_1', paymentIntentId: 'pi_1', createdAt: NOW - DAY };
+  const teamSub = (patch: Partial<Subscription> = {}) =>
+    sub({ lookupKey: 'teams-yearly', interval: 'year', quantity: 5, itemId: 'si_1', currentPeriodEnd: NOW + 200 * DAY, ...patch });
+  const team = (role: TeamRole, subscription: Subscription | null = teamSub()): TeamInput => ({
+    id: 'team-1',
+    name: 'Truewidgets',
+    role,
+    seats: subscription?.quantity ?? 1,
+    subscription,
+  });
+
+  it('gives Pro for life alone: Pro, nothing renews', () => {
+    expect(plan({ purchases: [lifetime] })).toEqual({
+      tier: 'pro',
+      trial: null,
+      trialUsed: false,
+      email: 'sam@example.com',
+      interval: null,
+      status: null,
+      cancelAt: null,
+      renewsAt: null,
+      checkedAt: NOW,
+      lifetime: true,
+    });
+  });
+
+  it('ignores purchases of anything else', () => {
+    expect(plan({ purchases: [{ ...lifetime, lookupKey: 'other' }] })).toMatchObject({ tier: 'free' });
+    expect(plan({ purchases: [{ ...lifetime, lookupKey: 'other' }] }).lifetime).toBeUndefined();
+  });
+
+  it('lets a Pro AI subscription on top of Pro for life give Pro AI', () => {
+    expect(plan({ purchases: [lifetime], subscriptions: [sub({ lookupKey: 'pro-ai-monthly' })] })).toMatchObject({
+      tier: 'pro-ai',
+      lifetime: true,
+      interval: 'month',
+      status: 'active',
+      renewsAt: NOW + 20 * DAY,
+    });
+    // A Pro subscription adds nothing, but still shows (it renews).
+    expect(plan({ purchases: [lifetime], subscriptions: [sub()] })).toMatchObject({ tier: 'pro', lifetime: true, renewsAt: NOW + 20 * DAY });
+  });
+
+  it('lets the trial give Pro AI on top of Pro for life, then falls back to Pro', () => {
+    const started = NOW - 2 * DAY;
+    expect(plan({ account: account(started), purchases: [lifetime] })).toMatchObject({
+      tier: 'pro-ai',
+      lifetime: true,
+      trial: { startedAt: started, endsAt: started + 7 * DAY },
+    });
+    expect(plan({ account: account(started), purchases: [lifetime] }, started + 8 * DAY)).toMatchObject({ tier: 'pro', lifetime: true, trial: null });
+  });
+
+  it('keeps Pro for life when a subscription ends', () => {
+    expect(plan({ purchases: [lifetime], subscriptions: [sub({ lookupKey: 'pro-ai-yearly', status: 'canceled' })] })).toMatchObject({
+      tier: 'pro',
+      status: null,
+      lifetime: true,
+    });
+  });
+
+  it('never takes the lifetime price or a team’s for a personal subscription', () => {
+    expect(tierOfLookupKey('pro-lifetime')).toBeNull();
+    expect(tierOfLookupKey('teams-monthly')).toBeNull();
+    expect(plan({ subscriptions: [teamSub()] })).toMatchObject({ tier: 'free', status: null });
+  });
+
+  it('gives a team member Pro AI and the team, with no billing of their own', () => {
+    expect(plan({ team: team('member') })).toEqual({
+      tier: 'pro-ai',
+      trial: null,
+      trialUsed: false,
+      email: 'sam@example.com',
+      interval: null,
+      status: null,
+      cancelAt: null,
+      renewsAt: null,
+      checkedAt: NOW,
+      team: { id: 'team-1', name: 'Truewidgets', role: 'member', seats: 5 },
+    });
+  });
+
+  it('shows a member’s own subscription, if they keep one', () => {
+    expect(plan({ team: team('member'), subscriptions: [sub()] })).toMatchObject({
+      tier: 'pro-ai',
+      interval: 'month',
+      status: 'active',
+      renewsAt: NOW + 20 * DAY,
+      team: { role: 'member' },
+    });
+  });
+
+  it('describes the team’s subscription for its owner', () => {
+    expect(plan({ team: team('owner'), subscriptions: [teamSub()] })).toMatchObject({
+      tier: 'pro-ai',
+      interval: 'year',
+      status: 'active',
+      renewsAt: NOW + 200 * DAY,
+      team: { id: 'team-1', role: 'owner', seats: 5 },
+    });
+    const cancelling = teamSub({ cancelAtPeriodEnd: true });
+    expect(plan({ team: team('owner', cancelling) })).toMatchObject({ cancelAt: NOW + 200 * DAY, renewsAt: null });
+  });
+
+  it('keeps a past-due team on, and says so to its owner', () => {
+    const late = teamSub({ status: 'past_due' });
+    expect(plan({ team: team('owner', late) })).toMatchObject({ tier: 'pro-ai', status: 'past_due', team: { role: 'owner' } });
+    expect(plan({ team: team('member', late) })).toMatchObject({ tier: 'pro-ai', status: null, team: { role: 'member' } });
+  });
+
+  it('falls back to each person’s own plan when the team’s subscription ends', () => {
+    const ended = teamSub({ status: 'canceled', endedAt: NOW - DAY });
+    expect(plan({ team: team('member', ended) })).toMatchObject({ tier: 'free', status: null });
+    expect(plan({ team: team('member', ended) }).team).toBeUndefined();
+    expect(plan({ team: team('member', ended), subscriptions: [sub()] })).toMatchObject({ tier: 'pro', status: 'active' });
+    expect(plan({ team: team('member', ended), purchases: [lifetime] })).toMatchObject({ tier: 'pro', lifetime: true });
+    expect(plan({ team: team('owner', ended), subscriptions: [ended] })).toMatchObject({ tier: 'free', status: null, renewsAt: null });
+    expect(plan({ team: team('member', null) })).toMatchObject({ tier: 'free' });
+  });
+
+  it('keeps the trial for later while a team is on', () => {
+    const started = NOW - DAY;
+    expect(plan({ account: account(started), team: team('member') })).toMatchObject({ tier: 'pro-ai', trial: null, trialUsed: true });
+    expect(plan({ account: account(started), team: team('member', teamSub({ status: 'canceled' })) })).toMatchObject({
+      tier: 'pro-ai',
+      trial: { startedAt: started },
+    });
+  });
+
+  it('puts it all together: lifetime, a team and a trial', () => {
+    expect(plan({ account: account(NOW - DAY), purchases: [lifetime], team: team('owner'), subscriptions: [teamSub()] })).toMatchObject({
+      tier: 'pro-ai',
+      lifetime: true,
+      trial: null,
+      status: 'active',
+      interval: 'year',
+      team: { role: 'owner' },
+    });
+  });
+
+  it('is still Free when signed out, whatever else is given', () => {
+    expect(planFor({ account: null, subscriptions: [], purchases: [lifetime], team: team('owner') }, NOW)).toMatchObject({ tier: 'free', email: null });
+  });
+
+  it('knows which subscriptions are live', () => {
+    for (const status of ['active', 'trialing', 'past_due']) expect(isLive(sub({ status }))).toBe(true);
+    for (const status of ['canceled', 'unpaid', 'incomplete', 'incomplete_expired', 'paused']) expect(isLive(sub({ status }))).toBe(false);
+    expect(isLive(null)).toBe(false);
+  });
+
+  it('names the new prices', () => {
+    expect([LIFETIME_LOOKUP_KEY, TEAMS_LOOKUP_KEYS.month, TEAMS_LOOKUP_KEYS.year]).toEqual(['pro-lifetime', 'teams-monthly', 'teams-yearly']);
   });
 });

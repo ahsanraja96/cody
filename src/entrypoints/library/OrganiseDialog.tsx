@@ -296,7 +296,7 @@ function Preview({ result, tabs, folders, onClose }: { result: OrganiseResult; t
     const byName = new Map(folders.map((f) => [f.name.trim().toLowerCase(), f]));
     return result.groups
       .map((g) => {
-        const matchedId = (g as AiGroup & { folderId?: string }).folderId;
+        const matchedId = g.folderId;
         const folder = (matchedId ? folders.find((f) => f.id === matchedId) : undefined) ?? byName.get(g.name.trim().toLowerCase()) ?? null;
         return {
           group: g,
@@ -340,8 +340,8 @@ function Preview({ result, tabs, folders, onClose }: { result: OrganiseResult; t
   const apply = async () => {
     setApplying(true);
     try {
-      await send({ type: 'ai-apply', groups: kept });
-      toast(`Put ${count(keptTabs, 'tab')} into ${count(kept.length, 'folder')}.`, { tone: 'success' });
+      const result = await send({ type: 'ai-apply', groups: kept });
+      toast(`Put ${count(result.applied || keptTabs, 'tab')} into ${count(result.folders ?? kept.length, 'folder')}.`, { tone: 'success' });
       onClose();
     } catch (error) {
       toast(proErrorText(error), { tone: 'error' });

@@ -1,17 +1,29 @@
 import Dexie from 'dexie';
-import { aggregates, buildDraft, type DraftMeta, type SkippedTab } from './capture';
+import { aggregates, buildDraft, modeKey, type DraftMeta, type SkippedTab } from './capture';
 import { refreshDataGuard, resetDataGuard } from './dataGuard';
 import { bumpSearchVersion, db, type TabfoldDB } from './db';
+import {
+  addFolder,
+  cleanFolderName,
+  duplicateGroups,
+  freeLimitsNow,
+  listRoom,
+  quietPlacement,
+  setTabsFolder,
+  type TabPatch,
+} from './folders';
 import { cleanKeywords } from './keywords';
-import { CURRENT_PLAN, sessionLimitReached, tagsAllowed, UNSORTED_NAME, type Plan } from './limits';
+import { CURRENT_PLAN, FREE_LIMITS, sessionLimitReached, tagsAllowed, UNSORTED_NAME, type Plan } from './limits';
 import { newId } from './format';
 import { getDeviceId, snapshotMirror } from './state';
 import { clearSyncedData } from './sync/clear';
 import { clearCloudSyncedData } from './sync/cloud';
+import { urlKey } from './sync/records';
 import { dedupeKey, displayHost } from './urls';
 import type {
   CapturedTab,
   CapturedWindow,
+  FolderRecord,
   SessionDraft,
   SessionGraph,
   SessionRecord,
@@ -414,28 +426,128 @@ export async function addDrafts(drafts: SessionDraft[], database: TabfoldDB = db
   });
 }
 
-/** Import whole sessions: each becomes its own session. */
+export interface ImportOptions {
+  deviceId?: string;
+  /**
+   * Each collection becomes a folder (source `import`), or goes into the folder that already has
+   * its name. On Free, collections past the 3rd folder go by site instead (`withoutFolder`).
+   */
+  asFolders?: boolean;
+  /** No limit on the list or on folders (a paid plan). Read from the stored plan when left out. */
+  unlimited?: boolean;
+  /** After each batch is written, with the tabs imported so far. */
+  onProgress?: (done: number) => void;
+  now?: number;
+}
+
+export interface ImportOutcome {
+  /** Folds made (one per collection that brought tabs). */
+  sessions: number;
+  tabs: number;
+  /** Always 0 now (imports aren't capped by sessions); kept for older callers. */
+  intoUnsorted: number;
+  /** Folders the tabs went into (new, or already there with the collection's name). */
+  folders: number;
+  /** Tabs left out because the free list is full (500 tabs). */
+  skippedOverLimit: number;
+  /** Collections that went by site because Free has 3 folders. */
+  withoutFolder: number;
+  /** Tabs left out because they're already in the list (or earlier in the import). */
+  duplicates: number;
+}
+
+/** Tabs written per transaction, so a huge import shows progress and never holds one giant write. */
+const IMPORT_BATCH = 2000;
+
+/**
+ * Import collections from another tab manager: each becomes its own fold (and, with `asFolders`,
+ * a folder). Addresses already in the list are left out. On Free the import stops when the list
+ * is full; what was left out is counted. Works on a page (the import dialog) and in the worker.
+ */
 export async function importSessions(
   sessions: Array<{ name: string; createdAt: number | null; windows: CapturedWindow[] }>,
-  deviceId: string,
+  deviceIdOrOptions: string | ImportOptions = {},
   database: TabfoldDB = db,
-): Promise<{ sessions: number; tabs: number; intoUnsorted: number }> {
-  let created = 0;
-  let tabs = 0;
-  let intoUnsorted = 0;
+): Promise<ImportOutcome> {
+  const options: ImportOptions = typeof deviceIdOrOptions === 'string' ? { deviceId: deviceIdOrOptions } : deviceIdOrOptions;
+  const deviceId = options.deviceId ?? (await getDeviceId());
+  const now = options.now ?? Date.now();
+  const unlimited = options.unlimited ?? !(await freeLimitsNow());
+  const room = unlimited ? Number.POSITIVE_INFINITY : (await listRoom({ tier: 'free' }, database)).room;
+  const seen = new Set((await listFoldedTabs(database)).filter((t) => !t.incognito).map((t) => modeKey(t.url, false)));
+  const live = await database.folders.where('deletedAt').equals(0).toArray();
+  const folderByName = new Map(live.map((f) => [f.name.toLowerCase(), f.id]));
+  let liveFolders = live.length;
+
+  const outcome: ImportOutcome = { sessions: 0, tabs: 0, intoUnsorted: 0, folders: 0, skippedOverLimit: 0, withoutFolder: 0, duplicates: 0 };
+  const usedFolders = new Set<string>();
+  let accepted = 0;
+  let pending: SessionDraft[] = [];
+  let pendingTabs = 0;
+  const flush = async () => {
+    if (pending.length === 0) return;
+    await addDrafts(pending, database);
+    outcome.sessions += pending.length;
+    outcome.tabs += pendingTabs;
+    pending = [];
+    pendingTabs = 0;
+    options.onProgress?.(outcome.tabs);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
   for (const session of sessions) {
-    const result = await saveCapture(
-      session.windows,
-      { name: session.name, source: 'import', deviceId, now: session.createdAt ?? Date.now() },
-      { dedupe: false },
-      database,
-    );
-    tabs += result.savedTabIds.length;
-    if (result.intoUnsorted) intoUnsorted += 1;
-    else created += 1;
+    const windows: CapturedWindow[] = [];
+    for (const window of session.windows) {
+      const kept: CapturedTab[] = [];
+      for (const tab of window.tabs) {
+        const key = modeKey(tab.url, false);
+        if (seen.has(key)) {
+          outcome.duplicates += 1;
+          continue;
+        }
+        if (accepted >= room) {
+          outcome.skippedOverLimit += 1;
+          continue;
+        }
+        seen.add(key);
+        kept.push(tab);
+        accepted += 1;
+      }
+      // Imports are never Incognito tabs.
+      if (kept.length) windows.push({ name: window.name, focused: false, bounds: window.bounds, state: window.state, tabs: kept });
+    }
+    if (windows.length === 0) continue;
+
+    let folderId: string | undefined;
+    const name = options.asFolders ? cleanFolderName(session.name) : null;
+    if (name) {
+      folderId = folderByName.get(name.toLowerCase());
+      if (!folderId && (unlimited || liveFolders < FREE_LIMITS.folders)) {
+        folderId = (await addFolder({ name, source: 'import' }, { unlimited: true, now }, database)).id;
+        folderByName.set(name.toLowerCase(), folderId);
+        liveFolders += 1;
+      } else if (!folderId) {
+        outcome.withoutFolder += 1;
+      }
+    }
+    if (folderId) usedFolders.add(folderId);
+
+    const { draft } = buildDraft(windows, {
+      name: session.name,
+      source: 'import',
+      deviceId,
+      now: session.createdAt ?? now,
+      dedupe: false,
+    });
+    if (folderId) for (const tab of draft.tabs) tab.folderId = folderId;
+    pending.push(draft);
+    pendingTabs += draft.tabs.length;
+    if (pendingTabs >= IMPORT_BATCH) await flush();
   }
+  await flush();
+  outcome.folders = usedFolders.size;
   await refreshDataGuard(database).catch(() => undefined);
-  return { sessions: created, tabs, intoUnsorted };
+  return outcome;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -615,6 +727,34 @@ export async function removeTabsWithSnapshot(tabIds: string[], database: Tabfold
   return { tabs, windows };
 }
 
+/**
+ * Remove the extra copies of pages folded more than once (every such page, or only these
+ * addresses): the newest copy stays. When it isn't in a folder but an older copy is, it moves into
+ * that folder first, so nothing leaves a folder. Returns what Undo needs.
+ */
+export async function removeDuplicateCopies(
+  urls?: string[],
+  database: TabfoldDB = db,
+): Promise<{ removed: RemovedTabs; placements: TabPatch[] }> {
+  const wanted = urls ? new Set(urls.map(urlKey)) : null;
+  const live = new Set((await database.folders.where('deletedAt').equals(0).primaryKeys()) as string[]);
+  const extras: string[] = [];
+  const moves = new Map<string, string[]>();
+  for (const group of duplicateGroups(await listFoldedTabs(database))) {
+    const [keep, ...rest] = group;
+    if (!keep || (wanted && !wanted.has(urlKey(keep.url)))) continue;
+    if (!keep.folderId || !live.has(keep.folderId)) {
+      const inFolder = rest.find((t) => t.folderId && live.has(t.folderId));
+      if (inFolder) moves.set(inFolder.folderId!, [...(moves.get(inFolder.folderId!) ?? []), keep.id]);
+    }
+    extras.push(...rest.map((t) => t.id));
+  }
+  const placements: TabPatch[] = [];
+  if (extras.length === 0) return { removed: { tabs: [], windows: [] }, placements };
+  for (const [folderId, ids] of moves) placements.push(...(await setTabsFolder(ids, folderId, {}, database)).before);
+  return { removed: await removeTabsWithSnapshot(extras, database), placements };
+}
+
 /** Undo a removal: bring the tabs (and any window or session emptied by it) back. */
 export async function putBackTabs(removed: RemovedTabs, database: TabfoldDB = db): Promise<void> {
   const now = Date.now();
@@ -690,8 +830,11 @@ export async function listFoldedTabs(database: TabfoldDB = db): Promise<TabRecor
   return database.tabs.where('sessionId').anyOf([...live]).toArray();
 }
 
+/** A tab's folder and snooze, and when they last changed. A field left out means none. */
+export type TabPlacement = Pick<TabRecord, 'folderId' | 'snoozeUntil' | 'snoozedOn' | 'placedAt'>;
+
 /** A tab as it comes from Chrome sync. */
-export interface SyncedTab {
+export interface SyncedTab extends TabPlacement {
   id: string;
   url: string;
   title: string;
@@ -702,11 +845,25 @@ export interface SyncedTab {
 export interface SyncChanges {
   /** Removed on another computer. */
   remove: string[];
-  update: Array<{ id: string; title?: string; keywords?: string[] }>;
+  update: Array<{ id: string; title?: string; keywords?: string[]; placement?: TabPlacement }>;
   /** Replace this computer's copy of an address with the newer one from another computer. */
   adopt: Array<{ localId: string; tab: SyncedTab }>;
   /** New from other computers: added to the "From your other computers" fold. */
   insert: SyncedTab[];
+  /** Folders from other computers (new or changed), and folders deleted long enough ago to drop. */
+  folders?: { write: FolderRecord[]; drop: string[] };
+}
+
+/** The row with exactly this folder and snooze (fields left out are cleared). */
+function withPlacement(row: TabRecord, placement: TabPlacement): TabRecord {
+  const { folderId: _f, snoozeUntil: _s, snoozedOn: _o, placedAt: _p, ...rest } = row;
+  return {
+    ...rest,
+    ...(placement.folderId ? { folderId: placement.folderId } : {}),
+    ...(placement.snoozeUntil ? { snoozeUntil: placement.snoozeUntil } : {}),
+    ...(placement.snoozeUntil && placement.snoozedOn ? { snoozedOn: placement.snoozedOn } : {}),
+    ...(placement.placedAt ? { placedAt: placement.placedAt } : {}),
+  };
 }
 
 async function findOrCreateInbox(
@@ -759,10 +916,17 @@ export async function applySyncChanges(
   database: TabfoldDB = db,
 ): Promise<{ inboxId: string | null }> {
   const now = options.now ?? Date.now();
-  return database.transaction('rw', [database.sessions, database.windows, database.tabs, database.meta], async () => {
+  const tables = [database.sessions, database.windows, database.tabs, database.meta, database.folders];
+  return database.transaction('rw', tables, async () => {
+    // Folders and snoozes arrive with the time they were set: keep it.
+    quietPlacement();
     const touched = new Set<string>();
     let inboxId = options.inboxId;
     let changed = false;
+
+    if (changes.folders?.write.length) await database.folders.bulkPut(changes.folders.write);
+    if (changes.folders?.drop.length) await database.folders.bulkDelete(changes.folders.drop);
+    changed ||= !!(changes.folders?.write.length || changes.folders?.drop.length);
 
     if (changes.remove.length) {
       const rows = (await database.tabs.bulkGet(changes.remove)).filter((t): t is TabRecord => !!t);
@@ -773,11 +937,12 @@ export async function applySyncChanges(
     for (const update of changes.update) {
       const row = await database.tabs.get(update.id);
       if (!row) continue;
-      await database.tabs.put({
+      const next: TabRecord = {
         ...row,
         ...(update.title !== undefined ? { title: update.title } : {}),
         ...(update.keywords ? { keywords: update.keywords } : {}),
-      });
+      };
+      await database.tabs.put(update.placement ? withPlacement(next, update.placement) : next);
       touched.add(row.sessionId);
       changed = true;
     }
@@ -787,7 +952,9 @@ export async function applySyncChanges(
       const clash = await database.tabs.get(tab.id);
       if (clash) touched.add(clash.sessionId);
       await database.tabs.delete(localId);
-      await database.tabs.put({ ...row, id: tab.id, url: tab.url, title: tab.title, savedAt: tab.savedAt, keywords: tab.keywords });
+      await database.tabs.put(
+        withPlacement({ ...row, id: tab.id, url: tab.url, title: tab.title, savedAt: tab.savedAt, keywords: tab.keywords }, tab),
+      );
       touched.add(row.sessionId);
       changed = true;
     }
@@ -800,22 +967,27 @@ export async function applySyncChanges(
         // A copy still sitting in a fold in Trash moves here.
         const clash = await database.tabs.get(tab.id);
         if (clash) touched.add(clash.sessionId);
-        await database.tabs.put({
-          id: tab.id,
-          sessionId: inbox.session.id,
-          windowId: inbox.windowId,
-          url: tab.url,
-          title: tab.title,
-          favIconUrl: '',
-          pinned: false,
-          groupName: null,
-          groupColor: null,
-          groupCollapsed: false,
-          order: order++,
-          savedAt: tab.savedAt,
-          keywords: tab.keywords,
-          urlTruncated: false,
-        });
+        await database.tabs.put(
+          withPlacement(
+            {
+              id: tab.id,
+              sessionId: inbox.session.id,
+              windowId: inbox.windowId,
+              url: tab.url,
+              title: tab.title,
+              favIconUrl: '',
+              pinned: false,
+              groupName: null,
+              groupColor: null,
+              groupCollapsed: false,
+              order: order++,
+              savedAt: tab.savedAt,
+              keywords: tab.keywords,
+              urlTruncated: false,
+            },
+            tab,
+          ),
+        );
       }
       changed = true;
     }
@@ -902,12 +1074,14 @@ export async function exportGraphs(sessionIds?: string[], database: TabfoldDB = 
 }
 
 export async function clearAllData(database: TabfoldDB = db): Promise<void> {
-  await database.transaction('rw', [database.sessions, database.windows, database.tabs, database.snapshots, database.meta], async () => {
+  const tables = [database.sessions, database.windows, database.tabs, database.snapshots, database.meta, database.folders];
+  await database.transaction('rw', tables, async () => {
     await Promise.all([
       database.sessions.clear(),
       database.windows.clear(),
       database.tabs.clear(),
       database.snapshots.clear(),
+      database.folders.clear(),
     ]);
     await bumpSearchVersion(database);
   });
@@ -928,84 +1102,67 @@ export interface BackupTab {
   title: string;
   keywords: string[];
   savedAt?: number;
+  /** The folder it was in (0.6 backups). */
+  folderId?: string;
 }
 
 /**
  * Bring back tabs from a daily backup: one new fold (`name`, e.g. "Restored · 8 Oct") with every
- * tab whose address isn't already in a live fold. Nothing is deleted or changed. The tabs count as
- * folded now, so a removal recorded on another computer since the backup doesn't take them away
- * again. No fold is made when nothing is missing.
+ * tab whose address isn't already in a live fold, each back in its folder when that folder still
+ * exists. Nothing is deleted or changed. The tabs count as folded now, so a removal recorded on
+ * another computer since the backup doesn't take them away again. No fold is made when nothing is
+ * missing. With `room` (a Free list), at most that many come back, the newest first.
  */
 export async function restoreRecords(
   records: BackupTab[],
   name: string,
-  options: { deviceId?: string; now?: number } = {},
+  options: { deviceId?: string; now?: number; room?: number } = {},
   database: TabfoldDB = db,
-): Promise<{ restored: number; sessionId: string | null }> {
+): Promise<{ restored: number; sessionId: string | null; skippedOverLimit: number }> {
   const now = options.now ?? Date.now();
-  const newestFirst = [...records].sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0));
-  const window: CapturedWindow = {
-    name: '',
-    focused: false,
-    bounds: null,
-    state: null,
-    tabs: newestFirst
-      .filter((r) => typeof r.url === 'string' && r.url)
-      .map((r) => ({
-        url: r.url,
-        title: r.title || r.url,
-        favIconUrl: '',
-        pinned: false,
-        groupName: null,
-        groupColor: null,
-        groupCollapsed: false,
-        keywords: cleanKeywords(r.keywords ?? []),
-        urlTruncated: false,
-      })),
-  };
+  const newestFirst = [...records]
+    .filter((r) => typeof r.url === 'string' && r.url)
+    .sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0));
+  const toTab = (r: BackupTab): CapturedTab => ({
+    url: r.url,
+    title: r.title || r.url,
+    favIconUrl: '',
+    pinned: false,
+    groupName: null,
+    groupColor: null,
+    groupCollapsed: false,
+    keywords: cleanKeywords(r.keywords ?? []),
+    urlTruncated: false,
+  });
   // Folded from normal windows only: a backup never holds Incognito tabs, and an Incognito copy isn't the same tab.
-  const existing = (await listFoldedTabs(database)).filter((t) => !t.incognito).map((t) => t.url);
+  const seen = new Set((await listFoldedTabs(database)).filter((t) => !t.incognito).map((t) => modeKey(t.url, false)));
+  const missing: BackupTab[] = [];
+  for (const record of newestFirst) {
+    const key = modeKey(record.url, false);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    missing.push(record);
+  }
+  const room = options.room ?? Number.POSITIVE_INFINITY;
+  const restoring = missing.slice(0, Math.max(0, room));
+  const skippedOverLimit = missing.length - restoring.length;
+  if (restoring.length === 0) return { restored: 0, sessionId: null, skippedOverLimit };
+  const window: CapturedWindow = { name: '', focused: false, bounds: null, state: null, tabs: restoring.map(toTab) };
   const { draft } = buildDraft([window], {
     name,
     source: 'import',
     deviceId: options.deviceId ?? (await getDeviceId()),
     now,
-    dedupe: true,
-    existingUrls: existing,
+    dedupe: false,
   });
-  if (draft.tabs.length === 0) return { restored: 0, sessionId: null };
+  const live = new Set((await database.folders.where('deletedAt').equals(0).primaryKeys()) as string[]);
+  draft.tabs.forEach((tab, index) => {
+    const folderId = restoring[index]?.folderId;
+    if (folderId && live.has(folderId)) tab.folderId = folderId;
+  });
   await addDrafts([draft], database);
   await refreshDataGuard(database).catch(() => undefined);
-  return { restored: draft.tabs.length, sessionId: draft.session.id };
-}
-
-/**
- * Put folded tabs into the projects the person kept (Organise with AI): every tab's project is
- * cleared, then set for the tabs in `groups` (a tab listed twice stays in the first). Returns how
- * many tabs got a project, and the projects that got any (in the order given).
- */
-export async function setProjects(
-  groups: Array<{ name: string; tabIds: string[] }>,
-  database: TabfoldDB = db,
-): Promise<{ applied: number; projects: string[] }> {
-  const projectOf = new Map<string, string>();
-  for (const group of groups) {
-    const name = group.name.trim();
-    if (!name) continue;
-    for (const id of group.tabIds) if (!projectOf.has(id)) projectOf.set(id, name);
-  }
-  return database.transaction('rw', [database.tabs], async () => {
-    await database.tabs
-      .filter((t) => t.project !== undefined)
-      .modify((t) => {
-        delete t.project;
-      });
-    const rows = (await database.tabs.bulkGet([...projectOf.keys()])).filter((t): t is TabRecord => !!t);
-    if (rows.length) await database.tabs.bulkPut(rows.map((t) => ({ ...t, project: projectOf.get(t.id)! })));
-    const used = new Set(rows.map((t) => projectOf.get(t.id)!));
-    const projects = [...new Set(groups.map((g) => g.name.trim()))].filter((name) => used.has(name));
-    return { applied: rows.length, projects };
-  });
+  return { restored: draft.tabs.length, sessionId: draft.session.id, skippedOverLimit };
 }
 
 /** The AI's name for a fold (Pro AI), shown instead of its time. Doesn't move the fold in the list. */

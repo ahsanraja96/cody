@@ -695,30 +695,55 @@ describe('Organise with AI', () => {
     expect(server.aiRequests).toHaveLength(0);
   });
 
-  it('applies the kept projects, clears the old ones, and switches the list to By project', async () => {
-    const ids = (await fold(['https://a.com', 'https://b.com', 'https://c.com', 'https://d.com'], T)).savedTabIds;
-    await db.tabs.update(ids[3]!, { project: 'Old project' });
+  it('applies the kept groups into folders: an existing one by name, new ones (source ai), and leaves By site alone', async () => {
+    await onPlan('pro-ai-monthly');
+    const ids = (await fold(['https://a.com', 'https://b.com', 'https://c.com', 'https://d.com', 'https://e.com'], T)).savedTabIds;
+    const holiday = (await send({ type: 'folder-create', name: 'Holiday in Lisbon', color: 'green' })) as {
+      ok: true;
+      data: { folder: import('@/lib/types').FolderRecord };
+    };
+    const folderId = holiday.data.folder.id;
+    // Organise maps a group named like that folder (any case) onto it.
+    server.ai = () => ({
+      status: 200,
+      body: { groups: [{ name: 'holiday in lisbon', tabIds: [ids[2]] }, { name: 'Checkout app', tabIds: [ids[0], ids[1]] }], runs: server.runs },
+    });
+    const preview = (await send({ type: 'ai-organise' })) as { ok: true; data: import('@/lib/pro/types').OrganiseResult };
+    expect(preview.data.groups.map((g) => [g.name, g.folderId ?? null, g.color])).toEqual([
+      ['holiday in lisbon', folderId, 'green'],
+      ['Checkout app', null, 'purple'],
+    ]);
+
     const groups: AiGroup[] = [
-      { name: 'Checkout app', color: 'blue', tabIds: [ids[0]!, ids[1]!] },
-      { name: 'Holiday in Lisbon', color: 'purple', tabIds: [ids[2]!, 'gone'] },
-      { name: 'Empty', color: 'yellow', tabIds: ['gone-too'] },
+      ...preview.data.groups,
+      { name: 'Reading', color: 'yellow', tabIds: [ids[3]!, ids[0]!, 'gone'] },
+      { name: 'Empty', color: 'pink', tabIds: ['gone-too'] },
     ];
-    const now = Date.now();
-    expect(await send({ type: 'ai-apply', groups })).toEqual({ ok: true, data: { applied: 3 } });
-    const byId = new Map((await db.tabs.toArray()).map((t) => [t.id, t.project]));
-    expect([byId.get(ids[0]!), byId.get(ids[1]!), byId.get(ids[2]!), byId.get(ids[3]!)]).toEqual([
-      'Checkout app',
-      'Checkout app',
-      'Holiday in Lisbon',
+    expect(await send({ type: 'ai-apply', groups })).toEqual({ ok: true, data: { applied: 4, folders: 2 } });
+    const folders = await db.folders.where('deletedAt').equals(0).toArray();
+    expect(folders.map((f) => [f.name, f.source]).sort()).toEqual([
+      ['Checkout app', 'ai'],
+      ['Holiday in Lisbon', 'person'],
+      ['Reading', 'ai'],
+    ]);
+    const byName = new Map(folders.map((f) => [f.name, f.id]));
+    const placed = new Map((await db.tabs.toArray()).map((t) => [t.id, t.folderId]));
+    // A tab listed twice stays in the first group; tabs in no group stay by site.
+    expect(ids.map((id) => placed.get(id))).toEqual([
+      byName.get('Checkout app'),
+      byName.get('Checkout app'),
+      folderId,
+      byName.get('Reading'),
       undefined,
     ]);
-    const state = await projectsState.get();
-    expect(state.projects).toEqual([
-      { name: 'Checkout app', color: 'blue' },
-      { name: 'Holiday in Lisbon', color: 'purple' },
-    ]);
-    expect(state.organisedAt).toBeGreaterThanOrEqual(now);
-    expect((await getSettings()).groupBy).toBe('project');
+    expect((await db.tabs.get(ids[0]!))!.placedAt).toBeGreaterThan(0);
+    expect(await projectsState.get()).toEqual({ projects: [], organisedAt: 0 });
+    expect((await getSettings()).groupBy).toBe('site');
+
+    // The next Organise only sends tabs that aren't in a folder.
+    server.ai = () => ({ status: 200, body: { groups: [], runs: server.runs } });
+    await send({ type: 'ai-organise' });
+    expect(server.aiRequests.at(-1)!.tabs.map((t) => t.id)).toEqual([ids[4]]);
   });
 });
 
@@ -925,6 +950,21 @@ describe('backups', () => {
     // Again: nothing is missing now, so no empty fold.
     expect(await send({ type: 'backup-restore', day: '2026-10-08' })).toEqual({ ok: true, data: { restored: 0, sessionId: null } });
     expect(await listLiveSessions()).toHaveLength(3);
+  });
+
+  it('puts restored tabs back in their folders when those folders still exist', async () => {
+    await onPlan('pro-monthly');
+    const kept = (await send({ type: 'folder-create', name: 'Kept' })) as { ok: true; data: { folder: { id: string } } };
+    const folderId = kept.data.folder.id;
+    const records: SyncRecord[] = [
+      { id: syncId('a'), url: 'https://in-folder.com', title: 'In', savedAt: toSyncTime(T), keywords: [], folderId, placedAt: toSyncTime(T) },
+      { id: syncId('b'), url: 'https://gone-folder.com', title: 'Gone', savedAt: toSyncTime(T - 1000), keywords: [], folderId: 'zzzzzzzzzzzz' },
+    ];
+    server.backups.set('2026-10-08', { items: pack(records, [], { floor: 0, limits: CLOUD_LIMITS }).items, tabCount: 2, createdAt: T });
+    expect(await send({ type: 'backup-restore', day: '2026-10-08' })).toMatchObject({ ok: true, data: { restored: 2 } });
+    const tabs = await listFoldedTabs();
+    expect(tabs.find((t) => t.url === 'https://in-folder.com')!.folderId).toBe(folderId);
+    expect(tabs.find((t) => t.url === 'https://gone-folder.com')!.folderId).toBeUndefined();
   });
 
   it('a missing or malformed day is an error, not a fold', async () => {

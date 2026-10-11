@@ -5,15 +5,20 @@ Tabfold Free never talks to a server. Pro and Pro AI do: they use one small prog
 
 - signs people in with their email address and a 6-digit code it emails them (no passwords),
 - runs the 7-day Pro AI trial (one per email, no card),
-- takes payments through Stripe Checkout (Stripe's own payment page) and lets people manage their
-  plan in Stripe's billing portal,
+- takes payments through Stripe Checkout (Stripe's own payment page): monthly or yearly plans, Pro
+  for life (one payment) and Teams (per person), and lets people manage them in Stripe's billing
+  portal,
 - keeps each Pro account's folded tabs (sync without the 500-tab limit) and a daily backup for 30 days,
-- runs Organise with AI, smart fold names and Copy as context, sending only tab titles and sites to Claude.
+- runs Teams: invitations by email, the team's shared folders, and seats that follow the team,
+- serves shared folders to their public page (a small static site in `web/`, on Netlify),
+- runs Organise with AI, smart fold names, Copy as context, Ask your tabs and the weekly tidy-up,
+  sending only tab titles and sites (and folder names) to Claude.
 
 This guide sets it up from nothing. It takes about an hour. You'll need accounts at
-[supabase.com](https://supabase.com), [stripe.com](https://stripe.com), [resend.com](https://resend.com)
-and [console.anthropic.com](https://console.anthropic.com), and a domain name you can add DNS
-records to (for sending the sign-in emails), for example `tabfold.app`.
+[supabase.com](https://supabase.com), [stripe.com](https://stripe.com), [resend.com](https://resend.com),
+[console.anthropic.com](https://console.anthropic.com) and [netlify.com](https://netlify.com), and a
+domain name you can add DNS records to (for sending the emails and for the shared folder pages),
+for example `tabfold.app`.
 
 ## What's in this folder
 
@@ -28,8 +33,9 @@ records to (for sending the sign-in emails), for example `tabfold.app`.
 | `supabase/functions/tabfold/mail.ts` | The sign-in email, sent through Resend. |
 | `supabase/functions/tabfold/ai.ts` | What Claude is asked, and the checks on its answers. |
 | `supabase/functions/tabfold/store.ts` | Reading and writing the database. |
-| `supabase/functions/_shared/plan.ts` | The plan rules: which plan an account has, from its Stripe subscription and trial. |
+| `supabase/functions/_shared/plan.ts` | The plan rules: which plan an account has, from its subscriptions, trial, Pro for life and team. |
 | `scripts/stripe-setup.mjs` | Creates the products, prices, billing portal settings and webhook in Stripe. |
+| `../web/` | The public site: the home page and shared folder pages (see `web/README.md`). |
 
 ## 1. Create the Supabase project
 
@@ -68,7 +74,7 @@ locked to the server: nobody else can read it, even with the project's public ke
 ## 4. Set up Stripe (in test mode first)
 
 Stripe takes the payments. Start in **test mode**: everything works the same, but no real money
-moves and you pay with test cards. You switch to live mode at the end (step 10).
+moves and you pay with test cards. You switch to live mode at the end (step 11).
 
 1. Sign up at stripe.com. You can do everything below before Stripe has checked your business.
 2. At the top of the dashboard, turn on **Test mode**.
@@ -94,20 +100,27 @@ moves and you pay with test cards. You switch to live mode at the end (step 10).
    - the products **Tabfold Pro** and **Tabfold Pro AI**, with four prices: $5 a month, $48 a year,
      $9 a month and $84 a year (their "lookup keys" `pro-monthly`, `pro-yearly`, `pro-ai-monthly`
      and `pro-ai-yearly` are how the server finds them),
+   - **Tabfold Pro for life**: one payment of $99 (`pro-lifetime`),
+   - **Tabfold Teams**: $10 a person a month or $96 a person a year (`teams-monthly`,
+     `teams-yearly`); a team's subscription has one "seat" per person,
    - the **billing portal** settings: invoices, changing card and address, switching between the
-     four prices, and cancelling at the end of the paid period,
+     four Pro and Pro AI prices, and cancelling at the end of the paid period. A Teams plan's seats
+     change through Tabfold (inviting and removing people), not in the portal,
    - a **webhook**: Stripe tells the server when a checkout finishes or a subscription changes.
+
+   Set up before 0.6? Run the script again: it adds the Pro for life and Teams prices and the
+   webhook's new event (`checkout.session.async_payment_succeeded`), and leaves the rest.
 
    At the end it prints a line like
    `supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_… STRIPE_PORTAL_CONFIGURATION=bpc_…`. Keep it
-   for step 7. Running the script again is safe: it only adds what's missing. (Stripe shows a
+   for step 8. Running the script again is safe: it only adds what's missing. (Stripe shows a
    webhook's signing secret only when it is created; if you lose it, it's in **Developers →
    Webhooks →** the endpoint **→ Signing secret**.)
 
 **Taxes (optional).** Stripe Tax can work out and add VAT and sales tax at checkout. Set it up in
 the dashboard under **Tax** (your address, where you're registered, and **Default tax behavior**:
 choose whether the prices include tax or tax is added on top). Then set `STRIPE_AUTOMATIC_TAX=true`
-in step 7. Stripe Tax calculates and collects; registering and filing returns is still up to you.
+in step 8. Stripe Tax calculates and collects; registering and filing returns is still up to you.
 Check with an accountant before switching on live payments.
 
 ## 5. Set up Resend (the sign-in emails)
@@ -118,17 +131,25 @@ Check with an accountant before switching on live payments.
    to an hour.
 3. **API Keys → Create API key**, with **Sending access** only. Copy it (it starts with `re_`).
 4. Choose the sender, for example `Tabfold <hello@tabfold.app>`. The part after `@` must be the
-   domain you verified. This is `EMAIL_FROM` in step 7.
+   domain you verified. This is `EMAIL_FROM` in step 8.
 
 The email says: "Your Tabfold code is 481920. It works for 10 minutes." and what it's for (signing
-in, or starting the trial).
+in, or starting the trial). Team invitations come from the same sender: "hello@truewidgets.com
+invited you to Truewidgets on Tabfold. Install Tabfold and sign in with this email to join.", with a
+link to the public site (`SHARE_BASE_URL`).
 
 ## 6. Get an Anthropic key (for Pro AI)
 
 On console.anthropic.com, open **API keys** and create a key for Tabfold. While you're there, set a
 monthly spend limit (**Settings → Limits**).
 
-## 7. Add the secrets
+## 7. Put the public site on Netlify
+
+Shared folders open on a small static site, in the `web/` folder. Follow `web/README.md`: set the
+server's address in `web/config.js`, drag the `web` folder onto Netlify, and give it your domain
+(for example `tabfold.app`). Its address is `SHARE_BASE_URL` in the next step.
+
+## 8. Add the secrets
 
 Find the extension's **Chrome id**: 32 letters, shown on `chrome://extensions` (turn on Developer
 mode) or in the Chrome Web Store dashboard. The copy you load unpacked while developing has a
@@ -142,6 +163,7 @@ supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_… STRIPE_PORTAL_CONFIGURATION
 supabase secrets set RESEND_API_KEY=re_… EMAIL_FROM="Tabfold <hello@tabfold.app>"
 supabase secrets set ANTHROPIC_API_KEY=sk-ant-…
 supabase secrets set ALLOWED_ORIGINS=chrome-extension://<Chrome id>
+supabase secrets set SHARE_BASE_URL=https://tabfold.app
 ```
 
 | Secret | What it is | Needed for |
@@ -154,6 +176,7 @@ supabase secrets set ALLOWED_ORIGINS=chrome-extension://<Chrome id>
 | `EMAIL_FROM` | The sender, on your verified domain | Sign-in and trial emails |
 | `ANTHROPIC_API_KEY` | Anthropic API key | Pro AI |
 | `ALLOWED_ORIGINS` | `chrome-extension://<id>`, comma separated for more than one (no spaces) | Everything (the extension is turned away without it) |
+| `SHARE_BASE_URL` | The public site's address, e.g. `https://tabfold.app` (no slash at the end). Defaults to `https://tabfold.app` | Shared folder links, the link in team invitations |
 | `CODE_SECRET` | Optional: a long random string for hashing sign-in codes. Defaults to the project's service role key | — |
 | `PUBLIC_URL` | Optional: the server's address, if it isn't `https://<project id>.supabase.co/functions/v1/tabfold` | — |
 | `STRIPE_API_BASE` | Tests only: points the server at a pretend Stripe. Never set it on the real server | — |
@@ -166,7 +189,7 @@ the server; don't leave it like that once you publish.
 
 Supabase gives the server its own address and database key; you don't set those.
 
-## 8. Put the server online
+## 9. Put the server online
 
 ```sh
 supabase functions deploy tabfold --no-verify-jwt
@@ -179,7 +202,7 @@ To check it, open `https://<project id>.supabase.co/functions/v1/tabfold/me` in 
 You should see `{"error":"not-signed-in", …}`. That's right: the server is running and turning away
 a visitor without a device token.
 
-## 9. Build the extension with Pro switched on
+## 10. Build the extension with Pro switched on
 
 Create a file called `.env` in the Tabfold folder (next to `package.json`) with:
 
@@ -209,6 +232,11 @@ Everything in test mode, with the extension built against your server:
    itself in. On a different profile, use **Already paid? Sign in** with the same email.
 4. **Manage.** Settings › Your plan › **Manage billing** opens Stripe's portal: change plan, card,
    see invoices, cancel. Cancelling keeps Pro until the end of the paid period.
+5. **Pro for life.** Buy it with the test card: Pro switches on and Settings says it doesn't renew.
+6. **Teams.** Buy Teams for 1 person, invite a second email, and sign in with it on another Chrome
+   profile: it joins the team, and in Stripe the subscription now has 2 seats. Remove them: back to 1.
+7. **Share a folder.** Share one, open the link in a private window, then stop sharing: the page
+   says the link doesn't work any more.
 
 Where to look when something's off:
 
@@ -221,7 +249,7 @@ Where to look when something's off:
 so they need no accounts. `npm run e2e:pro` drives the whole thing in Chromium against a pretend
 Stripe.
 
-## 10. Going live
+## 11. Going live
 
 1. In Stripe, finish **activating your account** (business details and bank account), then turn
    off **Test mode**.
@@ -280,13 +308,21 @@ Thinking tokens bill as output and are the biggest AI cost; the server already a
 - The account's folded tabs (addresses, titles, keywords), as the extension syncs them, plus one
   backup a day for 30 days. Older backups are deleted automatically.
 - How many AI runs the account used each month.
+- A Pro for life purchase: when, and its Stripe payment's id.
+- Teams: the team's name, who is in it (their accounts), the emails invited and when, and the
+  team's shared folders (as the extension syncs them; no backups).
+- Shared folders: the name, colour, page titles and addresses the owner shared, how many times
+  the page was opened, and when it changed. Anyone with the link can see them, until the owner
+  stops sharing. The public page's visits are counted against a scrambled (SHA-256) address, for a
+  minute, to stop floods; the address itself isn't kept.
 
 For the AI, only tab titles (cut to 200 characters) and sites go to Anthropic, never addresses or
 page content, and at most 300 tabs at a time. The server doesn't keep what it sent or got back.
 The server's logs never contain tokens, codes or tab titles.
 
 To delete someone's data: in the Supabase dashboard, open **Table Editor → accounts**, find their
-email and delete the row. Their computers, subscriptions, tabs, backups and AI counts go with it.
+email and delete the row. Their computers, subscriptions, purchases, tabs, backups, AI counts and
+shared folders go with it, and so does a team they own (its people go back to their own plans).
 Cancel their subscription and delete the customer in Stripe too.
 
 ## Later
@@ -307,7 +343,10 @@ Cancel their subscription and delete the customer in Stripe too.
 | --- | --- |
 | Couldn't send the code (502 `send-failed`) | Resend refused: check `RESEND_API_KEY`, that `EMAIL_FROM` uses the verified domain, and Resend's **Emails** page. |
 | Not signed in (401) | This computer hasn't signed in, or signed out. Sign in with the email again. |
-| Needs Pro / Pro AI (402) | The plan doesn't include it. Check the subscription in Stripe and that its price has one of the four lookup keys. |
+| Needs Pro / Pro AI (402) | The plan doesn't include it. Check the subscription in Stripe and that its price has one of the lookup keys. |
+| A team member lost Pro AI | The team's subscription isn't live (check it in Stripe, under the owner's customer). |
+| Seats didn't change in Stripe | The log says "Changing a team's seats failed": Stripe couldn't be reached. The next person joining or leaving catches up. |
+| A shared folder's page says it can't load | `web/config.js` has the wrong `API_URL`, or the server isn't deployed. |
 | Paid, but Pro doesn't switch on | The webhook isn't getting through: check `STRIPE_WEBHOOK_SECRET` and the endpoint's events in Stripe (**Developers → Webhooks**). The extension also asks the server, which asks Stripe directly, for a day after paying. |
 | Stripe error (502 `server`) | Stripe refused or couldn't be reached. The log says why, for example a missing price ("run server/scripts/stripe-setup.mjs"). |
 | AI failed (502) | Claude refused or failed twice; the run wasn't counted. If it keeps happening, check `ANTHROPIC_API_KEY` and the Anthropic console. |

@@ -4,7 +4,7 @@
 //
 // Secrets (`supabase secrets set ...`, see server/API.md): STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
 // STRIPE_AUTOMATIC_TAX, STRIPE_PORTAL_CONFIGURATION, RESEND_API_KEY, EMAIL_FROM, ANTHROPIC_API_KEY,
-// ALLOWED_ORIGINS, and optionally CODE_SECRET, PUBLIC_URL, STRIPE_API_BASE.
+// ALLOWED_ORIGINS, SHARE_BASE_URL, and optionally CODE_SECRET, PUBLIC_URL, STRIPE_API_BASE.
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by the Edge runtime.
 //
 // A missing secret only stops what needs it: without Stripe, checkout and billing answer 500 (and
@@ -13,7 +13,7 @@ import Anthropic from 'npm:@anthropic-ai/sdk@0.133';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { AiFailed, createModel, type CallJson } from './ai.ts';
 import { handle, type Deps } from './app.ts';
-import { createResendMailer } from './mail.ts';
+import { createResendMailer, DEFAULT_SITE_URL } from './mail.ts';
 import { createSupabaseStore } from './store.ts';
 import { createStripe } from './stripe.ts';
 
@@ -26,6 +26,8 @@ const ALLOWED_ORIGINS = env('ALLOWED_ORIGINS')
   .map((origin) => origin.trim())
   .filter(Boolean);
 const MODEL = 'claude-haiku-5-5';
+// Shared folders' pages and the link in team invitations (the `web/` site).
+const SHARE_BASE_URL = env('SHARE_BASE_URL') || DEFAULT_SITE_URL;
 
 const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -78,7 +80,7 @@ const deps: Deps = {
     webhookSecret: env('STRIPE_WEBHOOK_SECRET'),
     apiBase: env('STRIPE_API_BASE') || undefined,
   }),
-  mailer: createResendMailer({ apiKey: env('RESEND_API_KEY'), from: env('EMAIL_FROM') }),
+  mailer: createResendMailer({ apiKey: env('RESEND_API_KEY'), from: env('EMAIL_FROM'), siteUrl: SHARE_BASE_URL }),
   model: createModel(callJson),
   now: () => Date.now(),
   config: {
@@ -87,6 +89,7 @@ const deps: Deps = {
     automaticTax: env('STRIPE_AUTOMATIC_TAX').toLowerCase() === 'true',
     portalConfiguration: env('STRIPE_PORTAL_CONFIGURATION') || undefined,
     codeSecret: env('CODE_SECRET') || SERVICE_ROLE_KEY,
+    shareBaseUrl: SHARE_BASE_URL,
   },
   log: (message: string) => console.error(message),
 };

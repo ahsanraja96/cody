@@ -1,7 +1,7 @@
 import { browser } from 'wxt/browser';
 import type { FoldOutcome, TabRef } from './messages';
-import type { CapturedWindow, TabRecord, WindowRecord } from './types';
-import type { SiteKinds } from './categories';
+import type { CapturedWindow, FolderRecord, TabRecord, WindowRecord } from './types';
+import type { CategoryId, SiteKinds } from './categories';
 
 /**
  * Small pieces of state shared between the worker and the pages. Session storage is cleared when
@@ -43,6 +43,12 @@ export interface LastAction {
   patches?: Array<{ id: string; before: Pick<TabRecord, 'folderId' | 'snoozeUntil' | 'snoozedOn'> }>;
   /** Tabs this action removed from the list (a tab closed in a live folder's group): Undo puts them back. */
   putBack?: { tabs: TabRecord[]; windows: WindowRecord[] };
+  /** Folders this action deleted (Delete folder): Undo brings them back as they were. */
+  folders?: FolderRecord[];
+  /** Folders this action made (a tidy-up suggestion's new folder): Undo deletes them again. */
+  foldersMade?: string[];
+  /** A site this action moved to another kind: Undo puts its kind back (`before` null: it had none). */
+  siteKind?: { host: string; before: { kind: CategoryId; at: number } | null };
 }
 
 /** A restore in progress, so a popup opened mid-restore can show it and offer Cancel. */
@@ -93,6 +99,8 @@ export interface SyncStatus {
   localOnly: number;
   at: number;
   error?: string;
+  /** Tabs from the other computers that didn't come in because the free list is full (they stay shared). */
+  waiting?: number;
 }
 
 /** Chrome downloaded a new version; it installs when the pages reload (see runtime.onUpdateAvailable). */

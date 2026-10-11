@@ -134,9 +134,9 @@ export type Command =
   | { type: 'trial-start' }
   /** Sign out on this computer (other computers stay signed in). */
   | { type: 'signout' }
-  /** Ask the AI for projects for the folded tabs (a preview; nothing changes). */
+  /** Ask the AI for folders for the folded tabs not in one yet (a preview; nothing changes). */
   | { type: 'ai-organise' }
-  /** Put tabs in the projects the person kept (after the preview) and switch to By project. */
+  /** Put tabs in the folders the person kept (after the preview), making the new ones. */
   | { type: 'ai-apply'; groups: AiGroup[] }
   /** A group's tabs as Markdown context for Claude, ChatGPT or Cursor, with a short AI summary. */
   | { type: 'ai-context'; tabRecordIds: string[]; name: string }
@@ -354,10 +354,12 @@ export interface CommandResults {
   'trial-start': SigninResult;
   signout: { ok: true };
   'ai-organise': OrganiseResult;
-  'ai-apply': { applied: number };
+  /** `folders`: new folders made (0.6). */
+  'ai-apply': { applied: number; folders?: number };
   'ai-context': { markdown: string };
   'backups-list': BackupInfo[];
-  'backup-restore': { restored: number; sessionId: string | null };
+  /** `skippedOverLimit`: tabs left out because the free list is full (0.6). */
+  'backup-restore': { restored: number; sessionId: string | null; skippedOverLimit?: number };
   'cloud-sync-now': { ok: boolean };
   'milestone-dismiss': { ok: boolean };
   'reopen-everything': { opened: number; failed: number };

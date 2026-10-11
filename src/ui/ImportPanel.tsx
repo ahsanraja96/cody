@@ -40,14 +40,6 @@ const SOURCES: Source[] = [
   { id: 'links', name: 'A list of links', how: 'Paste or a file', letter: '↗', color: '#888888', help: 'Paste links, one per line. A title can follow after a space, or write [title](link).', paste: true, folders: false },
 ];
 
-const NAMES: Record<SourceId, string> = {
-  onetab: 'Imported from OneTab',
-  toby: 'Imported from Toby',
-  workona: 'Imported from Workona',
-  'session-buddy': 'Imported from Session Buddy',
-  chrome: 'Imported bookmarks',
-  links: 'Imported links',
-};
 
 type Step =
   | { kind: 'pick' }
@@ -114,7 +106,6 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
     setStep({ kind: 'importing', source, done: 0, total });
     try {
       const outcome = await importCollections(sessions, {
-        name: NAMES[source.id],
         asFolders: source.folders,
         unlimited,
         onProgress: (done) => setStep({ kind: 'importing', source, done, total }),
