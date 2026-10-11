@@ -234,8 +234,13 @@ async function nothingLive(): Promise<boolean> {
 }
 
 /** A tab was made or changed: it joined a live group, left one, or went to another page. */
-async function onTab(tab: Browser.tabs.Tab): Promise<void> {
-  if (tab.id === undefined || (await nothingLive())) return;
+async function onTab(event: Browser.tabs.Tab): Promise<void> {
+  if (event.id === undefined || (await nothingLive())) return;
+  const liveGroup = await bindingForGroup(event.groupId);
+  if (!liveGroup && !(event.id in (await tabMap()))) return;
+  // Changes are handled one at a time, so the event can be out of date (a tab grouped since): look again.
+  const tab = await browser.tabs.get(event.id).catch(() => undefined);
+  if (tab?.id === undefined) return;
   const binding = await bindingForGroup(tab.groupId);
   const mapped = (await tabMap())[tab.id];
   if (mapped && binding?.folderId !== mapped.folderId) {
@@ -309,10 +314,20 @@ export function onLiveGroupRemoved(group: { id: number }): Promise<void> {
   });
 }
 
-/** The window closed: its live folders stop being live and keep their tabs. */
+/**
+ * The window closed: its live folders stop being live and keep their tabs. A group dragged to
+ * another window first stays live there.
+ */
 export function onLiveWindowRemoved(windowId: number): Promise<void> {
   return serial(async () => {
     if (await nothingLive()) return;
+    const moved: LiveFolder[] = [];
+    for (const binding of Object.values(await bindings())) {
+      if (binding.windowId !== windowId) continue;
+      const group = await browser.tabGroups.get(binding.groupId).catch(() => undefined);
+      if (group && group.windowId !== windowId) moved.push({ ...binding, windowId: group.windowId });
+    }
+    if (moved.length) await saveBindings({ ...(await bindings()), ...Object.fromEntries(moved.map((b) => [b.folderId, b])) });
     await dropBindings((b) => b.windowId === windowId);
   });
 }

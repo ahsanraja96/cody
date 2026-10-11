@@ -227,6 +227,26 @@ describe('a live folder saves itself', () => {
     expect(await folderUrls()).toEqual(['https://a.com', 'https://b.com']);
   });
 
+  it('changes from before the group was made (handled after it) don’t take tabs out of the folder', async () => {
+    const { tabs } = await openLive(['https://a.com', 'https://b.com']);
+    // Chrome told the worker about loading while the tabs weren't grouped yet.
+    for (const tab of tabs()) await onLiveTabUpdated(tab.id, { status: 'complete' }, view({ ...tab, groupId: -1 }));
+    await settleLive();
+    expect(await folderUrls()).toEqual(['https://a.com', 'https://b.com']);
+    expect(await lastAction.get()).toBeUndefined();
+  });
+
+  it('a group dragged to another window stays live there', async () => {
+    const { binding } = await openLive(['https://a.com']);
+    const other = chrome.openWindow(['https://other.com']);
+    chrome.groups.find((g) => g.id === binding.groupId)!.windowId = other.windowId;
+    for (const tab of chrome.tabs.filter((t) => t.groupId === binding.groupId)) tab.windowId = other.windowId;
+    await onLiveWindowRemoved(binding.windowId);
+    expect((await liveFolders.get())[FOLDER.id]).toMatchObject({ groupId: binding.groupId, windowId: other.windowId });
+    expect(await route({ type: 'live-focus', folderId: FOLDER.id })).toEqual({ ok: true, data: { focused: true } });
+    expect(chrome.focusCalls.at(-1)).toBe(other.windowId);
+  });
+
   it('a tab Chrome swaps for another is still the same saved tab', async () => {
     const { tabs, binding } = await openLive(['https://a.com']);
     const [a] = tabs();
