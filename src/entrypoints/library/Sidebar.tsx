@@ -107,8 +107,10 @@ function NewFolderField({ folders, onDone }: { folders: readonly FolderRecord[];
   const [name, setName] = useState('');
   const color = nextFolderColor(folders);
   const busy = useRef(false);
+  const cancelled = useRef(false);
   const submit = async () => {
-    if (busy.current) return;
+    // Esc already closed it (a blur can follow while the field goes away).
+    if (busy.current || cancelled.current) return;
     if (!name.trim()) {
       onDone();
       return;
@@ -136,6 +138,7 @@ function NewFolderField({ folders, onDone }: { folders: readonly FolderRecord[];
             } else if (e.key === 'Escape') {
               e.preventDefault();
               e.stopPropagation();
+              cancelled.current = true;
               onDone();
             }
           }}

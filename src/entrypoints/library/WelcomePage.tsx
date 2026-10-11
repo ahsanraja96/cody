@@ -153,7 +153,7 @@ export function WelcomePage({ onBack, onOrganise, onTeam }: { onBack: () => void
           </OnItem>
           {ai && (
             <OnItem icon={<Sparkles size={16} strokeWidth={1.75} />} title="Organise with AI">
-              Sorts your folded tabs into projects. {AI_RUNS_PER_MONTH} runs a month.
+              Puts your folded tabs into folders. {AI_RUNS_PER_MONTH} runs a month.
             </OnItem>
           )}
         </ul>

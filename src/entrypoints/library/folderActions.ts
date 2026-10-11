@@ -9,7 +9,7 @@ import { dismissToast, toast, type ToastOptions } from '@/ui/components/Toast';
 import { cleanFolderName, isSnoozed, type TabGroup } from '@/ui/folders';
 import { hasFreeLimits } from '@/ui/hooks';
 import { errorCode, proErrorText } from '@/ui/pro';
-import { snoozeTime } from '@/ui/snooze';
+import { formatSnoozeTime } from '@/ui/snooze';
 import { count } from './format';
 import { goToPlans } from './router';
 import { openDialog, useLibraryUi } from './uiStore';
@@ -208,7 +208,7 @@ export async function dropOnGroup(tab: TabRecord, group: TabGroup, siteKinds: Si
 // Snooze
 
 function untilText(until: number): string {
-  return snoozeTime(until).replace(/^(Today|Tomorrow|Yesterday)/, (w) => w.toLowerCase());
+  return formatSnoozeTime(until).replace(/^(Today|Tomorrow|Yesterday)/, (w) => w.toLowerCase());
 }
 
 export async function snoozeTabs(tabs: TabRecord[], until: number): Promise<void> {

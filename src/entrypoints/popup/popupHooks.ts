@@ -105,7 +105,6 @@ export function useFold() {
   const action = useLastAction();
   const [remote, setRemote] = useState<ActiveFold | undefined>();
   const [local, setLocal] = useState<ActiveFold | null>(null);
-  const [failure, setFailure] = useState<{ startedAt: number; value: FoldFailure } | null>(null);
   const openedAt = useRef(Date.now());
   const seenRunning = useRef(false);
 
@@ -133,10 +132,14 @@ export function useFold() {
       view = { kind: 'folding', fold };
     } else if (!running && finishedAt >= openedAt.current - FINISHED_FOLD_SHOWN_MS && !undone(fold, action)) {
       if (fold.phase === 'failed') {
-        // The command's own answer has the code; a fold started elsewhere only has its message.
-        const known = failure && failure.startedAt === fold.startedAt ? failure.value : null;
-        const parsed = listFullFrom(fold.error);
-        const value: FoldFailure = known ?? (parsed ? { code: 'list-full', details: Object.fromEntries(Object.entries(parsed).filter(([, v]) => v !== undefined)) as Record<string, number> } : {});
+        // The worker keeps the failure's code ('list-full' with { room, needed, limit }); an older
+        // worker only gave its message.
+        const parsed = fold.code ? null : listFullFrom(fold.error);
+        const value: FoldFailure = fold.code
+          ? { code: fold.code, details: fold.details }
+          : parsed
+            ? { code: 'list-full', details: Object.fromEntries(Object.entries(parsed).filter(([, v]) => v !== undefined)) as Record<string, number> }
+            : {};
         view = { kind: 'failed', fold, failure: value };
       } else view = { kind: 'done', fold, seenRunning: seenRunning.current };
     }
@@ -161,8 +164,11 @@ export function useFold() {
       const outcome = await send({ type: 'fold', ...options });
       settle({ phase: 'done', foldId: outcome.foldId, total: outcome.savedTabs + outcome.skippedDuplicates, closed: outcome.closedTabs, outcome });
     } catch (error) {
-      if (error instanceof CommandError) setFailure({ startedAt, value: { code: error.code, details: error.details } });
-      settle({ phase: 'failed', error: error instanceof Error ? error.message : 'Something went wrong. Please try again.' });
+      settle({
+        phase: 'failed',
+        error: error instanceof Error ? error.message : 'Something went wrong. Please try again.',
+        ...(error instanceof CommandError && error.code ? { code: error.code, details: error.details } : {}),
+      });
     }
   };
 

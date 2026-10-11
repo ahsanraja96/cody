@@ -284,7 +284,6 @@ export function MakeRoomDialog({ open, onClose }: { open: boolean; onClose: () =
           </button>
           <button
             type="button"
-            data-autofocus
             onClick={() => {
               onClose();
               goToPlans();

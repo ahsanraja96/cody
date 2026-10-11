@@ -13,7 +13,7 @@ import { anchorBelow, Menu, type MenuAnchor, type MenuEntry } from '@/ui/compone
 import { cx } from '@/ui/cx';
 import { groupTabs, type TabGroup } from '@/ui/folders';
 import { modKey, useNow } from '@/ui/hooks';
-import { snoozeTime } from '@/ui/snooze';
+import { formatSnoozeTime } from '@/ui/snooze';
 import { openFolded, openGroup, removeOne, undoRemoval, useRemovals, type Removal } from './actions';
 import { dropOnGroup, focusLive, foldLive, renameFolder, wakeTabs } from './folderActions';
 import { ago, count } from './format';
@@ -360,7 +360,7 @@ function SnoozedRow({ tab, now }: { tab: TabRecord; now: number }) {
       </button>
       <span className="inline-flex shrink-0 items-center gap-1.5 text-small text-text-2" title={when < now ? 'Comes back on the computer that snoozed it' : undefined}>
         <Clock size={13} strokeWidth={1.75} aria-hidden className="text-text-3" />
-        {snoozeTime(when, now)}
+        {formatSnoozeTime(when, now)}
       </span>
       <button type="button" onClick={() => void wakeTabs([tab])} className={cx(SECONDARY_SM, 'ml-1.5 h-[26px]')}>
         Wake now

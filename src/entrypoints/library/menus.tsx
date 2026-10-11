@@ -88,7 +88,7 @@ export function snoozeEntries(tabs: TabRecord[], title: string): MenuEntry[] {
     key: choice.id,
     label: choice.label,
     icon: <Clock {...ICON} />,
-    hint: choice.detail,
+    hint: choice.hint,
     onSelect: () => void snoozeTabs(tabs, choice.at),
   }));
   entries.push({ type: 'separator', key: 's' });

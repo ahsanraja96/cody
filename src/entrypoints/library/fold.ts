@@ -114,11 +114,16 @@ export function useFoldToast(): void {
   useEffect(() => {
     if (!fold) return;
     if (fold.phase === 'failed' && fold.finishedAt && Date.now() - fold.finishedAt < 30_000) {
-      const full = listFullFrom(fold.error);
+      // The worker keeps the failure's code ('list-full' with { room, needed, limit }); an older one only its message.
+      const full = fold.code ? null : listFullFrom(fold.error);
       useFoldError.getState().set({
         message: fold.error ?? 'Something went wrong.',
-        quota: !full && /storage|quota|space/i.test(fold.error ?? ''),
-        ...(full ? { code: 'list-full', details: Object.fromEntries(Object.entries(full).filter(([, v]) => v !== undefined)) as Record<string, number> } : {}),
+        quota: fold.code === 'quota' || (!fold.code && !full && /storage|quota|space/i.test(fold.error ?? '')),
+        ...(fold.code
+          ? { code: fold.code, details: fold.details }
+          : full
+            ? { code: 'list-full', details: Object.fromEntries(Object.entries(full).filter(([, v]) => v !== undefined)) as Record<string, number> }
+            : {}),
       });
       return;
     }

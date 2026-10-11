@@ -236,7 +236,7 @@ export function YourPlan({ open, onRestore }: { open: boolean; onRestore: () => 
               <Chip tone="neutral">Ends {longDate(plan.cancelAt)}</Chip>
             </>
           }
-          sub={`Cancelled; everything stays on until then. Your list${ai ? ', projects' : ''} and backups stay after it ends.`}
+          sub={`Cancelled; everything stays on until then. Your list, folders and backups stay after it ends.`}
           actions={
             <button type="button" disabled={busy !== null} onClick={() => void billing('keep')} className={SECONDARY_SM}>
               {external('keep')}

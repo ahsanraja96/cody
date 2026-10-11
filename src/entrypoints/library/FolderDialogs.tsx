@@ -7,7 +7,7 @@ import { Modal } from '@/ui/components/Modal';
 import { cx } from '@/ui/cx';
 import { cleanFolderName, FOLDER_COLORS, FOLDER_NAME_MAX, nextFolderColor } from '@/ui/folders';
 import { useFolders, usePlan } from '@/ui/hooks';
-import { fromLocalInput, snoozeTime, toLocalInput } from '@/ui/snooze';
+import { formatSnoozeTime, fromLocalInput, toLocalInput } from '@/ui/snooze';
 import { createFolder, deleteFolder, folderLimitReached, moveToFolder, snoozeTabs, startLive } from './folderActions';
 import { count } from './format';
 import { goToPlans } from './router';
@@ -378,7 +378,7 @@ function SnoozeAtDialog({ tabRecordIds, title, onClose }: { tabRecordIds: string
         className="h-9 rounded-control border border-border-strong bg-surface px-2.5 text-text outline-none focus:border-accent focus:shadow-[0_0_0_3px_var(--tf-accent-soft)]"
       />
       <p role="status" className="m-0 mt-2 text-small text-text-2">
-        {valid ? `It reopens in the background ${snoozeTime(until!).replace(/^(Today|Tomorrow)/, (w) => w.toLowerCase())}.` : 'Pick a time in the future.'}
+        {valid ? `It reopens in the background ${formatSnoozeTime(until!).replace(/^(Today|Tomorrow)/, (w) => w.toLowerCase())}.` : 'Pick a time in the future.'}
       </p>
     </SmallDialog>
   );

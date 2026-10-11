@@ -204,10 +204,11 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
     body = (
       <>
         <div className="grid grid-cols-2 gap-2 max-[480px]:grid-cols-1">
-          {SOURCES.map((source) => (
+          {SOURCES.map((source, index) => (
             <button
               key={source.id}
               type="button"
+              data-autofocus={index === 0 ? true : undefined}
               onClick={() => void chooseSource(source)}
               className="flex h-[52px] items-center gap-2.5 rounded-card border border-border-strong bg-surface px-3 text-left hover:bg-hover"
             >

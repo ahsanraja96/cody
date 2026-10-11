@@ -44,7 +44,7 @@ export function SnoozeBackLine({ back }: { back: SnoozeBack | undefined }) {
             {n === 1 ? '1 tab came back from snooze' : `${n.toLocaleString()} tabs came back from snooze`}
           </div>
           {names && (
-            <div dir="auto" className="truncate text-small text-text-2">
+            <div dir="auto" className="line-clamp-2 text-small text-text-2">
               {names}
               {shown.titles.length > 2 ? ` and ${shown.titles.length - 2} more` : ''} — opened in the background
             </div>
@@ -267,7 +267,7 @@ export function SearchActions({
                 className={cx(row, 'h-8 pl-9')}
               >
                 <span className="flex-1">{choice.label}</span>
-                <span className="text-small text-text-3">{choice.detail}</span>
+                <span className="text-small text-text-3">{choice.hint}</span>
               </button>
             ))}
         </>

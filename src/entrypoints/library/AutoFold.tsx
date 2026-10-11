@@ -2,7 +2,7 @@ import { useId, useState, type ReactNode } from 'react';
 import { ArrowRight, Plus, Sparkles, Trash2, Zap } from 'lucide-react';
 import { FREE_LIMITS } from '@/lib/limits';
 import type { PlanState } from '@/lib/pro/types';
-import type { AutoFoldNotice } from '@/lib/state';
+import type { AutoFoldNotice, AutoFoldRuns } from '@/lib/state';
 import type { AutoFoldInto, AutoFoldRule, AutoFoldWhen, Settings } from '@/lib/settings';
 import { normalizeDomain } from '@/lib/settings';
 import type { FolderRecord } from '@/lib/types';
@@ -92,12 +92,15 @@ export function AutoFoldSection({
   plan,
   folders,
   notice,
+  runs,
 }: {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
   plan: PlanState;
   folders: readonly FolderRecord[];
   notice: AutoFoldNotice | undefined;
+  /** When each rule last ran (`autoFoldLast`). */
+  runs: AutoFoldRuns;
 }) {
   const [adding, setAdding] = useState(false);
   const free = hasFreeLimits(plan);
@@ -152,7 +155,8 @@ export function AutoFoldSection({
           {rules.map((rule) => {
             const d = describeRule(rule, folders);
             const pro = free && !freeRule(rule);
-            const ran = notice && notice.ruleId === rule.id ? `Last ran ${foldTime(notice.at).replace(/^(Today|Yesterday)/, (w) => w.toLowerCase())} · folded ${count(notice.folded, 'tab')}` : null;
+            const last = runs[rule.id] ?? (notice && notice.ruleId === rule.id ? { at: notice.at, folded: notice.folded } : undefined);
+            const ran = last ? `Last ran ${foldTime(last.at).replace(/^(Today|Yesterday)/, (w) => w.toLowerCase())} · folded ${count(last.folded, 'tab')}` : null;
             return (
               <li key={rule.id} className="group/rule flex items-start gap-3.5 border-t border-border py-3.5 first:border-t-0 pl-1">
                 <Zap size={16} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0 text-accent-text" />

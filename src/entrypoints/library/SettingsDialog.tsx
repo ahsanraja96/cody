@@ -10,7 +10,7 @@ import { confirmAction } from '@/ui/components/Dialog';
 import { ProTag } from '@/ui/components/ProBits';
 import { toast, ToastViewport } from '@/ui/components/Toast';
 import { cx } from '@/ui/cx';
-import { useAutoFoldNotice, useCloudSyncStatus, useFolders, useIncognitoAccess, usePlan, useSettings, useSiteKinds } from '@/ui/hooks';
+import { useAutoFoldLast, useAutoFoldNotice, useCloudSyncStatus, useFolders, useIncognitoAccess, usePlan, useSettings, useSiteKinds } from '@/ui/hooks';
 import { proErrorText } from '@/ui/pro';
 import { clearEverything, errorText } from './actions';
 import { AutoFoldSection } from './AutoFold';
@@ -179,6 +179,7 @@ export function SettingsDialog({
   const folders = useFolders() ?? [];
   const siteKinds = useSiteKinds();
   const autoNotice = useAutoFoldNotice();
+  const autoRuns = useAutoFoldLast();
   const [backups, setBackups] = useState(false);
   const [removing, setRemoving] = useState(false);
 
@@ -294,7 +295,7 @@ export function SettingsDialog({
               }
               control={<Switch checked={settings.autoSuspend} onChange={(v) => update({ autoSuspend: v })} label="Put idle tabs to sleep" />}
             />
-            <AutoFoldSection settings={settings} update={update} plan={plan} folders={folders} notice={autoNotice} />
+            <AutoFoldSection settings={settings} update={update} plan={plan} folders={folders} notice={autoNotice} runs={autoRuns} />
             {pro ? (
               <SettingRow
                 title="Sync with your Tabfold account"

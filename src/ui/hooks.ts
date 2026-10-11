@@ -524,3 +524,12 @@ export function useAutoFoldNotice(): AutoFoldNotice | undefined {
 export function useTidy(): TidyState | undefined {
   return useStored(tidyStateItem.get, tidyStateItem.watch);
 }
+
+// ---- 0.6 screens (UI) ------------------------------------------------------------------------------
+
+import { autoFoldLast as autoFoldLastState, type AutoFoldRuns } from '@/lib/state';
+
+/** When each auto-fold rule last ran and what it folded, by rule id ("Last ran today 14:00 · folded 6 tabs"). */
+export function useAutoFoldLast(): AutoFoldRuns {
+  return useStored(autoFoldLastState.get, autoFoldLastState.watch) ?? {};
+}

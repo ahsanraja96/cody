@@ -135,11 +135,21 @@ export function SearchResults({
   });
 
   const trimmed = query.trim();
+  if (result && rows.length === 0 && top) {
+    // Ask your tabs answered; the word search found nothing, which is the usual case for a question.
+    return (
+      <>
+        {top}
+        <p role="status" className="m-0 px-2 text-small text-text-3">
+          No tab has all of those words in its title or address.
+        </p>
+      </>
+    );
+  }
   if (result && rows.length === 0) {
     return (
       <>
-      {top}
-      <div role="status" className={cx('flex flex-col items-center gap-2 px-3 pb-3 text-center', top ? 'pt-8' : 'pt-16')}>
+      <div role="status" className="flex flex-col items-center gap-2 px-3 pt-16 pb-3 text-center">
         <Search size={24} strokeWidth={1.75} aria-hidden className="text-text-3" />
         <div className="text-section font-semibold">No tabs match “{trimmed}”</div>
         <p className="m-0 max-w-[320px] text-text-2">
