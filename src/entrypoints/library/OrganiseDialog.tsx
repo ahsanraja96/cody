@@ -10,8 +10,9 @@ import { Favicon } from '@/ui/components/Favicon';
 import { FaviconStrip } from '@/ui/components/FoldedList';
 import { toast, ToastViewport } from '@/ui/components/Toast';
 import { cx } from '@/ui/cx';
-import { useAiRuns, usePlan, usePlanEnded, useSettings } from '@/ui/hooks';
-import { errorCode, openPlanPage, proErrorText, runsLine, shortDate, trialUsed } from '@/ui/pro';
+import { useAiRuns, usePlan, useSettings } from '@/ui/hooks';
+import { errorCode, proErrorText, runsLine, shortDate, trialUsed } from '@/ui/pro';
+import { startTrialFlow } from './AccountDialogs';
 import { count } from './format';
 import { goToPlans } from './router';
 
@@ -481,29 +482,21 @@ const EXAMPLES: Array<{ name: string; color: TabGroupColor }> = [
   { name: 'Holiday in Lisbon', color: 'yellow' },
 ];
 
-/** "Organise with AI · free plan" (Pro-States): what it does, the trial, and the plans. */
+/**
+ * "Organise with AI · free plan" (Pro-States): what it does, the trial, and the plans. "Start 7-day
+ * free trial" opens the email-code dialog over it (or starts the trial at once when signed in);
+ * once the trial is on, the first run follows here.
+ */
 function Teaser({ onClose }: { onClose: () => void }) {
   const plan = usePlan();
-  const ended = usePlanEnded();
   const configured = proConfigured();
-  const offerTrial = !trialUsed(plan, ended?.wasTrial === true);
-  const [waiting, setWaiting] = useState(false);
+  const offerTrial = !trialUsed(plan);
   const [busy, setBusy] = useState(false);
-
-  // Back from the trial page: read the plan again, so the first run starts as soon as it counts.
-  useEffect(() => {
-    if (!waiting) return;
-    const refresh = () => void send({ type: 'plan-refresh' }).catch(() => undefined);
-    window.addEventListener('focus', refresh);
-    return () => window.removeEventListener('focus', refresh);
-  }, [waiting]);
 
   const startTrial = async () => {
     setBusy(true);
-    const problem = await openPlanPage({ page: 'trial' });
+    await startTrialFlow(plan);
     setBusy(false);
-    if (problem) toast(problem, { tone: 'error' });
-    else setWaiting(true);
   };
 
   return (
@@ -535,46 +528,39 @@ function Teaser({ onClose }: { onClose: () => void }) {
           Pro isn’t switched on in this build yet.
         </p>
       )}
-      {waiting ? (
-        <p role="status" className="m-0 flex items-center gap-2 rounded-control bg-accent-soft px-3 py-2 text-small text-text-2">
-          <LoaderCircle size={14} aria-hidden className="tf-spin shrink-0 text-accent-text" />
-          Finish starting your trial in the new tab. Organising starts here as soon as it’s on.
-        </p>
-      ) : (
-        <div className="flex items-center gap-2.5">
-          {offerTrial ? (
-            <button type="button" autoFocus disabled={!configured || busy} onClick={() => void startTrial()} className={cx(PRIMARY, 'h-8 px-3 text-small')}>
-              {busy && <LoaderCircle size={14} aria-hidden className="tf-spin" />}
-              Start {TRIAL_DAYS}-day free trial
-            </button>
-          ) : (
-            <button
-              type="button"
-              autoFocus
-              onClick={() => {
-                onClose();
-                goToPlans();
-              }}
-              className={cx(PRIMARY, 'h-8 px-3 text-small')}
-            >
-              See plans
-            </button>
-          )}
-          {offerTrial && (
-            <a
-              href="#/pro"
-              onClick={(e) => {
-                e.preventDefault();
-                onClose();
-                goToPlans();
-              }}
-              className="text-small font-semibold no-underline hover:underline"
-            >
-              See plans
-            </a>
-          )}
-        </div>
-      )}
+      <div className="flex items-center gap-2.5">
+        {offerTrial ? (
+          <button type="button" autoFocus disabled={!configured || busy} onClick={() => void startTrial()} className={cx(PRIMARY, 'h-8 px-3 text-small')}>
+            {busy && <LoaderCircle size={14} aria-hidden className="tf-spin" />}
+            Start {TRIAL_DAYS}-day free trial
+          </button>
+        ) : (
+          <button
+            type="button"
+            autoFocus
+            onClick={() => {
+              onClose();
+              goToPlans();
+            }}
+            className={cx(PRIMARY, 'h-8 px-3 text-small')}
+          >
+            See plans
+          </button>
+        )}
+        {offerTrial && (
+          <a
+            href="#/pro"
+            onClick={(e) => {
+              e.preventDefault();
+              onClose();
+              goToPlans();
+            }}
+            className="text-small font-semibold no-underline hover:underline"
+          >
+            See plans
+          </a>
+        )}
+      </div>
       <p className="m-0 text-meta text-text-3">
         {offerTrial ? 'No card needed. ' : ''}Only titles and addresses are sent, never page content.
       </p>

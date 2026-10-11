@@ -240,7 +240,7 @@ Use boring, well-supported tools: WXT + TypeScript + React on Manifest V3, Index
 | Search | MiniSearch (or FlexSearch) in a web worker | Instant fuzzy search over titles and URLs without freezing the UI. |
 | Background logic | MV3 service worker + chrome.alarms | Wakes up, does the job, sleeps. No always-on background page leaking memory. |
 | Backend (Pro) | [Supabase](https://www.jetadmin.io/blog/supabase-pricing-2026-guide-to-plans-limits-and-real-world-costs/) (Postgres, Auth, Row Level Security, Edge Functions) | Auth, database and server functions in one place; free tier to start, $25/month Pro after. |
-| Payments | [ExtensionPay](https://extensionpay.com/) to start; a merchant of record (Paddle or Lemon Squeezy) once revenue grows | ExtensionPay is the quickest way to charge inside an extension. A merchant of record handles UK VAT and global sales tax for you. |
+| Payments | [Stripe](https://stripe.com/) Checkout and its billing portal, opened in a tab; a merchant of record (Paddle or Lemon Squeezy) if tax filing becomes a burden | No payment code inside the extension and no install warning. Stripe Tax can add VAT and sales tax at checkout; a merchant of record also files it for you. |
 | AI (Pro AI) | Claude Haiku 5.5 via a Supabase Edge Function | Very cheap and fast for sorting and labelling; the API key never ships inside the extension. |
 | Error tracking | Sentry (browser SDK) | See crashes and errors from real users, with no page content logged. |
 | Testing | Vitest (unit) + Playwright (end-to-end with a real Chrome) | Test the save/restore logic and full flows automatically. |
@@ -376,7 +376,7 @@ The free version costs nothing to run because everything happens on the user's m
 | --- | --- | --- |
 | Free user | $0 | No server use at all. |
 | Pro user sync storage | Pennies | A heavy user with 5,000 saved tabs is roughly 2 MB; 8 GB covers thousands of users. |
-| Payment fees, [ExtensionPay](https://fungies.io/monetize-chrome-extension-2026) | 5% + Stripe's card fee | On a $5 monthly charge that is roughly 10 to 15%; yearly plans cut this because the fixed card fee is paid once. |
+| Payment fees, [Stripe](https://stripe.com/pricing) | Stripe's card fee, plus Stripe Billing's fee (and Stripe Tax's, if on) | On a $5 monthly charge the fixed part of the card fee weighs most; yearly plans cut this because it is paid once. |
 | AI per run, Claude Haiku 5.5 | About $0.002 | Assumes 100 tabs: about 3,500 input tokens and up to 3,500 output tokens (including thinking at low effort) at [$0.10 / $0.50 per million](https://www.vktr.com/ai-platforms/anthropic-cuts-smallmodel-pricing-90-with-claude-haiku-55/). |
 | AI per Pro AI user per month | About $0.06 typical (30 runs); $0.60 maximum (300-run cap) | The cap makes the worst case predictable. |
 
@@ -384,10 +384,10 @@ The free version costs nothing to run because everything happens on the user's m
 
 - Set Haiku's effort to low for auto-organise; thinking tokens bill as output and are the biggest AI cost driver.
 - Keep Supabase's spend cap on (it is on by default on Pro).
-- Taxes: you sell to UK and EU consumers, so VAT applies. ExtensionPay does not handle tax for you; a merchant of record (Paddle or Lemon Squeezy) does, for a higher fee. Check with an accountant before switching on payments.
+- Taxes: you sell to UK and EU consumers, so VAT applies. Stripe Tax can work it out and collect it at checkout, but you still register and file; a merchant of record (Paddle or Lemon Squeezy) does that for you, for a higher fee. Check with an accountant before switching on payments.
 - Prices for AI models and Supabase change; recheck before launch.
 
-Sources: [Supabase pricing summary](https://www.jetadmin.io/blog/supabase-pricing-2026-guide-to-plans-limits-and-real-world-costs/) · [Haiku 5.5 pricing report](https://www.vktr.com/ai-platforms/anthropic-cuts-smallmodel-pricing-90-with-claude-haiku-55/) · [Extension payment options](https://fungies.io/monetize-chrome-extension-2026) · [ExtensionPay](https://extensionpay.com/)
+Sources: [Supabase pricing summary](https://www.jetadmin.io/blog/supabase-pricing-2026-guide-to-plans-limits-and-real-world-costs/) · [Haiku 5.5 pricing report](https://www.vktr.com/ai-platforms/anthropic-cuts-smallmodel-pricing-90-with-claude-haiku-55/) · [Extension payment options](https://fungies.io/monetize-chrome-extension-2026) · [Stripe pricing](https://stripe.com/pricing)
 
 ## Edge cases
 
@@ -537,7 +537,7 @@ Build the free local version first and get it into users' hands; add sync and pa
 2. Sync engine: outbox, push/pull, conflict handling; device list.
 3. Cloud backup and 30-day version history.
 4. Pro depth features: advanced filters, bulk actions, rules, all export formats.
-5. Payments via ExtensionPay (or a merchant of record), upgrade screen, restore purchase.
+5. Payments via Stripe Checkout (or a merchant of record), upgrade screen, restore purchase.
 6. Run the Sync and Payments edge cases.
 
 **Gate 2:** Pro users paying and not cancelling; then test small ad campaigns.

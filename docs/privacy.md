@@ -1,6 +1,6 @@
 # Tabfold privacy policy
 
-_Last updated: October 10, 2026_
+_Last updated: October 11, 2026_
 
 Tabfold is a tab manager. It works on your computer. Free Tabfold has no account and sends nothing to Tabfold's servers; only if you choose Pro or Pro AI does anything go to them (see "Pro and Pro AI" below).
 
@@ -31,7 +31,9 @@ You can turn it off at any time: in Tabfold's settings ("Sync folded tabs with C
 
 Pro and Pro AI are optional paid plans. Nothing in this section happens on Free.
 
-**Payments and sign-in.** Payments, the 7-day Pro AI trial and signing in on another computer are handled by ExtensionPay (extensionpay.com), with Stripe taking the payment. When you open one of their pages, Tabfold asks ExtensionPay for a random key for this browser and keeps it in Chrome's sync storage, so your other computers signed in to Chrome can use the same plan. ExtensionPay holds your email address and payment details; Tabfold never sees your card. Tabfold reads your plan from ExtensionPay (which plan, whether it's active, and your email) from time to time, to know what's included.
+**Payments.** Stripe (stripe.com) takes payments on its own page, which Tabfold opens in a tab; changing your plan or card, invoices and cancelling are on Stripe's billing page too. You type your card into Stripe, never into Tabfold, and Tabfold never sees it: Stripe holds your payment details. Tabfold's server keeps the Stripe customer and subscription ids for your account and the subscription's state (which plan, active or not, when it renews or ends), to know what your plan includes.
+
+**Your account and signing in.** Your Tabfold account is your email address. There's no password: to sign in or start the 7-day Pro AI trial, you type your email and Tabfold's server emails you a 6-digit code through Resend (resend.com), which therefore gets your email address to deliver it. Codes work for 10 minutes; the server stores them only as a hash and deletes them once used. To tell your computers apart, Tabfold makes a random device token on each computer (kept in this browser's extension storage) and, once you sign in, a random profile key kept in Chrome's sync storage, so your other computers on the same Chrome profile sign themselves in. The server stores only fingerprints of these, never the values. Signing out on a computer unlinks only that computer.
 
 **Sync with your Tabfold account (Pro).** Instead of Chrome sync, Pro keeps your folded tabs on Tabfold's server, so every folded tab, not just the newest 500, reaches your other computers. For each tab it sends:
 
@@ -46,9 +48,9 @@ and a short note of tabs you removed, as with Chrome sync. Tab groups, windows, 
 
 **Organise with AI, smart names and Copy as context (Pro AI).** When you ask Tabfold to organise your list, name a fold, or summarise a group, it sends the tabs' titles (shortened to 200 characters) and sites (like `github.com`, not full addresses) to Tabfold's server, at most 300 tabs at a time, and the server asks Anthropic's Claude to group or name them. It never sends the content of pages, and never tabs folded from Incognito windows. The answer comes back to your computer, and the server doesn't keep the titles once it has answered. Under Anthropic's commercial terms, they aren't used to train its models.
 
-Tabfold's server keeps your synced tabs, your daily backups, how many AI runs you've used this month, and your plan's email address, which identifies your account. Requests to it are identified by the ExtensionPay key, never stored on the server itself (only a fingerprint of it, for a few minutes).
+Tabfold's server keeps your account's email address, your synced tabs, your daily backups, how many AI runs you've used this month, your Stripe customer and subscription ids and state, and fingerprints of your computers' device tokens and profile key. Every request to it is identified by this computer's device token.
 
-**Deleting it.** Settings › Clear everything removes your folded tabs on this computer and empties the copy in your Tabfold account; the daily backups that are left are deleted within 30 days. Cancelling your plan (from Tabfold's settings, through ExtensionPay) stops syncing and AI requests. To have your account's synced tabs and backups deleted right away, use Clear everything before you cancel, or write to the address below. Nothing on your computer is ever deleted or locked when a plan ends.
+**Deleting it.** Settings › Clear everything removes your folded tabs on this computer and empties the copy in your Tabfold account; the daily backups that are left are deleted within 30 days. Cancelling your plan (Settings › Your plan › Manage billing, on Stripe's page) stops syncing and AI requests when the period you paid for ends. To have your account's synced tabs and backups deleted right away, use Clear everything before you cancel, or write to the address below. Nothing on your computer is ever deleted or locked when a plan ends.
 
 ## Free memory
 

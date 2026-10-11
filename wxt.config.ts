@@ -2,25 +2,21 @@ import { defineConfig } from 'wxt';
 import tailwindcss from '@tailwindcss/vite';
 
 /**
- * Where the extension pages and worker may connect in production: only ExtensionPay (payments and
- * sign-in) and the Tabfold server, when this build has one (WXT_TABFOLD_API, read from the
- * environment or .env at build time). Free makes no requests; both answer CORS, so no host
- * permissions are needed.
+ * Where the extension pages and worker may connect in production: only the Tabfold server, when
+ * this build has one (WXT_TABFOLD_API, read from the environment or .env at build time). Payments
+ * happen on Stripe's own pages, opened in a tab, so the extension never connects to Stripe. Free
+ * makes no requests; the server answers CORS, so no host permissions are needed.
  */
 function connectSources(): string {
   // WXT has loaded .env files into process.env by the time the manifest is built.
   const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
   const sources = ["'self'"];
-  // WXT_EXTPAY_HOST is only set by the end-to-end test (a fake ExtensionPay).
-  for (const [name, value] of [
-    ['WXT_EXTPAY_HOST', env.WXT_EXTPAY_HOST?.trim() || 'https://extensionpay.com'],
-    ['WXT_TABFOLD_API', env.WXT_TABFOLD_API?.trim()],
-  ] as const) {
-    if (!value) continue;
+  const api = env.WXT_TABFOLD_API?.trim();
+  if (api) {
     try {
-      sources.push(new URL(value).origin);
+      sources.push(new URL(api).origin);
     } catch {
-      throw new Error(`${name} is not a valid URL: ${value}`);
+      throw new Error(`WXT_TABFOLD_API is not a valid URL: ${api}`);
     }
   }
   return sources.join(' ');
@@ -29,7 +25,7 @@ function connectSources(): string {
 // See https://wxt.dev/api/config.html
 export default defineConfig({
   srcDir: 'src',
-  // The end-to-end Pro test builds a separate copy with a fake ExtensionPay and server.
+  // The end-to-end Pro test builds a separate copy pointed at a local server and a fake Stripe.
   outDir: (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.TABFOLD_OUT_DIR || '.output',
   imports: false,
   modules: ['@wxt-dev/module-react'],
@@ -59,7 +55,7 @@ export default defineConfig({
         description: 'Fold this tab',
       },
     },
-    // In production nothing may talk to the network except ExtensionPay and the Tabfold server (Pro).
+    // In production nothing may talk to the network except the Tabfold server (Pro).
     // Dev mode needs the Vite server, so WXT manages CSP there.
     ...(mode === 'production'
       ? {

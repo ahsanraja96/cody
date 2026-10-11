@@ -1,30 +1,22 @@
-import { CommandError, send, type Command } from '@/lib/messages';
+import { CommandError, send } from '@/lib/messages';
 import { AI_RUNS_PER_MONTH, PRICES, type AiRuns, type BillingInterval, type PlanState, type Tier } from '@/lib/pro/types';
 
 /**
- * Small helpers the Pro screens share: plan wording, which plan is paid for, trial days left, and
- * what to say when a Pro request fails (`ProErrorCode`, carried on `CommandError.code`).
+ * Small helpers the Pro screens share: plan wording, which plan is paid for, trial days left, what
+ * to say when a Pro request fails (`ProErrorCode`, carried on `CommandError.code`), and the
+ * commands that open Stripe's pages.
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Optional fields the worker may add to the cached plan (not in the contract yet): whether this
- * person has already had the Pro AI trial, so the plans page stops offering it.
- */
-export type PlanWithExtras = PlanState & { trialUsed?: boolean; trialStartedAt?: number | null };
 
 export function isTrialing(plan: PlanState, now = Date.now()): boolean {
   return !!plan.trial && plan.trial.endsAt > now;
 }
 
-/** The tier this person pays for (a running trial isn't paid), or null. */
+/** The tier of a live subscription (active or past due), or null. A trial isn't paid. */
 export function paidTier(plan: PlanState): Exclude<Tier, 'free'> | null {
   if (plan.tier === 'free') return null;
-  if (plan.status !== 'active' && plan.status !== 'past_due') return null;
-  // A paid Pro plan during the Pro AI trial: the tier says pro-ai, the payment is for Pro.
-  if (plan.trial) return plan.interval ? 'pro' : null;
-  return plan.tier;
+  return plan.status === 'active' || plan.status === 'past_due' ? plan.tier : null;
 }
 
 /** Whole days left in the trial, at least 1 while it runs. */
@@ -37,16 +29,15 @@ export function daysLeftLabel(days: number): string {
   return days === 1 ? '1 day left' : `${days} days left`;
 }
 
-/** Has the Pro AI trial already been used (so "Start 7-day free trial" isn't offered again)? */
-export function trialUsed(plan: PlanState, endedWasTrial: boolean): boolean {
-  const extra = plan as PlanWithExtras;
-  return !!plan.trial || extra.trialUsed === true || !!extra.trialStartedAt || endedWasTrial;
+/** This email has had the Pro AI trial (so "Start 7-day free trial" isn't offered again). Unknown until signed in. */
+export function trialUsed(plan: PlanState): boolean {
+  return plan.trialUsed;
 }
 
 /** "Pro", "Pro AI", "Pro AI trial" for the plan chip; null on Free. */
 export function planChipLabel(plan: PlanState, now = Date.now()): string | null {
   if (plan.tier === 'free') return null;
-  if (plan.tier === 'pro-ai' && isTrialing(plan, now) && paidTier(plan) !== 'pro-ai') return 'Pro AI trial';
+  if (plan.tier === 'pro-ai' && isTrialing(plan, now) && !paidTier(plan)) return 'Pro AI trial';
   return plan.tier === 'pro-ai' ? 'Pro AI' : 'Pro';
 }
 
@@ -87,6 +78,10 @@ export function errorCode(error: unknown): string | undefined {
   return error instanceof CommandError ? error.code : undefined;
 }
 
+function detail(error: unknown, name: string): number | undefined {
+  return error instanceof CommandError ? error.details?.[name] : undefined;
+}
+
 /** What to tell people when a Pro request fails, by `ProErrorCode`; otherwise the worker's message. */
 export function proErrorText(error: unknown): string {
   switch (errorCode(error)) {
@@ -106,21 +101,70 @@ export function proErrorText(error: unknown): string {
       return 'This needs Pro AI.';
     case 'runs-used-up':
       return `You’ve used this month’s ${AI_RUNS_PER_MONTH} AI runs.`;
+    case 'rate-limited':
+      return `Too many tries. Try again in ${minutesText(detail(error, 'retryAfter'))}.`;
     default:
       return error instanceof Error && error.message ? error.message : 'Something went wrong. Please try again.';
   }
 }
 
-type PlanOpen = Omit<Extract<Command, { type: 'plan-open' }>, 'type'>;
+/** "1 minute", "25 minutes" from seconds to wait (a minute when the server didn't say). */
+function minutesText(seconds: number | undefined): string {
+  const minutes = Math.max(1, Math.ceil((seconds ?? 60) / 60));
+  return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
+}
 
-/** Open ExtensionPay (checkout, trial, sign-in or the subscription page). Resolves to why it didn't open, or null. */
-export async function openPlanPage(options: PlanOpen): Promise<string | null> {
+/** What the sign-in dialog says when sending or checking a code fails (Stripe-Signin board). */
+export function signinErrorText(error: unknown): string {
+  switch (errorCode(error)) {
+    case 'wrong-code': {
+      const left = detail(error, 'triesLeft');
+      if (left === 0) return 'That code has expired or was tried too many times. Ask for a new one.';
+      return left === undefined ? 'That code doesn’t match.' : `That code doesn’t match. ${left} ${left === 1 ? 'try' : 'tries'} left.`;
+    }
+    case 'code-expired':
+      return 'That code has expired or was tried too many times. Ask for a new one.';
+    case 'send-failed':
+      return 'Couldn’t send the code. Check your connection and try again.';
+    case 'offline':
+      return 'You’re offline. Connect to the internet, then try again.';
+    case 'invalid-email':
+      return 'That doesn’t look like an email address.';
+    case 'rate-limited':
+      return `Too many codes. Try again in ${minutesText(detail(error, 'retryAfter'))}.`;
+    default:
+      return proErrorText(error);
+  }
+}
+
+/** Run a command that opens a Stripe page. Resolves to why it didn't open, or null. */
+async function opening(run: () => Promise<{ opened: boolean; reason?: string }>): Promise<string | null> {
   try {
-    const { opened, reason } = await send({ type: 'plan-open', ...options });
-    return opened ? null : (reason ?? 'The payment page didn’t open. Try again.');
+    const { opened, reason } = await run();
+    return opened ? null : (reason ?? 'The page didn’t open. Try again.');
   } catch (error) {
     return proErrorText(error);
   }
+}
+
+/** Open Stripe Checkout for a plan in a new tab (the worker watches it). */
+export function openCheckout(tier: Exclude<Tier, 'free'>, interval: BillingInterval): Promise<string | null> {
+  return opening(() => send({ type: 'checkout-open', tier, interval }));
+}
+
+/** Open Stripe's billing page in a new tab; `payment-method` opens on the card form. */
+export function openBilling(flow?: 'payment-method'): Promise<string | null> {
+  return opening(() => send({ type: 'billing-open', ...(flow ? { flow } : {}) }));
+}
+
+/** "Go to the Stripe tab". */
+export async function focusCheckout(): Promise<void> {
+  await send({ type: 'checkout-focus' }).catch(() => undefined);
+}
+
+/** A rough check before asking the server (which checks properly). */
+export function looksLikeEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
 /** The plans page in the full list. */

@@ -7,8 +7,10 @@ import { browser } from 'wxt/browser';
 import { extUrl } from '@/lib/extUrl';
 import { hasProAi } from '@/lib/pro/tiers';
 import { FREE_PLAN } from '@/lib/pro/types';
+import { send } from '@/lib/messages';
 import { useActiveFold, useCloudSyncStatus, useFoldedTabs, useFoldWindows, useLoadedPlan, useProjects, useSettings, useSyncStatus } from '@/ui/hooks';
 import { describeWindows, foldChoice, type WindowInfo } from '@/ui/windows';
+import { AccountDialogHost, useCheckoutClosedToast } from './AccountDialogs';
 import { EmptyState } from './EmptyState';
 import { isFolding, startFold, useFoldCandidates, useFoldToast } from './fold';
 import { FoldedHeading } from './FoldedHeading';
@@ -25,8 +27,28 @@ import { SettingsDialog, useFoldShortcut } from './SettingsDialog';
 import { TopBar } from './TopBar';
 import { undoLatest } from './undo';
 import { useRemovals } from './actions';
+import { WelcomePage } from './WelcomePage';
 
 const NO_TABS: TabRecord[] = [];
+
+/**
+ * Ask the worker for the plan when the page opens and whenever it comes back into focus (back from
+ * Stripe's pages, say). The worker reads it at most once a minute, and only for a computer that has
+ * signed in or paid.
+ */
+function usePlanRefresh() {
+  useEffect(() => {
+    let last = 0;
+    const refresh = () => {
+      if (Date.now() - last < 5_000) return;
+      last = Date.now();
+      void send({ type: 'plan-refresh' }).catch(() => undefined);
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, []);
+}
 
 function isTyping(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -37,8 +59,8 @@ function isTyping(target: EventTarget | null): boolean {
  * The full list (Min-List-Windows): top bar with search, sync line, Settings and Fold tabs; the
  * open windows, each with its own Fold; the last three folds; every folded tab grouped by kind of
  * site, or by project after Organise with AI (Pro-List-Projects). Search results replace the list
- * while there is a query. Settings and Import open over it; How it works and the plans page
- * (Pro-Plans) are their own pages.
+ * while there is a query. Settings and Import open over it; How it works, the plans page
+ * (Pro-Plans) and the page a paid checkout lands on (Stripe-Welcome) are their own pages.
  */
 export function LibraryApp() {
   const [route, navigate] = useRoute();
@@ -74,6 +96,8 @@ export function LibraryApp() {
   const hasRemovals = useRemovals((s) => s.removals.size > 0);
   const [activeResult, setActiveResult] = useState<string | undefined>();
   useFoldToast();
+  usePlanRefresh();
+  useCheckoutClosedToast();
 
   const tabs = folded?.tabs ?? NO_TABS;
   const recent = useMemo(
@@ -87,13 +111,13 @@ export function LibraryApp() {
   const searching = query.trim().length > 0;
 
   useEffect(() => {
-    document.title = route === 'how' ? 'How Tabfold frees memory' : route === 'pro' ? 'Tabfold Pro' : 'Tabfold';
+    document.title = route === 'how' ? 'How Tabfold frees memory' : route === 'pro' || route === 'welcome' ? 'Tabfold Pro' : 'Tabfold';
   }, [route]);
 
-  // Typing a search on the plans page goes back to the list, where the results show.
+  // Typing a search on the plans or welcome page goes back to the list, where the results show.
   const onQuery = (value: string) => {
     setQuery(value);
-    if (route === 'pro' && value.trim()) navigate('list');
+    if ((route === 'pro' || route === 'welcome') && value.trim()) navigate('list');
   };
 
   // / focuses search, Esc clears it, ⌘Z / Ctrl+Z undoes the last removal or fold.
@@ -141,6 +165,7 @@ export function LibraryApp() {
       />
       <ImportDialog open={route === 'import'} onClose={() => closeRoute('import')} />
       <OrganiseDialog open={organising && route === 'list'} onClose={() => setOrganising(false)} tabs={tabs} />
+      <AccountDialogHost />
       <ToastViewport />
       <ConfirmHost />
     </>
@@ -185,9 +210,19 @@ export function LibraryApp() {
         shortcut={shortcut}
         activeDescendant={searching ? activeResult : undefined}
       />
-      {route === 'pro' ? (
+      {route === 'pro' || route === 'welcome' ? (
         <main className="scroll-thin relative min-h-0 flex-1 overflow-y-auto bg-bg-subtle [scrollbar-gutter:stable_both-edges]">
-          <PlansPage onBack={() => navigate('list')} />
+          {route === 'pro' ? (
+            <PlansPage onBack={() => navigate('list')} />
+          ) : (
+            <WelcomePage
+              onBack={() => navigate('list', { replace: true })}
+              onOrganise={() => {
+                navigate('list', { replace: true });
+                setOrganising(true);
+              }}
+            />
+          )}
         </main>
       ) : (
       <main ref={scrollRef} className="scroll-thin relative min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]">

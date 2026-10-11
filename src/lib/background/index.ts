@@ -6,7 +6,8 @@ import { countNamedSessions, pruneSnapshots, purgeTrash } from '../repo';
 import { getSettings } from '../settings';
 import { activeRestore, backup, getDeviceId, windowNames } from '../state';
 import type { Command, CommandResponse } from '../messages';
-import { onPageClosed, onPlanAlarm, PLAN_ALARM, PLAN_ALARM_MINUTES, setupPlan } from '../pro/plan';
+import { onTabClosed as onCheckoutTabClosed, onTabUrl as onCheckoutTabUrl, setupCheckout } from '../pro/checkout';
+import { onPlanAlarm, PLAN_ALARM, PLAN_ALARM_MINUTES, setupPlan } from '../pro/plan';
 import { setupSync, syncTick } from '../sync/engine';
 import { forgetUnfinishedFold } from './fold';
 import { createMenus, onCommand, onMenuClicked } from './menus';
@@ -29,7 +30,7 @@ const ALARMS = {
   daily: { name: 'tabfold-daily', periodInMinutes: 24 * 60 },
   /** Catches folded-tab changes made while the worker slept; cheap when nothing changed. */
   sync: { name: 'tabfold-sync', periodInMinutes: 1 },
-  /** Reads the plan from ExtensionPay (a cancelled or failed payment shows up here). */
+  /** Reads the plan from the Tabfold server (a cancelled or failed payment shows up here). */
   plan: { name: PLAN_ALARM, periodInMinutes: PLAN_ALARM_MINUTES },
 } as const;
 
@@ -152,13 +153,15 @@ export function setupBackground(): void {
   browser.tabs.onRemoved.addListener((id, info) => {
     if (!info.isWindowClosing) scheduleSnapshot();
     safely('pending title', () => forgetPendingTitle(id));
-    // An ExtensionPay page Tabfold opened has closed: read the plan once more.
-    safely('plan page', () => onPageClosed('tab', id));
+    // A Stripe checkout or billing tab Tabfold opened has closed: read the plan once more.
+    safely('checkout tab', () => onCheckoutTabClosed(id));
   });
   browser.tabs.onUpdated.addListener((id, change, tab) => {
     if (change.url || change.pinned !== undefined || change.groupId !== undefined) scheduleSnapshot();
     // A tab saved (kept open) before its title arrived gets its real title.
     if (change.title !== undefined || change.status === 'complete') safely('title fill-in', () => onTabUpdated(id, change, tab));
+    // Stripe sent a checkout or billing tab back to the server: it becomes Tabfold's welcome page, or closes.
+    if (change.url) safely('checkout tab', () => onCheckoutTabUrl(id, change.url!));
   });
   browser.tabs.onMoved.addListener(() => scheduleSnapshot());
   browser.tabs.onAttached.addListener(() => scheduleSnapshot());
@@ -167,7 +170,6 @@ export function setupBackground(): void {
       const names = await windowNames.get();
       if (names[windowId]) await windowNames.set(windowId, '');
     });
-    safely('plan page', () => onPageClosed('window', windowId));
   });
 
   safely('startup', ensureStartup);
@@ -177,8 +179,10 @@ export function setupBackground(): void {
   safely('fold state', forgetUnfinishedFold);
   // Chrome sync of folded tabs (or the Tabfold account for Pro): listeners now, and a first run shortly after start.
   setupSync();
-  // The plan from ExtensionPay: read at start (at most hourly), and an ExtensionPay page being watched picks up again.
+  // The plan from the Tabfold server: read at start (at most hourly); the Chrome profile key is followed.
   setupPlan();
+  // A Stripe checkout tab being watched picks up again.
+  setupCheckout();
   // When Tabfold first ran, for the memory milestone (never in its first 3 days).
   safely('milestone', () => ensureMilestoneStart());
 }

@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { resetDataGuard } from '@/lib/dataGuard';
 import { exportCsv, exportFileName, exportHtml, exportJson, exportMarkdown } from '@/lib/exporters';
 import { send } from '@/lib/messages';
+import { PROFILE_KEY } from '@/lib/pro/account';
 import { clearAllData, exportGraphs, putBackTabs, removeTabsWithSnapshot, type RemovedTabs } from '@/lib/repo';
 import { DEFAULT_SETTINGS } from '@/lib/settings';
 import { lastAction, recoveryOffer, snapshotMirror, UNDO_WINDOW_MS } from '@/lib/state';
@@ -210,18 +211,20 @@ export async function copyAsContext(tabs: TabRecord[], name: string): Promise<vo
   }
 }
 
+/** Everything in the extension's Chrome sync storage except the profile key (signing in stays as it is). */
+async function clearChromeSyncStorage(): Promise<void> {
+  const keys = Object.keys(await browser.storage.sync.get(null)).filter((key) => key !== PROFILE_KEY);
+  if (keys.length) await browser.storage.sync.remove(keys);
+}
+
 /**
  * Clear everything…, after the confirm: every folded tab, snapshot and setting on this computer,
- * and Tabfold's copy in Chrome sync (the extension's own sync storage, which holds nothing else).
+ * and Tabfold's copy in Chrome sync. The Pro sign-in stays (this computer's device token and the
+ * Chrome profile key other computers sign in with).
  */
 export async function clearEverything(): Promise<void> {
   await clearAllData();
   await browser.storage.local.set({ settings: DEFAULT_SETTINGS });
-  await Promise.all([
-    snapshotMirror.set(null),
-    recoveryOffer.set(null),
-    lastAction.set(null),
-    browser.storage.sync.clear(),
-  ]).catch(() => undefined);
+  await Promise.all([snapshotMirror.set(null), recoveryOffer.set(null), lastAction.set(null), clearChromeSyncStorage()]).catch(() => undefined);
   await resetDataGuard();
 }

@@ -1,13 +1,25 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Check, ChevronLeft, Info, LoaderCircle, ShieldCheck, Sparkles } from 'lucide-react';
-import { send } from '@/lib/messages';
+import { Check, ChevronLeft, ExternalLink, Info, LoaderCircle, LogIn, ShieldCheck, Sparkles } from 'lucide-react';
 import { proConfigured } from '@/lib/pro/config';
 import { AI_RUNS_PER_MONTH, PRICES, TRIAL_DAYS, type BillingInterval, type Tier } from '@/lib/pro/types';
 import { Chip } from '@/ui/components/ProBits';
 import { toast } from '@/ui/components/Toast';
 import { cx } from '@/ui/cx';
-import { usePlan, usePlanEnded } from '@/ui/hooks';
-import { bestYearlySaving, daysLeftLabel, dollars, isTrialing, openPlanPage, paidTier, trialDaysLeft, trialUsed } from '@/ui/pro';
+import { useCheckout, useNeedsSignIn, usePlan } from '@/ui/hooks';
+import {
+  bestYearlySaving,
+  daysLeftLabel,
+  dollars,
+  focusCheckout,
+  isTrialing,
+  openBilling,
+  openCheckout,
+  paidTier,
+  shortDate,
+  trialDaysLeft,
+  trialUsed,
+} from '@/ui/pro';
+import { openSignIn, startTrialFlow } from './AccountDialogs';
 
 type PaidTier = Exclude<Tier, 'free'>;
 
@@ -15,23 +27,13 @@ const BTN = 'flex h-10 w-full items-center justify-center gap-2 rounded-control 
 const BUTTONS = {
   primary: `${BTN} bg-accent text-on-accent hover:bg-accent-hover disabled:opacity-50 disabled:hover:bg-accent`,
   soft: `${BTN} border border-accent-line bg-accent-soft text-accent-text hover:brightness-95 disabled:opacity-50 disabled:hover:brightness-100`,
+  /** "Waiting for Stripe…": the soft button, not faded. */
+  busy: `${BTN} border border-accent-line bg-accent-soft text-accent-text`,
   off: `${BTN} border border-border-strong bg-surface text-text-3`,
 };
 
-/** Re-read the plan when the page opens and whenever the person comes back from the payment page. */
-function usePlanRefresh() {
-  useEffect(() => {
-    let last = 0;
-    const refresh = () => {
-      if (Date.now() - last < 5_000) return;
-      last = Date.now();
-      void send({ type: 'plan-refresh' }).catch(() => undefined);
-    };
-    refresh();
-    window.addEventListener('focus', refresh);
-    return () => window.removeEventListener('focus', refresh);
-  }, []);
-}
+/** Less than this left in the trial: Stripe charges at once ("You’ll be charged today"); the server's rule. */
+const TRIAL_BILLING_MIN_MS = 48 * 60 * 60 * 1000 + 5 * 60 * 1000;
 
 function Feature({ children, shield = false }: { children: ReactNode; shield?: boolean }) {
   return (
@@ -104,20 +106,62 @@ function PlanCard({
   );
 }
 
+/** While Stripe's checkout is open in another tab (Stripe-Plans board). */
+function WaitingBanner() {
+  return (
+    <div role="status" className="mb-4 flex items-center gap-3 rounded-card border border-accent-line bg-accent-soft py-3 pr-3 pl-4 max-[560px]:flex-wrap">
+      <LoaderCircle size={18} strokeWidth={2} aria-hidden className="tf-spin shrink-0 text-accent-text" />
+      <div className="min-w-0 flex-1">
+        <div className="font-semibold">Finish paying in the Stripe tab</div>
+        <div className="text-small text-text-2">Pro switches on here as soon as Stripe confirms. Changed your mind? Close that tab; nothing is charged.</div>
+      </div>
+      <button
+        type="button"
+        onClick={() => void focusCheckout()}
+        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control border border-border-strong bg-surface px-3.5 text-small font-semibold text-text hover:bg-hover"
+      >
+        <ExternalLink size={14} strokeWidth={1.75} aria-hidden className="text-text-2" />
+        Go to the Stripe tab
+      </button>
+    </div>
+  );
+}
+
+/** The payment went to an email that already had an account: this computer signs in to use it. */
+function SignInBanner({ email }: { email: string }) {
+  return (
+    <div role="status" className="mb-4 flex items-center gap-3 rounded-card border border-accent-line bg-accent-soft py-3 pr-3 pl-4 max-[560px]:flex-wrap">
+      <LogIn size={18} strokeWidth={1.75} aria-hidden className="shrink-0 text-accent-text" />
+      <div className="min-w-0 flex-1">
+        <div className="font-semibold">Your payment is on {email}</div>
+        <div className="text-small text-text-2">Sign in with a code to use Pro on this computer.</div>
+      </div>
+      <button
+        type="button"
+        onClick={() => openSignIn('signin', email)}
+        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control bg-accent px-3.5 text-small font-semibold text-on-accent hover:bg-accent-hover"
+      >
+        Sign in
+      </button>
+    </div>
+  );
+}
+
 /**
- * The plans page (Pro-Plans, `#/pro`): Free, Pro and Pro AI side by side with a Monthly / Yearly
- * switch. Buttons open ExtensionPay through the worker (`plan-open`); the plan is read again when
- * the page opens and when the person comes back to it.
+ * The plans page (Pro-Plans, Stripe-Plans, `#/pro`): Free, Pro and Pro AI side by side with a
+ * Monthly / Yearly switch. "Get Pro" and "Get Pro AI" open Stripe Checkout in a tab
+ * (`checkout-open`) and the page waits for it; the trial starts with an emailed code; once paying,
+ * plan changes go through Stripe's billing page.
  */
 export function PlansPage({ onBack }: { onBack: () => void }) {
   const plan = usePlan();
-  const ended = usePlanEnded();
+  const checkout = useCheckout();
+  const signInAs = useNeedsSignIn();
   const [interval, setBilling] = useState<BillingInterval>('year');
   const [busy, setBusy] = useState<string | null>(null);
   const [showSent, setShowSent] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const configured = proConfigured();
-  usePlanRefresh();
 
   useEffect(() => {
     headingRef.current?.focus({ preventScroll: true });
@@ -125,32 +169,32 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
 
   const now = Date.now();
   const paid = paidTier(plan);
-  const trialing = isTrialing(plan, now) && paid !== 'pro-ai';
-  const offerTrial = !paid && !trialing && !trialUsed(plan, ended?.wasTrial === true);
+  const trialing = !paid && isTrialing(plan, now);
+  const offerTrial = !paid && !trialing && !trialUsed(plan);
   const yearly = interval === 'year';
 
-  const open = async (key: string, options: Parameters<typeof openPlanPage>[0]) => {
+  const run = async (key: string, task: () => Promise<string | null | void>) => {
     setBusy(key);
-    const problem = await openPlanPage(options);
+    const problem = await task();
     setBusy(null);
     if (problem) toast(problem, { tone: 'error' });
   };
 
   const spinner = (key: string) => busy === key && <LoaderCircle size={16} aria-hidden className="tf-spin" />;
-  const disabled = !configured || busy !== null;
+  const disabled = !configured || busy !== null || !!checkout;
 
   const manage = (
     <button
       type="button"
       disabled={disabled}
-      onClick={() => void open('manage', { page: 'manage' })}
+      onClick={() => void run('manage', () => openBilling())}
       className="mt-2 flex h-6 w-full items-center justify-center gap-1.5 text-small font-semibold text-accent-text hover:underline disabled:opacity-50 disabled:hover:no-underline"
     >
       {spinner('manage')}
-      Manage subscription
+      Manage billing
     </button>
   );
-  // A paid plan shows "Manage subscription" under its card's button; the other cards keep the same height.
+  // A paid plan shows "Manage billing" under its card's button; the other cards keep the same height.
   const reserve = paid ? 'min-h-[72px]' : undefined;
 
   const priceOf = (tier: PaidTier) => {
@@ -161,6 +205,14 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
   };
 
   const actionFor = (tier: PaidTier): ReactNode => {
+    if (checkout?.tier === tier) {
+      return (
+        <button type="button" aria-busy="true" disabled className={BUTTONS.busy}>
+          <LoaderCircle size={16} strokeWidth={2} aria-hidden className="tf-spin" />
+          Waiting for Stripe…
+        </button>
+      );
+    }
     if (paid === tier) {
       return (
         <div className={reserve}>
@@ -171,51 +223,50 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
         </div>
       );
     }
+    const label = tier === 'pro-ai' ? 'Pro AI' : 'Pro';
     if (paid) {
-      // Moving between paid plans happens on the subscription page.
+      // Moving between paid plans happens on Stripe's billing page.
       return (
         <div className={reserve}>
-          <button type="button" disabled={disabled} onClick={() => void open('change', { page: 'manage' })} className={BUTTONS.soft}>
-            {spinner('change')}
-            Change plan
+          <button type="button" disabled={disabled} onClick={() => void run(tier, () => openBilling())} className={BUTTONS.soft}>
+            {spinner(tier)}
+            Switch to {label}
           </button>
         </div>
       );
     }
     if (tier === 'pro') {
       return (
-        <div className={reserve}>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => void open('pro', { page: 'payment', tier: 'pro', interval })}
-            className={BUTTONS.soft}
-          >
-            {spinner('pro')}
-            Get Pro
-          </button>
-        </div>
+        <button type="button" disabled={disabled} onClick={() => void run(tier, () => openCheckout(tier, interval))} className={BUTTONS.soft}>
+          {spinner(tier)}
+          {trialing ? 'Switch to Pro' : 'Get Pro'}
+        </button>
       );
     }
-    return (
-      <div className={reserve}>
-        {offerTrial ? (
-          <button type="button" disabled={disabled} onClick={() => void open('pro-ai', { page: 'trial' })} className={BUTTONS.primary}>
-            {spinner('pro-ai')}
-            Start {TRIAL_DAYS}-day free trial
+    if (trialing) {
+      const left = plan.trial!.endsAt - now;
+      return (
+        <>
+          <button type="button" disabled={disabled} onClick={() => void run(tier, () => openCheckout(tier, interval))} className={BUTTONS.primary}>
+            {spinner(tier)}
+            Keep Pro AI
           </button>
-        ) : (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => void open('pro-ai', { page: 'payment', tier: 'pro-ai', interval })}
-            className={BUTTONS.primary}
-          >
-            {spinner('pro-ai')}
-            Get Pro AI
-          </button>
-        )}
-      </div>
+          <p className="mt-2 mb-0 text-small text-text-2">
+            {left < TRIAL_BILLING_MIN_MS ? 'You’ll be charged today.' : `You won’t be charged until ${shortDate(plan.trial!.endsAt)}, when your trial ends.`}
+          </p>
+        </>
+      );
+    }
+    return offerTrial ? (
+      <button type="button" disabled={disabled} onClick={() => void run(tier, () => startTrialFlow(plan))} className={BUTTONS.primary}>
+        {spinner(tier)}
+        Start {TRIAL_DAYS}-day free trial
+      </button>
+    ) : (
+      <button type="button" disabled={disabled} onClick={() => void run(tier, () => openCheckout(tier, interval))} className={BUTTONS.primary}>
+        {spinner(tier)}
+        Get Pro AI
+      </button>
     );
   };
 
@@ -236,7 +287,7 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
         Your list
       </a>
 
-      <div className="mt-1 mb-6 text-center">
+      <div className="mt-1 mb-5 text-center">
         {!configured && (
           <p role="status" className="mx-auto mt-0 mb-4 inline-flex items-center gap-2 rounded-control border border-border bg-surface px-3 py-1.5 text-small text-text-2">
             <Info size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-text-3" />
@@ -281,7 +332,9 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 items-stretch gap-4 max-[960px]:grid-cols-1 max-[960px]:mx-auto max-[960px]:max-w-[480px]">
+      {signInAs && !paid ? <SignInBanner email={signInAs} /> : checkout && <WaitingBanner />}
+
+      <div className="grid grid-cols-3 items-stretch gap-4 max-[960px]:mx-auto max-[960px]:max-w-[480px] max-[960px]:grid-cols-1">
         <PlanCard
           id="free"
           name="Free"
@@ -291,19 +344,11 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
           sub=""
           current={plan.tier === 'free'}
           action={
-            plan.tier === 'free' ? (
-              <div className={reserve}>
-                <button type="button" disabled className={BUTTONS.off}>
-                  Your plan
-                </button>
-              </div>
-            ) : (
-              <div className={reserve}>
-                <button type="button" disabled className={BUTTONS.off}>
-                  Included in your plan
-                </button>
-              </div>
-            )
+            <div className={reserve}>
+              <button type="button" disabled className={BUTTONS.off}>
+                {plan.tier === 'free' ? 'Your plan' : trialing ? 'Free' : 'Included in your plan'}
+              </button>
+            </div>
           }
           lead={plan.tier === 'free' ? 'What you have now' : 'Always included'}
         >
@@ -339,7 +384,7 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
           icon={<Sparkles size={18} strokeWidth={1.75} aria-hidden className="text-accent-text" />}
           badge={
             trialing ? (
-              <Chip>Trial · {daysLeftLabel(trialDaysLeft(plan, now))}</Chip>
+              <Chip>Your trial · {daysLeftLabel(trialDaysLeft(plan, now))}</Chip>
             ) : offerTrial ? (
               <Chip>{TRIAL_DAYS}-day free trial · no card</Chip>
             ) : undefined
@@ -363,18 +408,17 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
       </div>
 
       <p className="mt-5 mb-0 text-small text-text-3">
-        Prices in USD; tax added at checkout where it applies. Cancel anytime. If you stop paying, everything you folded stays here, readable and
-        exportable. Payments by ExtensionPay and Stripe.
+        Prices in USD; tax added at checkout where it applies. Cancel anytime in Settings. If you stop paying, everything you folded stays here,
+        readable and exportable. Payments by Stripe; Tabfold never sees your card.
       </p>
       <div className="mt-2 flex flex-wrap gap-5 text-small font-semibold">
         {!paid && (
           <button
             type="button"
-            disabled={disabled}
-            onClick={() => void open('login', { page: 'login' })}
-            className="inline-flex items-center gap-1.5 text-accent-text hover:underline disabled:opacity-50 disabled:hover:no-underline"
+            disabled={!configured}
+            onClick={() => openSignIn('signin')}
+            className="text-accent-text hover:underline disabled:opacity-50 disabled:hover:no-underline"
           >
-            {busy === 'login' && <LoaderCircle size={12} aria-hidden className="tf-spin" />}
             Already paid? Sign in
           </button>
         )}
@@ -402,8 +446,10 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
             When you organise or copy context, the titles and sites of up to 300 tabs go to Tabfold’s server and its AI (Claude, by Anthropic). Never page
             content, never Incognito tabs.
           </dd>
+          <dt className="font-semibold text-text">Account</dt>
+          <dd className="m-0">Your email is your Tabfold account. Sign-in codes are emailed through Resend.</dd>
           <dt className="font-semibold text-text">Payments</dt>
-          <dd className="m-0">ExtensionPay and Stripe handle your email and payment. Tabfold never sees your card.</dd>
+          <dd className="m-0">Stripe takes your payment on its own page and keeps your card details. Tabfold never sees your card.</dd>
         </dl>
       )}
     </div>
