@@ -1,94 +1,50 @@
 import { vi } from 'vitest';
-import type { ExtPayUser } from '../../server/supabase/functions/_shared/plan.ts';
 import { createModel, type CallJson } from '../../server/supabase/functions/tabfold/ai.ts';
-import {
-  handle,
-  RUN_LIMIT_REACHED,
-  SYNC_CONFLICT,
-  SYNC_TOO_LARGE,
-  type Backup,
-  type BackupInfo,
-  type Deps,
-  type Store,
-  type UsageKind,
-} from '../../server/supabase/functions/tabfold/app.ts';
+import { handle, sha256Hex, type Deps } from '../../server/supabase/functions/tabfold/app.ts';
+import { createStripe, readSubscription } from '../../server/supabase/functions/tabfold/stripe.ts';
+import { createFakeStripe, type StripeObject } from './fakeStripe.ts';
+import { memoryMailer } from './memoryMailer.ts';
+import { MemoryStore } from './memoryStore.ts';
 
-/** Fakes for the server tests: an in-memory Store that behaves like the SQL, ExtensionPay and the model. */
+/** Fakes for the server tests: an in-memory Store, a fake Stripe (no network), a mailer that keeps codes, the model. */
 
 export const DAY = 24 * 60 * 60 * 1000;
 export const NOW = Date.UTC(2026, 9, 10, 12, 0, 0);
 export const EXTENSION = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+export const PUBLIC_URL = 'https://example.supabase.co/functions/v1/tabfold';
+export const WEBHOOK_SECRET = 'whsec_test_tabfold';
 
-const iso = (ms: number) => new Date(ms).toISOString();
-const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
-const bytes = (text: string) => new TextEncoder().encode(text).length;
+interface TestUser {
+  email: string;
+  trialStartedAt?: number;
+  subscription?: { lookupKey: string; status?: string; cancelAtPeriodEnd?: boolean };
+}
 
+/** Accounts every test server starts with, each signed in on its own computer (`keyOf`). */
 export const USERS = {
-  free: { paid: false, email: 'free@example.com', installedAt: iso(NOW - 40 * DAY) },
-  proMonthly: {
-    paid: true,
-    paidAt: iso(NOW - 10 * DAY),
-    email: 'Pro@Example.com',
-    plan: { unitAmountCents: 500, currency: 'usd', nickname: 'pro-monthly', interval: 'month', intervalCount: 1 },
-    subscriptionStatus: 'active',
-  },
-  proYearly: {
-    paid: true,
-    email: 'yearly@example.com',
-    plan: { unitAmountCents: 4800, currency: 'usd', nickname: 'pro-yearly', interval: 'year', intervalCount: 1 },
-    subscriptionStatus: 'active',
-  },
-  proAiMonthly: {
-    paid: true,
-    email: 'ai@example.com',
-    plan: { unitAmountCents: 900, currency: 'usd', nickname: 'pro-ai-monthly', interval: 'month', intervalCount: 1 },
-    subscriptionStatus: 'active',
-  },
-  proAiYearly: {
-    paid: true,
-    email: 'ai-yearly@example.com',
-    plan: { unitAmountCents: 8400, currency: 'usd', nickname: 'pro-ai-yearly', interval: 'year', intervalCount: 1 },
-    subscriptionStatus: 'active',
-    subscriptionCancelAt: iso(NOW + 100 * DAY),
-  },
-  trialRunning: { paid: false, email: 'trial@example.com', trialStartedAt: iso(NOW - 2 * DAY) },
-  trialEnded: { paid: false, email: 'ended@example.com', trialStartedAt: iso(NOW - 8 * DAY) },
-  proDuringTrial: {
-    paid: true,
-    email: 'both@example.com',
-    trialStartedAt: iso(NOW - 1 * DAY),
-    plan: { nickname: 'pro-monthly', interval: 'month' },
-    subscriptionStatus: 'active',
-  },
-  cancelled: {
-    paid: true,
-    email: 'gone@example.com',
-    plan: { nickname: 'pro-monthly', interval: 'month' },
-    subscriptionStatus: 'canceled',
-  },
-  pastDue: {
-    paid: true,
-    email: 'late@example.com',
-    plan: { nickname: 'pro-ai-monthly', interval: 'month' },
-    subscriptionStatus: 'past_due',
-  },
-  noEmail: {
-    paid: true,
-    email: null,
-    plan: { nickname: 'pro-ai-monthly', interval: 'month' },
-    subscriptionStatus: 'active',
-  },
-} satisfies Record<string, ExtPayUser>;
+  free: { email: 'free@example.com' },
+  proMonthly: { email: 'pro@example.com', subscription: { lookupKey: 'pro-monthly' } },
+  proYearly: { email: 'yearly@example.com', subscription: { lookupKey: 'pro-yearly' } },
+  proAiMonthly: { email: 'ai@example.com', subscription: { lookupKey: 'pro-ai-monthly' } },
+  proAiYearly: { email: 'ai-yearly@example.com', subscription: { lookupKey: 'pro-ai-yearly', cancelAtPeriodEnd: true } },
+  trialRunning: { email: 'trial@example.com', trialStartedAt: NOW - 2 * DAY },
+  trialEnded: { email: 'ended@example.com', trialStartedAt: NOW - 8 * DAY },
+  proDuringTrial: { email: 'both@example.com', trialStartedAt: NOW - 1 * DAY, subscription: { lookupKey: 'pro-monthly' } },
+  cancelled: { email: 'gone@example.com', subscription: { lookupKey: 'pro-monthly', status: 'canceled' } },
+  pastDue: { email: 'late@example.com', subscription: { lookupKey: 'pro-ai-monthly', status: 'past_due' } },
+} satisfies Record<string, TestUser>;
 
 export type UserName = keyof typeof USERS;
 
-/** The ExtensionPay key each test user's extension sends. */
-export const keyOf = (name: UserName) => `key-${name}-0123456789`;
+/** The device token of each test user's computer (43 characters, like the extension's). */
+export const keyOf = (name: UserName) => `device-${name}`.padEnd(43, '0');
+/** A fresh device token: a computer the server has never seen. */
+export const newToken = (label: string) => `new-${label}`.padEnd(43, 'x');
 
 export { MemoryStore } from './memoryStore.ts';
-import { MemoryStore } from './memoryStore.ts';
 
 export interface RequestOptions {
+  /** A test user, a raw token, or null for no Authorization header. Default: proAiMonthly. */
   key?: UserName | string | null;
   body?: unknown;
   rawBody?: string;
@@ -96,23 +52,56 @@ export interface RequestOptions {
   headers?: Record<string, string>;
 }
 
-export function createServer(options: { allowedOrigins?: string[] } = {}) {
-  const store = new MemoryStore();
-  const users = new Map<string, ExtPayUser>(Object.entries(USERS).map(([name, user]) => [keyOf(name as UserName), user]));
-  const extpayUser = vi.fn(async (key: string) => users.get(key) ?? null);
+export function createServer(options: { allowedOrigins?: string[]; automaticTax?: boolean } = {}) {
+  const clock = { now: NOW };
+  const now = () => clock.now;
+  const store = new MemoryStore({ now });
+  const stripe = createFakeStripe({ prices: true, webhookSecret: WEBHOOK_SECRET, now });
+  const mailer = memoryMailer();
   const callJson = vi.fn<CallJson>();
   const log = vi.fn<(message: string) => void>();
-  const clock = { now: NOW };
+  const payments = createStripe({ secretKey: 'sk_test_tabfold', webhookSecret: WEBHOOK_SECRET, fetch: stripe.fetch, now });
   const deps: Deps = {
     store,
-    extpayUser,
+    payments,
+    mailer,
     model: createModel(callJson),
-    now: () => clock.now,
-    config: { extpayId: 'tabfold', allowedOrigins: options.allowedOrigins ?? [EXTENSION] },
+    now,
+    config: {
+      allowedOrigins: options.allowedOrigins ?? [EXTENSION],
+      publicUrl: PUBLIC_URL,
+      automaticTax: options.automaticTax ?? false,
+      codeSecret: 'code-secret-for-tests',
+    },
     log,
   };
 
+  // The test users: accounts, Stripe customers and subscriptions (set up at once), and a linked
+  // computer each (once `ready`, which `request` waits for).
+  const users = Object.entries(USERS) as [UserName, TestUser][];
+  for (const [, user] of users) {
+    const account = store.account(user.email);
+    account.trialStartedAt = user.trialStartedAt ?? null;
+    account.createdAt = NOW - 30 * DAY;
+    if (user.subscription) {
+      const customer = stripe.addCustomer(user.email);
+      account.stripeCustomerId = customer.id;
+      const sub = stripe.addSubscription({
+        customer: customer.id,
+        lookupKey: user.subscription.lookupKey,
+        status: user.subscription.status,
+        cancelAtPeriodEnd: user.subscription.cancelAtPeriodEnd,
+        created: Math.floor((NOW - 10 * DAY) / 1000),
+      });
+      store.subscriptions.set(sub.id, { accountId: account.id, subscription: readSubscription(sub) });
+    }
+  }
+  const ready = Promise.all(
+    users.map(async ([name, user]) => store.link(await sha256Hex(keyOf(name)), store.account(user.email).id, 'device')),
+  );
+
   async function request(method: string, path: string, opts: RequestOptions = {}) {
+    await ready;
     const headers: Record<string, string> = { ...opts.headers };
     const key = opts.key === undefined ? 'proAiMonthly' : opts.key;
     if (key) headers.authorization = `Bearer ${key in USERS ? keyOf(key as UserName) : key}`;
@@ -122,13 +111,36 @@ export function createServer(options: { allowedOrigins?: string[] } = {}) {
       body = JSON.stringify(opts.body);
       headers['content-type'] = 'application/json';
     }
-    const url = path.startsWith('http') ? path : `https://example.supabase.co/functions/v1/tabfold${path}`;
+    const url = path.startsWith('http') ? path : `${PUBLIC_URL}${path}`;
     const response = await handle(new Request(url, { method, headers, body }), deps);
     const text = await response.text();
-    return { status: response.status, headers: response.headers, json: text ? (JSON.parse(text) as any) : null };
+    const isJson = response.headers.get('content-type')?.includes('json');
+    return {
+      status: response.status,
+      headers: response.headers,
+      text,
+      json: text && isJson ? (JSON.parse(text) as any) : null,
+    };
   }
 
-  return { store, users, extpayUser, callJson, log, clock, deps, request };
+  /** Sends a fake Stripe event to the webhook, signed (or with the signature given). */
+  async function webhook(event: StripeObject, signature?: string) {
+    const signed = await stripe.signed(event);
+    return request('POST', '/stripe/webhook', {
+      key: null,
+      rawBody: signed.body,
+      headers: { 'stripe-signature': signature ?? signed.signature, 'content-type': 'application/json' },
+    });
+  }
+
+  /** Signs a computer in with an emailed code. */
+  async function signIn(token: string, email: string, startTrial = false) {
+    await request('POST', '/signin/start', { key: token, body: { email, purpose: startTrial ? 'trial' : 'signin' } });
+    const code = mailer.lastCode(email.trim().toLowerCase());
+    return request('POST', '/signin/finish', { key: token, body: { email, code, startTrial } });
+  }
+
+  return { store, stripe, mailer, payments, callJson, log, clock, deps, ready, request, webhook, signIn };
 }
 
 export type Server = ReturnType<typeof createServer>;

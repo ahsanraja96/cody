@@ -1,38 +1,206 @@
-import type { ExtPayUser } from '../../server/supabase/functions/_shared/plan.ts';
+import type { Subscription } from '../../server/supabase/functions/_shared/plan.ts';
 import {
   RUN_LIMIT_REACHED,
   SYNC_CONFLICT,
   SYNC_TOO_LARGE,
+  type Account,
   type Backup,
   type BackupInfo,
+  type DeviceKind,
+  type PendingCheckout,
+  type SigninCode,
   type Store,
   type UsageKind,
 } from '../../server/supabase/functions/tabfold/app.ts';
 
 /**
  * An in-memory Store for the server tests and the end-to-end Pro test (e2e/pro.mjs), with no
- * test-runner imports so plain Node can load it.
+ * test-runner imports so plain Node can load it. Behaves like the SQL in server/supabase/migrations,
+ * including its atomic functions. Times come from `now` (default Date.now), as the database's
+ * `now()` would.
  */
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const bytes = (text: string) => new TextEncoder().encode(text).length;
 
-/** Behaves like the SQL in server/supabase/migrations, including tabfold_sync_write and tabfold_take_run. */
+export interface MemoryStoreOptions {
+  now?: () => number;
+}
+
+export interface DeviceRow {
+  accountId: string;
+  kind: DeviceKind;
+  createdAt: number;
+  lastSeenAt: number;
+}
+
 export class MemoryStore implements Store {
-  accounts = new Map<string, string>();
+  now: () => number;
+  /** By id. */
+  accounts = new Map<string, Account>();
+  /** By token hash. */
+  devices = new Map<string, DeviceRow>();
+  /** By email. */
+  codes = new Map<string, SigninCode>();
+  rates = new Map<string, { windowStart: number; count: number }>();
+  subscriptions = new Map<string, { accountId: string; subscription: Subscription }>();
+  pending = new Map<string, PendingCheckout>();
+  events = new Set<string>();
   sync = new Map<string, { version: number; items: Record<string, unknown> }>();
   backups = new Map<string, Map<string, Backup>>();
   usage = new Map<string, { runs: number; light: number }>();
-  cache = new Map<string, { user: ExtPayUser; checkedAt: number }>();
 
-  async accountId(email: string) {
-    let id = this.accounts.get(email);
-    if (!id) {
-      id = `account-${this.accounts.size + 1}`;
-      this.accounts.set(email, id);
-    }
-    return id;
+  constructor(options: MemoryStoreOptions = {}) {
+    this.now = options.now ?? (() => Date.now());
   }
+
+  // ---- Accounts ----
+
+  /** The account for an email, synchronously (for setting up tests). */
+  account(email: string): Account {
+    for (const account of this.accounts.values()) if (account.email === email) return account;
+    const account: Account = {
+      id: `account-${this.accounts.size + 1}`,
+      email,
+      stripeCustomerId: null,
+      trialStartedAt: null,
+      createdAt: this.now(),
+    };
+    this.accounts.set(account.id, account);
+    return account;
+  }
+
+  async accountByEmail(email: string) {
+    return copy(this.account(email));
+  }
+
+  async accountById(id: string) {
+    const account = this.accounts.get(id);
+    return account ? copy(account) : null;
+  }
+
+  async accountByCustomer(customerId: string) {
+    for (const account of this.accounts.values()) if (account.stripeCustomerId === customerId) return copy(account);
+    for (const { accountId, subscription } of this.subscriptions.values()) {
+      if (subscription.customerId === customerId) return this.accountById(accountId);
+    }
+    return null;
+  }
+
+  async setCustomer(account: string, customerId: string) {
+    const row = this.accounts.get(account);
+    const taken = [...this.accounts.values()].some((other) => other.stripeCustomerId === customerId);
+    if (row && row.stripeCustomerId === null && !taken) row.stripeCustomerId = customerId;
+  }
+
+  async startTrial(account: string) {
+    const row = this.accounts.get(account);
+    if (!row || row.trialStartedAt !== null) return false;
+    row.trialStartedAt = this.now();
+    return true;
+  }
+
+  // ---- Devices ----
+
+  async accountForToken(tokenHash: string, kind: DeviceKind) {
+    const device = this.devices.get(tokenHash);
+    if (!device || device.kind !== kind) return null;
+    device.lastSeenAt = this.now();
+    return this.accountById(device.accountId);
+  }
+
+  async link(tokenHash: string, account: string, kind: DeviceKind) {
+    const now = this.now();
+    const existing = this.devices.get(tokenHash);
+    this.devices.set(tokenHash, { accountId: account, kind, createdAt: existing?.createdAt ?? now, lastSeenAt: now });
+  }
+
+  async unlink(tokenHash: string) {
+    if (this.devices.get(tokenHash)?.kind === 'device') this.devices.delete(tokenHash);
+  }
+
+  // ---- Codes ----
+
+  async codeGet(email: string) {
+    const code = this.codes.get(email);
+    return code ? { ...code } : null;
+  }
+
+  async codePut(email: string, codeHash: string, expiresAt: number) {
+    this.codes.set(email, { codeHash, expiresAt, attempts: 0 });
+  }
+
+  async codeAttempt(email: string) {
+    const code = this.codes.get(email);
+    if (!code) return null;
+    code.attempts += 1;
+    return code.attempts;
+  }
+
+  async codeDelete(email: string) {
+    this.codes.delete(email);
+  }
+
+  async rateTake(key: string, limit: number, windowSeconds: number) {
+    const now = this.now();
+    const windowMs = windowSeconds * 1000;
+    let row = this.rates.get(key);
+    if (!row || row.windowStart <= now - windowMs) {
+      row = { windowStart: now, count: 0 };
+      this.rates.set(key, row);
+    }
+    row.count += 1;
+    if (row.count <= limit) return 0;
+    return Math.max(1, Math.ceil((row.windowStart + windowMs - now) / 1000));
+  }
+
+  // ---- Subscriptions and checkouts ----
+
+  async subscriptionPut(account: string, subscription: Subscription) {
+    this.subscriptions.set(subscription.id, { accountId: account, subscription: copy(subscription) });
+  }
+
+  async subscriptionList(account: string) {
+    return [...this.subscriptions.values()].filter((row) => row.accountId === account).map((row) => copy(row.subscription));
+  }
+
+  async pendingPut(sessionId: string, tokenHash: string) {
+    this.pending.set(sessionId, { sessionId, tokenHash, createdAt: this.now(), signInEmail: null });
+  }
+
+  async pendingList(tokenHash: string, since: number, limit: number) {
+    return [...this.pending.values()]
+      .filter((row) => row.tokenHash === tokenHash && row.createdAt >= since)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, limit)
+      .map((row) => ({ ...row }));
+  }
+
+  async pendingGet(sessionId: string) {
+    const row = this.pending.get(sessionId);
+    return row ? { ...row } : null;
+  }
+
+  async pendingSignIn(sessionId: string, email: string) {
+    const row = this.pending.get(sessionId);
+    if (row) row.signInEmail = email;
+  }
+
+  async pendingDelete(sessionId: string) {
+    this.pending.delete(sessionId);
+  }
+
+  async stripeEventNew(id: string) {
+    if (this.events.has(id)) return false;
+    this.events.add(id);
+    return true;
+  }
+
+  async stripeEventForget(id: string) {
+    this.events.delete(id);
+  }
+
+  // ---- Sync, backups, AI ----
 
   async syncRead(account: string) {
     const state = this.sync.get(account);
@@ -100,22 +268,20 @@ export class MemoryStore implements Store {
     return row[kind];
   }
 
-  async extpayCacheGet(keyHash: string) {
-    const entry = this.cache.get(keyHash);
-    return entry ? copy(entry) : null;
-  }
+  // ---- Test helpers ----
 
-  async extpayCachePut(keyHash: string, user: ExtPayUser, checkedAt: number) {
-    this.cache.set(keyHash, { user: copy(user), checkedAt });
+  /** The account a device token's hash is linked to (any kind), or null. */
+  linkedAccount(tokenHash: string): Account | null {
+    const device = this.devices.get(tokenHash);
+    return device ? (this.accounts.get(device.accountId) ?? null) : null;
   }
 
   /** Usage for an email this month (or the month given). */
   async usageOf(email: string, month = '2026-10') {
-    return this.aiUsage(await this.accountId(email), month);
+    return this.aiUsage(this.account(email).id, month);
   }
 
   async setUsage(email: string, usage: { runs?: number; light?: number }, month = '2026-10') {
-    const account = await this.accountId(email);
-    this.usage.set(`${account}|${month}`, { runs: 0, light: 0, ...usage });
+    this.usage.set(`${this.account(email).id}|${month}`, { runs: 0, light: 0, ...usage });
   }
 }

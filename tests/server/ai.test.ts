@@ -346,6 +346,6 @@ describe('POST /ai', () => {
     server.callJson.mockResolvedValue({ name: 'Taxes' });
     server.clock.now = NOW;
     await ai({ task: 'name', tabs: tabs(2) });
-    expect([...server.store.usage.keys()]).toEqual(['account-1|2026-10']);
+    expect([...server.store.usage.keys()]).toEqual([`${server.store.account('ai@example.com').id}|2026-10`]);
   });
 });
