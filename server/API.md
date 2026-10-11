@@ -81,7 +81,7 @@ JSON `{ "error": <code>, "message": <text for people>, ... }`, codes as in `ProE
 | 409 | `already-subscribed` | `POST /checkout` when the account already has a live subscription (use `POST /billing`) |
 | 413 | `server` | Request too large |
 | 429 | `runs-used-up` | 300 AI runs used this month (body also has `runs`) |
-| 429 | `rate-limited` | Too many codes asked for (body also has `retryAfter`, seconds) |
+| 429 | `rate-limited` | Too many codes asked for, or too many checkouts started (body also has `retryAfter`, seconds) |
 | 502 | `ai-failed` | The model refused, failed twice, or returned invalid JSON twice (the run isn't counted) |
 | 502 | `send-failed` | The email with the code couldn't be sent |
 | 502 | `server` | Stripe couldn't be reached or refused |
@@ -118,6 +118,9 @@ Checks the code; creates the account on first sign-in; links this token to the a
 any account it was linked to). With `startTrial`, starts the 7-day Pro AI trial if this email
 never had one and has no live subscription (`trialStarted: true`); `trialUsed: true` means it had
 one before (the person stays signed in). Codes are stored only as an HMAC and deleted once used.
+An account made by a signed-out checkout hasn't proved its email: the first code sign-in proves it
+and unlinks every other computer and Chrome profile key linked to that account (the plan, synced
+tabs and backups stay; this computer is then linked as usual).
 
 ### `POST /trial` (signed in)
 `{ "plan": PlanState, "runs": AiRuns | null, "trialStarted": boolean, "trialUsed": boolean }`.
@@ -154,6 +157,7 @@ token started it. The extension opens `url` in a tab.
   own pages, so people rarely see them.
 - Stripe Tax (`automatic_tax`) when `STRIPE_AUTOMATIC_TAX=true`. Promotion codes are allowed.
 - 409 `already-subscribed` when the account already has a live subscription.
+- At most 20 checkouts an hour per token (429 `rate-limited`, with `retryAfter`).
 
 ### `POST /billing` (signed in, with a Stripe customer)
 Body `{ "flow"?: "payment-method" }` → `{ "url": string }`. A Stripe billing portal session

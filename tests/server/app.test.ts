@@ -182,6 +182,7 @@ describe('sign-in codes', () => {
       trialUsed: false,
     });
     expect(await linkedEmail(token)).toBe('sam@example.com');
+    expect(server.store.account('sam@example.com').emailVerifiedAt).toBe(NOW);
     expect(server.store.codes.has('sam@example.com')).toBe(false);
     expect((await me(token)).json.plan.email).toBe('sam@example.com');
     const again = await finish(newToken('other'), 'sam@example.com', code);
@@ -522,6 +523,24 @@ describe('POST /checkout', () => {
     expect((await checkout(null)).status).toBe(401);
   });
 
+  it('allows 20 checkouts an hour per computer', async () => {
+    for (let i = 0; i < 20; i++) expect((await checkout(laptop)).status).toBe(200);
+    server.clock.now = NOW + 15 * MINUTE;
+    const res = await checkout(laptop);
+    expect(res.status).toBe(429);
+    expect(res.json).toEqual({ error: 'rate-limited', message: expect.stringContaining('45 minutes'), retryAfter: 45 * 60 });
+    expect(server.stripe.sessions.size).toBe(20);
+    expect([...server.store.rates.keys()]).toEqual([`checkout:${await sha256Hex(laptop)}`]);
+    expect((await checkout(newToken('other'))).status).toBe(200);
+    server.clock.now = NOW + HOUR;
+    expect((await checkout(laptop)).status).toBe(200);
+  });
+
+  it('doesn’t count refused checkouts', async () => {
+    for (let i = 0; i < 25; i++) expect((await checkout(keyOf('proMonthly'))).status).toBe(409);
+    expect(server.store.rates.size).toBe(0);
+  });
+
   it('answers 502 when Stripe refuses, and logs why', async () => {
     server.stripe.priceFor('pro-ai-monthly')!.active = false;
     const res = await checkout(laptop);
@@ -638,6 +657,47 @@ describe('paying', () => {
     const signedIn = await server.signIn(laptop, 'free@example.com');
     expect(signedIn.json.plan).toMatchObject({ tier: 'pro', email: 'free@example.com' });
     expect((await me(laptop)).json.needsSignIn).toBeUndefined();
+  });
+
+  it('signs out the computers a signed-out payment linked once the owner proves the email', async () => {
+    const profileKey = 'payer-profile-key'.padEnd(43, 'k');
+    const desktop = newToken('payer-desktop');
+    const { json } = await checkout(laptop, 'pro', 'month');
+    await pay(json.sessionId, 'owner@example.com');
+    await deliverAll();
+    expect(server.store.account('owner@example.com').emailVerifiedAt).toBeNull();
+    await server.request('POST', '/profile', { key: laptop, body: { profileKey } });
+    await server.request('POST', '/signin/profile', { key: desktop, body: { profileKey } });
+    await server.request('POST', '/sync', { key: laptop, body: { set: { 'tf.m': { v: 1 } }, remove: [], baseVersion: 0 } });
+    expect(await linkedEmail(desktop)).toBe('owner@example.com');
+
+    server.clock.now = NOW + MINUTE;
+    const owner = newToken('owner');
+    const res = await server.signIn(owner, 'owner@example.com');
+    expect(res.json.plan).toMatchObject({ tier: 'pro', email: 'owner@example.com' });
+    expect(await linkedEmail(owner)).toBe('owner@example.com');
+    expect(await linkedEmail(laptop)).toBeNull();
+    expect(await linkedEmail(desktop)).toBeNull();
+    expect((await server.request('POST', '/signin/profile', { key: newToken('again'), body: { profileKey } })).status).toBe(401);
+    expect(server.store.account('owner@example.com').emailVerifiedAt).toBe(NOW + MINUTE);
+    // The plan, synced tabs and backups stay.
+    expect((await server.request('GET', '/sync', { key: owner })).json.items).toEqual({ 'tf.m': { v: 1 } });
+    expect((await server.request('GET', '/backups', { key: owner })).json.backups).toHaveLength(1);
+
+    // Only the first proof does this.
+    await server.signIn(laptop, 'owner@example.com');
+    expect(await linkedEmail(owner)).toBe('owner@example.com');
+    expect(await linkedEmail(laptop)).toBe('owner@example.com');
+  });
+
+  it('keeps the payer’s computer signed in when the payer proves the email on it', async () => {
+    const { json } = await checkout(laptop);
+    await pay(json.sessionId, 'new@example.com');
+    await deliverAll();
+    await server.signIn(laptop, 'new@example.com');
+    expect(await linkedEmail(laptop)).toBe('new@example.com');
+    expect(server.store.account('new@example.com').emailVerifiedAt).toBe(NOW);
+    expect((await me(laptop)).json.plan.tier).toBe('pro-ai');
   });
 
   it('says needsSignIn from GET /me too, when it gets there before the webhook', async () => {

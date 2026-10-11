@@ -83,6 +83,7 @@ export function createServer(options: { allowedOrigins?: string[]; automaticTax?
     const account = store.account(user.email);
     account.trialStartedAt = user.trialStartedAt ?? null;
     account.createdAt = NOW - 30 * DAY;
+    account.emailVerifiedAt = NOW - 30 * DAY;
     if (user.subscription) {
       const customer = stripe.addCustomer(user.email);
       account.stripeCustomerId = customer.id;

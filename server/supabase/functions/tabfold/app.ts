@@ -29,6 +29,7 @@ export const LIMITS = {
   codeTries: 5,
   codesPerEmailPerHour: 5,
   codesPerTokenPerHour: 10,
+  checkoutsPerTokenPerHour: 20,
   /** `GET /me` asks Stripe about checkouts this computer started this recently… */
   pendingCheckoutMs: DAY_MS,
   /** …at most this many. */
@@ -73,6 +74,8 @@ export interface Account {
   email: string;
   stripeCustomerId: string | null;
   trialStartedAt: number | null;
+  /** When the email was first proved with a code; null for an account a signed-out checkout made. */
+  emailVerifiedAt: number | null;
   createdAt: number;
 }
 
@@ -97,7 +100,7 @@ export interface PendingCheckout {
 
 /** The database, as the SQL in server/supabase/migrations defines it. Token hashes are hex SHA-256. */
 export interface Store {
-  /** The account for this (lower-cased) email, created on first use. */
+  /** The account for this (lower-cased) email, created on first use (its email not yet proved). */
   accountByEmail(email: string): Promise<Account>;
   accountById(id: string): Promise<Account | null>;
   /** The account with this Stripe customer, or with a subscription of this customer. */
@@ -106,6 +109,11 @@ export interface Store {
   setCustomer(account: string, customerId: string): Promise<void>;
   /** `tabfold_start_trial`: starts the trial now, only if it never started. True if it did. */
   startTrial(account: string): Promise<boolean>;
+  /**
+   * `tabfold_verify_email`: the email was just proved with a code. The first time, unlinks every
+   * device token and profile key of the account (atomically with marking it). True if it was.
+   */
+  verifyEmail(account: string): Promise<boolean>;
 
   /** The account a token (or profile key) of this kind is linked to; notes that it was seen. */
   accountForToken(tokenHash: string, kind: DeviceKind): Promise<Account | null>;
@@ -567,14 +575,14 @@ async function processCheckout(deps: Deps, session: CheckoutInfo): Promise<strin
 
 // ---- Sign-in ----
 
-async function rateLimit(deps: Deps, key: string, limit: number): Promise<void> {
+async function rateLimit(deps: Deps, key: string, limit: number, what: string): Promise<void> {
   const wait = await deps.store.rateTake(key, limit, HOUR_MS / 1000);
   if (wait <= 0) return;
   const minutes = Math.max(1, Math.ceil(wait / 60));
   throw new HttpError(
     429,
     'rate-limited',
-    `That’s a lot of codes. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+    `That’s a lot of ${what}. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
     { retryAfter: Math.ceil(wait) },
   );
 }
@@ -586,8 +594,8 @@ async function signinStart(req: Request, deps: Deps): Promise<Reply> {
   if (!email) throw new HttpError(400, 'invalid-email', 'That doesn’t look like an email address.');
   const purpose = body.purpose;
   if (purpose !== 'signin' && purpose !== 'trial') throw badRequest('“purpose” must be signin or trial.');
-  await rateLimit(deps, `token:${tokenHash}`, LIMITS.codesPerTokenPerHour);
-  await rateLimit(deps, `email:${await sha256Hex(email)}`, LIMITS.codesPerEmailPerHour);
+  await rateLimit(deps, `token:${tokenHash}`, LIMITS.codesPerTokenPerHour, 'codes');
+  await rateLimit(deps, `email:${await sha256Hex(email)}`, LIMITS.codesPerEmailPerHour, 'codes');
   const code = newCode(deps.random ? (bytes) => deps.random!(bytes) : undefined);
   await deps.store.codePut(email, await codeHash(deps, email, code), deps.now() + LIMITS.codeMs);
   try {
@@ -647,6 +655,9 @@ async function signinFinish(req: Request, deps: Deps): Promise<Reply> {
   if (typeof body.code !== 'string') throw badRequest('“code” must be the 6-digit code.');
   await checkCode(deps, email, body.code.replace(/[\s-]/g, ''));
   let account = await deps.store.accountByEmail(email);
+  // A signed-out checkout made this account with an email nobody had proved: now that it is,
+  // the computers that payment linked go (the plan, synced tabs and backups stay).
+  if (account.emailVerifiedAt === null) await deps.store.verifyEmail(account.id);
   await deps.store.link(tokenHash, account.id, 'device');
   let trialStarted = false;
   let trialUsed = account.trialStartedAt !== null;
@@ -725,6 +736,7 @@ async function checkout(req: Request, deps: Deps): Promise<Reply> {
       input.trialEnd = Math.floor(plan.trial.endsAt / 1000);
     }
   }
+  await rateLimit(deps, `checkout:${tokenHash}`, LIMITS.checkoutsPerTokenPerHour, 'checkouts');
   const session = await deps.payments.createCheckout(input);
   await deps.store.pendingPut(session.id, tokenHash);
   return ok({ url: session.url, sessionId: session.id });

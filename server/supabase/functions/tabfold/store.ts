@@ -7,7 +7,7 @@ import type { Account, Backup, BackupInfo, DeviceKind, PendingCheckout, Store, U
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ACCOUNT_COLUMNS = 'id, email, stripe_customer_id, trial_started_at, created_at';
+const ACCOUNT_COLUMNS = 'id, email, stripe_customer_id, trial_started_at, email_verified_at, created_at';
 
 interface DbError {
   code?: string;
@@ -19,6 +19,7 @@ interface AccountRow {
   email: string;
   stripe_customer_id: string | null;
   trial_started_at: string | null;
+  email_verified_at: string | null;
   created_at: string;
 }
 
@@ -57,6 +58,7 @@ function toAccount(row: AccountRow): Account {
     email: row.email,
     stripeCustomerId: row.stripe_customer_id,
     trialStartedAt: time(row.trial_started_at),
+    emailVerifiedAt: time(row.email_verified_at),
     createdAt: Date.parse(row.created_at),
   };
 }
@@ -125,6 +127,10 @@ export function createSupabaseStore(db: SupabaseClient): Store {
 
     async startTrial(account: string): Promise<boolean> {
       return check(await db.rpc('tabfold_start_trial', { p_account: account }), 'start trial') === true;
+    },
+
+    async verifyEmail(account: string): Promise<boolean> {
+      return check(await db.rpc('tabfold_verify_email', { p_account: account }), 'verify email') === true;
     },
 
     async accountForToken(tokenHash: string, kind: DeviceKind): Promise<Account | null> {

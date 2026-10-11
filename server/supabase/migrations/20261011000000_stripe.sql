@@ -3,9 +3,15 @@
 -- code sent by email. Replaces the ExtensionPay cache. As before, only the `tabfold` Edge Function
 -- uses these, with the service role: row level security is on with no policies.
 
+-- email_verified_at: when the email was first proved with a code. An account made by a signed-out
+-- checkout starts without it (Stripe doesn't check the email typed on its page).
 alter table public.accounts
   add column stripe_customer_id text unique,
-  add column trial_started_at timestamptz;
+  add column trial_started_at timestamptz,
+  add column email_verified_at timestamptz;
+
+-- Accounts from before came from ExtensionPay's own email sign-in.
+update public.accounts set email_verified_at = created_at;
 
 -- A computer's device token (kind 'device') or a Chrome profile key (kind 'profile'), stored only
 -- as a SHA-256 hash.
@@ -147,10 +153,34 @@ begin
 end;
 $$;
 
+-- The account's email was just proved with a code. The first time, every computer and Chrome
+-- profile key linked to the account goes (they were linked by a payment whose email nobody had
+-- proved); the plan, synced tabs and backups stay. True if this was the first time.
+create function public.tabfold_verify_email(p_account uuid)
+returns boolean
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_id uuid;
+begin
+  update public.accounts set email_verified_at = now()
+   where id = p_account and email_verified_at is null
+   returning id into v_id;
+  if v_id is null then
+    return false;
+  end if;
+  delete from public.devices where account_id = p_account;
+  return true;
+end;
+$$;
+
 -- Only the service role (the Edge Function) may call these.
 revoke all on function public.tabfold_rate_take(text, int, int) from public, anon, authenticated;
 revoke all on function public.tabfold_start_trial(uuid) from public, anon, authenticated;
 revoke all on function public.tabfold_code_attempt(text) from public, anon, authenticated;
+revoke all on function public.tabfold_verify_email(uuid) from public, anon, authenticated;
 grant execute on function public.tabfold_rate_take(text, int, int) to service_role;
 grant execute on function public.tabfold_start_trial(uuid) to service_role;
 grant execute on function public.tabfold_code_attempt(text) to service_role;
+grant execute on function public.tabfold_verify_email(uuid) to service_role;

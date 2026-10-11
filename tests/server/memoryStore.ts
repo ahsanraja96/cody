@@ -64,6 +64,7 @@ export class MemoryStore implements Store {
       email,
       stripeCustomerId: null,
       trialStartedAt: null,
+      emailVerifiedAt: null,
       createdAt: this.now(),
     };
     this.accounts.set(account.id, account);
@@ -97,6 +98,14 @@ export class MemoryStore implements Store {
     const row = this.accounts.get(account);
     if (!row || row.trialStartedAt !== null) return false;
     row.trialStartedAt = this.now();
+    return true;
+  }
+
+  async verifyEmail(account: string) {
+    const row = this.accounts.get(account);
+    if (!row || row.emailVerifiedAt !== null) return false;
+    row.emailVerifiedAt = this.now();
+    for (const [hash, device] of [...this.devices]) if (device.accountId === account) this.devices.delete(hash);
     return true;
   }
 

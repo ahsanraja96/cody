@@ -265,11 +265,12 @@ Thinking tokens bill as output and are the biggest AI cost; the server already a
 
 - Each account's email, its Stripe customer id, and its subscriptions' plan, status and dates
   (Stripe keeps the card details; the server never sees them).
-- When the account's trial started.
+- When the account's trial started, and when its email was first proved with a code.
 - For each signed-in computer, and each Chrome profile key, only a scrambled form (SHA-256) of its
   token, and when it was last seen.
 - The latest sign-in code for an email, scrambled (HMAC), for 10 minutes; deleted once used.
-- Counters for how many codes were asked for in the last hour, under scrambled emails and tokens.
+- Counters for how many codes were asked for and checkouts started in the last hour, under
+  scrambled emails and tokens.
 - Which computer started a checkout, for a day, and Stripe's event ids, for 30 days.
 - The account's folded tabs (addresses, titles, keywords), as the extension syncs them, plus one
   backup a day for 30 days. Older backups are deleted automatically.
