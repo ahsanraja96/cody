@@ -1,20 +1,33 @@
-// The `tabfold` Edge Function (Deno): wires the real database, ExtensionPay and Claude into app.ts.
-// Not type-checked by the extension's build; app.ts, ai.ts and plan.ts are, through the tests.
+// The `tabfold` Edge Function (Deno): wires the real database, Stripe, Resend and Claude into
+// app.ts. Not type-checked by the extension's build; app.ts, ai.ts, stripe.ts, mail.ts and plan.ts
+// are, through the tests.
 //
-// Secrets (`supabase secrets set ...`): ANTHROPIC_API_KEY, EXTPAY_ID, ALLOWED_ORIGINS.
+// Secrets (`supabase secrets set ...`, see server/API.md): STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
+// STRIPE_AUTOMATIC_TAX, STRIPE_PORTAL_CONFIGURATION, RESEND_API_KEY, EMAIL_FROM, ANTHROPIC_API_KEY,
+// ALLOWED_ORIGINS, and optionally CODE_SECRET, PUBLIC_URL, STRIPE_API_BASE.
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by the Edge runtime.
+//
+// A missing secret only stops what needs it: without Stripe, checkout and billing answer 500 (and
+// the log says which secret is missing); sync and the AI keep working.
 import Anthropic from 'npm:@anthropic-ai/sdk@0.133';
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import type { ExtPayUser } from '../_shared/plan.ts';
 import { AiFailed, createModel, type CallJson } from './ai.ts';
-import { handle, readExtPayUser } from './app.ts';
+import { handle, type Deps } from './app.ts';
+import { createResendMailer } from './mail.ts';
 import { createSupabaseStore } from './store.ts';
+import { createStripe } from './stripe.ts';
 
-const EXTPAY_ID = Deno.env.get('EXTPAY_ID') ?? '';
-const ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') ?? '').split(',').filter((origin) => origin.trim());
+const env = (name: string) => Deno.env.get(name)?.trim() ?? '';
+
+const SUPABASE_URL = env('SUPABASE_URL');
+const SERVICE_ROLE_KEY = env('SUPABASE_SERVICE_ROLE_KEY');
+const ALLOWED_ORIGINS = env('ALLOWED_ORIGINS')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 const MODEL = 'claude-haiku-5-5';
 
-const db = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '', {
+const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
@@ -29,21 +42,6 @@ function claude(): Anthropic {
     throw new AiFailed('ANTHROPIC_API_KEY is not set');
   }
   return anthropic;
-}
-
-async function extpayUser(apiKey: string): Promise<ExtPayUser | null> {
-  const url = `https://extensionpay.com/extension/${encodeURIComponent(EXTPAY_ID)}/api/v2/user?api_key=${encodeURIComponent(apiKey)}`;
-  let response: Response;
-  try {
-    response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
-  } catch {
-    // Fetch errors quote the URL, which holds the key: never let it reach the logs.
-    throw new Error('ExtensionPay could not be reached');
-  }
-  // ExtensionPay refuses a key it doesn't know; anything else is its own trouble.
-  if (response.status >= 400 && response.status < 500 && response.status !== 429) return null;
-  if (!response.ok) throw new Error(`ExtensionPay answered ${response.status}`);
-  return readExtPayUser(await response.json());
 }
 
 const callJson: CallJson = async (system, user, schema) => {
@@ -72,12 +70,24 @@ const callJson: CallJson = async (system, user, schema) => {
   return JSON.parse(block.text);
 };
 
-const deps = {
+const deps: Deps = {
   store: createSupabaseStore(db),
-  extpayUser,
+  // Both check their keys on use: a missing one fails only the routes that need it.
+  payments: createStripe({
+    secretKey: env('STRIPE_SECRET_KEY'),
+    webhookSecret: env('STRIPE_WEBHOOK_SECRET'),
+    apiBase: env('STRIPE_API_BASE') || undefined,
+  }),
+  mailer: createResendMailer({ apiKey: env('RESEND_API_KEY'), from: env('EMAIL_FROM') }),
   model: createModel(callJson),
   now: () => Date.now(),
-  config: { extpayId: EXTPAY_ID, allowedOrigins: ALLOWED_ORIGINS },
+  config: {
+    allowedOrigins: ALLOWED_ORIGINS,
+    publicUrl: env('PUBLIC_URL') || (SUPABASE_URL ? `${SUPABASE_URL.replace(/\/+$/, '')}/functions/v1/tabfold` : ''),
+    automaticTax: env('STRIPE_AUTOMATIC_TAX').toLowerCase() === 'true',
+    portalConfiguration: env('STRIPE_PORTAL_CONFIGURATION') || undefined,
+    codeSecret: env('CODE_SECRET') || SERVICE_ROLE_KEY,
+  },
   log: (message: string) => console.error(message),
 };
 

@@ -81,7 +81,7 @@ JSON `{ "error": <code>, "message": <text for people>, ... }`, codes as in `ProE
 | 409 | `already-subscribed` | `POST /checkout` when the account already has a live subscription (use `POST /billing`) |
 | 413 | `server` | Request too large |
 | 429 | `runs-used-up` | 300 AI runs used this month (body also has `runs`) |
-| 429 | `rate-limited` | Too many codes asked for (body also has `retryAfter`, seconds) |
+| 429 | `rate-limited` | Too many codes asked for, or too many checkouts started (body also has `retryAfter`, seconds) |
 | 502 | `ai-failed` | The model refused, failed twice, or returned invalid JSON twice (the run isn't counted) |
 | 502 | `send-failed` | The email with the code couldn't be sent |
 | 502 | `server` | Stripe couldn't be reached or refused |
@@ -100,6 +100,10 @@ server doesn't know. If this token started a Stripe checkout in the last 24 hour
 processed yet, the server asks Stripe about it first (so a payment shows up even before Stripe's
 webhook arrives) and, when it's complete, signs this computer in to the paying account.
 
+Optional `"needsSignIn": { "email": string }` (only while this computer isn't signed in): a checkout
+it started was paid with an email that already had a Tabfold account. The payment is on that
+account, but the computer must sign in with a code first (see `POST /checkout`).
+
 ### `POST /signin/start` (any token)
 Body `{ "email": string, "purpose": "signin" | "trial" }` → `{ "sent": true }`.
 Emails a 6-digit code, valid 10 minutes and for 5 tries; a new code replaces the old one. The
@@ -114,6 +118,9 @@ Checks the code; creates the account on first sign-in; links this token to the a
 any account it was linked to). With `startTrial`, starts the 7-day Pro AI trial if this email
 never had one and has no live subscription (`trialStarted: true`); `trialUsed: true` means it had
 one before (the person stays signed in). Codes are stored only as an HMAC and deleted once used.
+An account made by a signed-out checkout hasn't proved its email: the first code sign-in proves it
+and unlinks every other computer and Chrome profile key linked to that account (the plan, synced
+tabs and backups stay; this computer is then linked as usual).
 
 ### `POST /trial` (signed in)
 `{ "plan": PlanState, "runs": AiRuns | null, "trialStarted": boolean, "trialUsed": boolean }`.
@@ -138,6 +145,10 @@ token started it. The extension opens `url` in a tab.
 
 - Signed in: checkout uses the account (its Stripe customer, or its email, which Stripe then
   can't change). Not signed in: Stripe asks for an email, and that email becomes the account.
+  Stripe doesn't check that email, so the payment signs this computer in only when it creates the
+  account. If the email already had an account, the plan lands on it, but the computer signs in
+  with a code (`GET /me` answers `needsSignIn`); otherwise anyone could reach someone else's
+  synced tabs by paying with their email.
 - During the server trial, a Pro AI checkout starts billing when the trial ends
   (`subscription_data.trial_end`), unless fewer than 48 hours are left (Stripe's minimum); then it
   charges at once. A Pro checkout charges at once (and the trial stops counting).
@@ -146,6 +157,7 @@ token started it. The extension opens `url` in a tab.
   own pages, so people rarely see them.
 - Stripe Tax (`automatic_tax`) when `STRIPE_AUTOMATIC_TAX=true`. Promotion codes are allowed.
 - 409 `already-subscribed` when the account already has a live subscription.
+- At most 20 checkouts an hour per token (429 `rate-limited`, with `retryAfter`).
 
 ### `POST /billing` (signed in, with a Stripe customer)
 Body `{ "flow"?: "payment-method" }` → `{ "url": string }`. A Stripe billing portal session
@@ -160,7 +172,7 @@ catch the tab first.
 ### `POST /stripe/webhook` (Stripe only)
 Checked with `Stripe-Signature` and `STRIPE_WEBHOOK_SECRET` (5-minute tolerance); 400 otherwise.
 Handles `checkout.session.completed` (links the Stripe customer to the account, stores the
-subscription, signs in the token that started the checkout) and
+subscription, signs in the token that started the checkout, as `POST /checkout` says) and
 `customer.subscription.created|updated|deleted` (re-reads the subscription from Stripe, so events
 arriving out of order don't matter). Each event id is processed once.
 
