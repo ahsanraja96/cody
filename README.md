@@ -71,7 +71,7 @@ Without it the build is Free: the Pro screens still show, say "Pro isn't switche
 
 - Search over 10,000 saved tabs: about 19 ms per query, 190 ms to build the index (unit test, Node).
 - Popup: first paint in about 60 to 150 ms in headless Chromium, with thousands of folded tabs.
-- 428 unit tests (including the server, run in Node), a 57-check end-to-end smoke test (including real Incognito windows) and a 25-check end-to-end Pro test (trial, account sync, Organise with AI, smart names, backups, trial end, Remove Tabfold) pass.
+- 531 unit tests (including the server, run in Node), a 57-check end-to-end smoke test (including real Incognito windows) and a 65-check end-to-end Pro test pass. The Pro test runs the real server code against a fake Stripe (its API, checkout and billing pages, and signed webhooks) and a mailbox that keeps the codes: the trial by email code, account sync, Organise with AI, smart names, backups, paying in the Stripe tab, a failed payment, Update card, cancelling, signing out and in, the plan ending, a new buyer, paying with someone else's email, and Remove Tabfold.
 
 ## Decisions and known limits
 

@@ -190,6 +190,11 @@ WXT_TABFOLD_API=https://<project id>.supabase.co/functions/v1/tabfold
 It isn't a secret: it ends up inside the extension. Never put any of the keys above here. Then
 build as usual (`npm run build`, or `npm run zip` for the store). Without it the build is Free only.
 
+Use exactly the same address as the server's own (its `PUBLIC_URL`, or the default above). After
+paying, Stripe sends the person's tab to `<that address>/checkout/done`, and the extension only
+recognises its own server's address there: with a different one the tab isn't turned into the
+"You're on Tabfold Pro" page (the plan still switches on, a few seconds later).
+
 ## Test it
 
 Everything in test mode, with the extension built against your server:
