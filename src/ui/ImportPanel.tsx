@@ -227,7 +227,7 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
         {details.length > 0 && <p className="m-0 text-text-2">{details.join(' · ')}</p>}
         <p className="m-0 text-text-2">
           {step.outcome.folders > 0 ? 'Your folders are at the top of the list; the rest are sorted by kind of site.' : 'They’re in your list, sorted by kind of site.'}
-          {step.skipped > 0 && ` ${plural(step.skipped, 'entry', 'entries')} weren’t web addresses and were skipped.`}
+          {step.skipped > 0 && ` ${plural(step.skipped, 'entry', 'entries')} ${step.skipped === 1 ? 'wasn’t a web address and was' : 'weren’t web addresses and were'} skipped.`}
         </p>
       </div>
     );

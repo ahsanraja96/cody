@@ -1021,7 +1021,9 @@ check('"Upgrade to save" opens the plans page and saves nothing', !!(await until
 const alarm = await control.evaluate(() => chrome.alarms.get('tabfold-autofold'));
 check('the rules run every 5 minutes (an alarm)', alarm?.periodInMinutes === 5, JSON.stringify(alarm));
 
-// Make the rule fire now: tabs open for a second count as "not looked at" once the rule says 1 second
+// Make the rule fire now: tabs open for a second count as "not looked at" once the rule says 1 second.
+// The 5-minute alarm is paused meanwhile (its first run comes a minute after start and could fold them first).
+await control.evaluate(() => chrome.alarms.clear('tabfold-autofold'));
 for (const t of (await chromeTabs()).filter((x) => x.url?.startsWith('http'))) await control.evaluate((id) => chrome.tabs.remove(id), t.id);
 const idleUrls = [site(3, 'idle-one'), site(3, 'idle-two')];
 await newWindow(idleUrls);
@@ -1057,6 +1059,7 @@ await control.evaluate((id) =>
     chrome.storage.local.set({ settings: { ...r.settings, autoFold: r.settings.autoFold.map((x) => (x.id === id ? { ...x, when: { type: 'idle', days: 3 } } : x)) } }),
   ),
 ruleId);
+await control.evaluate(() => chrome.alarms.create('tabfold-autofold', { periodInMinutes: 5 }));
 await go('#/settings');
 check('Settings says when the rule last ran and what it folded', await has(ui, 'folded 2 tabs', 4000));
 await ui.evaluate(() => document.getElementById('auto-h')?.scrollIntoView({ block: 'start' }));

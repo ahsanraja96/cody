@@ -16,13 +16,14 @@ interface FoldError {
   /** 'list-full': the free list had no room ({ room, needed, limit }). */
   code?: string;
   details?: Record<string, number>;
+  /** When it was shown: a fold that starts after this makes it out of date. */
+  at?: number;
 }
-
 
 /** A fold that failed, for the red line above the list (Min-States "Fold failed"). */
 export const useFoldError = create<{ error: FoldError | null; set: (error: FoldError | null) => void }>((set) => ({
   error: null,
-  set: (error) => set({ error }),
+  set: (error) => set({ error: error ? { ...error, at: error.at ?? Date.now() } : null }),
 }));
 
 /** What folding every window would fold now (see `describeWindows` for the rules). */
@@ -113,6 +114,9 @@ export function useFoldToast(): void {
 
   useEffect(() => {
     if (!fold) return;
+    // A fold started after the error (here, in the popup, with the shortcut or by a rule) replaces it.
+    const shown = useFoldError.getState().error;
+    if (shown && fold.phase !== 'failed' && fold.startedAt > (shown.at ?? 0)) useFoldError.getState().set(null);
     if (fold.phase === 'failed' && fold.finishedAt && Date.now() - fold.finishedAt < 30_000) {
       // The worker keeps the failure's code ('list-full' with { room, needed, limit }); an older one only its message.
       const full = fold.code ? null : listFullFrom(fold.error);
