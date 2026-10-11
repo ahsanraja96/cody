@@ -136,6 +136,11 @@ export interface TabRecord {
    * The worker stamps it on any such change that doesn't set it (src/lib/folders.ts).
    */
   placedAt?: number;
+  /**
+   * In a team folder (Teams): the email of whoever added it to the team, for "Sara added 3 tabs ·
+   * 2 h ago". Travels with the team's copy only (record field [9], src/lib/sync/team.ts).
+   */
+  addedBy?: string;
 }
 
 /**
@@ -163,6 +168,13 @@ export interface FolderRecord {
   shareId?: string;
   /** The shared page follows the folder's changes ("Keep it up to date"). */
   shareLive?: boolean;
+  /**
+   * A team folder (Teams, Mx-Share): everyone in this team (`TeamInfo.id`) sees it and can add to
+   * it. It travels in the team's copy (`/team/sync`, src/lib/sync/team.ts), never in Chrome sync or
+   * the person's own account, and its tabs live in the team's own fold (src/lib/teams.ts). Team
+   * folders don't count toward any Free limit.
+   */
+  teamId?: string;
 }
 
 export type SnapshotReason =

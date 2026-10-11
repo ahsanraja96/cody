@@ -4,14 +4,16 @@ import type { SiteKinds } from '../categories';
 import { checkWiped } from '../dataGuard';
 import { db, DB_NAME, getSearchVersion, type TabfoldDB } from '../db';
 import { listRoom, storedSiteKinds } from '../folders';
-import { cloudSyncStatus } from '../pro/state';
-import { applySyncChanges, listFoldedTabs } from '../repo';
+import { cloudSyncStatus, teamSyncStatus } from '../pro/state';
+import { applySyncChanges, listPersonalTabs, listTeamTabs } from '../repo';
 import { getSettings } from '../settings';
 import { getDeviceId, syncStatus, type SyncStatus } from '../state';
+import type { FolderRecord, TabRecord } from '../types';
 import { cloudSyncActive, cloudSyncDeps } from './cloud';
 import { localSyncState, type SyncStateStore } from './localState';
 import { planSync, type LocalFolders } from './merge';
-import { copyHash, diffItems, hash53, META_KEY, SYNC_LIMITS, SYNC_PREFIX, unpack, type SyncLimits } from './records';
+import { copyHash, diffItems, hash53, META_KEY, SYNC_LIMITS, SYNC_PREFIX, unpack, type RemoteState, type SyncLimits } from './records';
+import { teamSyncDeps } from './team';
 
 /**
  * Chrome sync of folded tabs, run by the service worker. The newest folded tabs go into
@@ -22,6 +24,10 @@ import { copyHash, diffItems, hash53, META_KEY, SYNC_LIMITS, SYNC_PREFIX, unpack
  *
  * The same engine syncs with the Tabfold account for Pro (./cloud.ts: every folded tab, on the
  * Tabfold server). Two runners share the worker; while the account syncs, Chrome sync is off.
+ *
+ * A third runner (Teams, ./team.ts) syncs a team's folders and their tabs with the team's copy on
+ * the server. Each runner has a scope: the person's own runners never carry a team's folders or
+ * tabs, and the team's carries nothing else.
  */
 
 /** Why a read or write failed, and what to do about it. */
@@ -63,6 +69,17 @@ export const chromeSyncArea: SyncArea = {
   remove: (keys) => browser.storage.sync.remove(keys),
 };
 
+/**
+ * What a runner carries. The person's own (`team: null`): every folder and folded tab except the
+ * teams'. A team's: only that team's folders and the tabs in its fold, each saying who added it;
+ * new tabs land in the team's fold; site kinds stay out.
+ */
+export interface SyncScope {
+  team: { id: string; name: string } | null;
+}
+
+const PERSONAL: SyncScope = { team: null };
+
 /** Sites moved to another kind on this computer, and sites put back (host → when). */
 export interface SiteKindsStore {
   get(): Promise<{ kinds: SiteKinds; removals: Record<string, number> }>;
@@ -84,6 +101,8 @@ export interface SyncDeps {
   siteKinds?: SiteKindsStore;
   /** How many more tabs the list here takes (a Free list: 500 in all). Unlimited unless given. */
   room?: () => Promise<number>;
+  /** What this runner carries: the person's own unless given; null: nothing (the runner is off). */
+  scope?: () => Promise<SyncScope | null>;
 }
 
 /**
@@ -105,11 +124,15 @@ export function defaultSyncDeps(): SyncDeps {
   };
 }
 
-/** Folders and site kinds here, and a fingerprint of them (to notice a change made here). */
-async function readLocalFolders(deps: SyncDeps): Promise<{ folders: LocalFolders; hash: string } | null> {
-  if (!deps.siteKinds) return null;
-  const [rows, kinds] = await Promise.all([deps.database.folders.toArray(), deps.siteKinds.get()]);
-  const folders = rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+/** Folders and site kinds here (the scope's), and a fingerprint of them (to notice a change made here). */
+async function readLocalFolders(deps: SyncDeps, scope: SyncScope = PERSONAL): Promise<{ folders: LocalFolders; hash: string } | null> {
+  if (!deps.siteKinds && !scope.team) return null;
+  const empty = { kinds: {}, removals: {} };
+  const [rows, kinds] = await Promise.all([deps.database.folders.toArray(), scope.team || !deps.siteKinds ? empty : deps.siteKinds.get()]);
+  const team = scope.team?.id ?? null;
+  const folders = rows
+    .filter((f) => (team ? f.teamId === team : !f.teamId))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const text = JSON.stringify([
     folders.map((f) => [f.id, f.name, f.color, f.order, f.updatedAt, f.deletedAt]),
     Object.entries(kinds.kinds).sort(),
@@ -173,6 +196,8 @@ export async function syncOnce(
   const limits = deps.limits ?? SYNC_LIMITS;
   const label = deps.area.label ?? 'Chrome sync';
   if (!(await deps.enabled())) return { status: offStatus(now), wrote: false, applied: false, skipped: 'off' };
+  const scope = deps.scope ? await deps.scope() : PERSONAL;
+  if (!scope) return { status: offStatus(now), wrote: false, applied: false, skipped: 'off' };
 
   let state = await deps.store.get();
   const startFloor = state.floor;
@@ -214,9 +239,9 @@ export async function syncOnce(
   } catch (error) {
     return fail(error);
   }
-  const remote = unpack(items, limits);
+  const remote = forScope(unpack(items, limits), scope);
   const version = await getSearchVersion(deps.database);
-  const localFolders = await readLocalFolders(deps);
+  const localFolders = await readLocalFolders(deps, scope);
 
   // Nothing changed here or in Chrome sync since the last run (this includes the echo of our own write).
   if (
@@ -244,7 +269,8 @@ export async function syncOnce(
 
   const deviceId = await deps.deviceId();
   // Tabs folded from Incognito stay on this computer: they never go to Chrome sync.
-  const local = (await listFoldedTabs(deps.database)).filter((tab) => !tab.incognito).map((tab) => ({
+  const rows: TabRecord[] = scope.team ? await listTeamTabs(scope.team.id, deps.database) : await listPersonalTabs(deps.database);
+  const local = rows.filter((tab) => !tab.incognito).map((tab) => ({
     id: tab.id,
     url: tab.url,
     title: tab.title,
@@ -254,6 +280,7 @@ export async function syncOnce(
     snoozeUntil: tab.snoozeUntil,
     snoozedOn: tab.snoozedOn,
     placedAt: tab.placedAt,
+    ...(scope.team && tab.addedBy ? { addedBy: tab.addedBy } : {}),
   }));
   const plan = planSync({
     local,
@@ -280,10 +307,14 @@ export async function syncOnce(
   // working: its plan is out of date. Start again shortly instead of applying or writing it. (An
   // area that checks versions refuses an out-of-date write itself, so it isn't read again here.)
   const raced = async () => {
-    if (deps.area.checksVersion) return (await deps.store.get()).floor !== state.floor;
+    if (deps.area.checksVersion) {
+      const latest = await deps.store.get();
+      return latest.floor !== state.floor || (latest.epoch ?? 0) !== (state.epoch ?? 0);
+    }
     const [latestState, latestItems] = await Promise.all([deps.store.get(), deps.area.getAll()]);
     return (
       latestState.floor !== state.floor ||
+      (latestState.epoch ?? 0) !== (state.epoch ?? 0) ||
       JSON.stringify(latestItems[META_KEY]) !== JSON.stringify(items[META_KEY]) ||
       copyHash(latestItems) !== remote.copyHash
     );
@@ -300,18 +331,19 @@ export async function syncOnce(
   let inboxId = state.inboxId;
   if (changesHere) {
     try {
+      const folders = plan.folders && folderChanges ? await scopedFolderWrites(plan.folders.write, plan.folders.drop, scope, deps) : null;
       ({ inboxId } = await applySyncChanges(
         {
           remove: plan.remove,
           update: plan.update,
           adopt: plan.adopt.map(({ localId, record }) => ({ localId, tab: record })),
           insert: plan.insert,
-          ...(plan.folders && folderChanges ? { folders: { write: plan.folders.write, drop: plan.folders.drop } } : {}),
+          ...(folders ? { folders } : {}),
         },
-        { inboxId, deviceId, now },
+        { inboxId, deviceId, now, ...(scope.team ? { team: scope.team } : {}) },
         deps.database,
       ));
-      if (plan.folders && kindChanges && deps.siteKinds) {
+      if (plan.folders && kindChanges && deps.siteKinds && !scope.team) {
         await deps.siteKinds.set({ kinds: plan.folders.kinds, removals: plan.folders.removals });
       }
     } catch (error) {
@@ -367,7 +399,8 @@ export async function syncOnce(
   }
 
   // "Clear all data" reset this computer's state while the run finished: keep the reset.
-  if ((await deps.store.get()).floor !== startFloor) return { ...retrySoon(), wrote, applied: changesHere };
+  const latest = await deps.store.get();
+  if (latest.floor !== startFloor || (latest.epoch ?? 0) !== (state.epoch ?? 0)) return { ...retrySoon(), wrote, applied: changesHere };
   state = {
     ...state,
     known: plan.known,
@@ -376,7 +409,7 @@ export async function syncOnce(
     inboxId,
     lastHash: copyHash(plan.packed.items),
     lastVersion: await getSearchVersion(deps.database),
-    lastFolders: (await readLocalFolders(deps))?.hash ?? null,
+    lastFolders: (await readLocalFolders(deps, scope))?.hash ?? null,
     failures: 0,
     retryAt: 0,
     partialRuns: 0,
@@ -391,6 +424,43 @@ export async function syncOnce(
   };
 }
 
+/**
+ * What the shared copy brings, as this runner may take it: a team's copy brings no site kinds; the
+ * person's own copy says nothing about who added a tab.
+ */
+function forScope(remote: RemoteState, scope: SyncScope): RemoteState {
+  if (scope.team) return remote.folders?.kinds.length ? { ...remote, folders: { ...remote.folders, kinds: [] } } : remote;
+  if (!remote.records.some((r) => r.addedBy)) return remote;
+  return { ...remote, records: remote.records.map(({ addedBy: _adder, ...record }) => record) };
+}
+
+/**
+ * Folder rows to write, kept to the scope: a team's rows are that team's folders; the person's
+ * own never overwrite a team folder (their ids never meet; this is only a guard).
+ */
+async function scopedFolderWrites(
+  write: FolderRecord[],
+  drop: string[],
+  scope: SyncScope,
+  deps: SyncDeps,
+): Promise<{ write: FolderRecord[]; drop: string[] }> {
+  const team = scope.team?.id ?? null;
+  const rows = await deps.database.folders.bulkGet([...write.map((f) => f.id), ...drop]);
+  const existing = new Map(rows.filter((f): f is FolderRecord => !!f).map((f) => [f.id, f]));
+  const ours = (id: string) => {
+    const row = existing.get(id);
+    return !row || (team ? row.teamId === team : !row.teamId);
+  };
+  return {
+    write: write
+      .filter((f) => ours(f.id))
+      .map((f) => {
+        const { teamId: _team, ...rest } = f;
+        return team ? { ...rest, teamId: team } : rest;
+      }),
+    drop: drop.filter(ours),
+  };
+}
 
 // ---------------------------------------------------------------------------------------------
 // Running it in the service worker
@@ -501,10 +571,18 @@ export const cloudSync: SyncRunner = createRunner(
   { quietWhenNeverOn: true },
 );
 
-/** Both engines, after a change. Each one that is off finds out quickly and does nothing. */
+/** A team's folders and their tabs, with the team's copy (Teams). */
+export const teamSync: SyncRunner = createRunner(
+  teamSyncDeps,
+  { get: teamSyncStatus.get, set: (value) => teamSyncStatus.set(value) },
+  { quietWhenNeverOn: true },
+);
+
+/** Every engine, after a change. Each one that is off finds out quickly and does nothing. */
 export function scheduleSync(delayMs = LOCAL_DEBOUNCE_MS): void {
   chromeSync.schedule(delayMs);
   cloudSync.schedule(delayMs);
+  teamSync.schedule(delayMs);
 }
 
 /** Run Chrome sync now in this worker (one at a time). `force` ignores the back-off and the unchanged check. */
@@ -522,6 +600,14 @@ export async function syncNow(): Promise<{ ok: boolean }> {
 /** The `cloud-sync-now` command: sync with the Tabfold account at once. */
 export async function cloudSyncNow(): Promise<{ ok: boolean }> {
   return { ok: ranOk(await cloudSync.run({ force: true })) };
+}
+
+/**
+ * The `team-sync-now` command: read the team's copy and bring in what changed (and send what
+ * changed here). `force` ignores the back-off and the unchanged check.
+ */
+export async function teamSyncNow(force = true): Promise<{ ok: boolean }> {
+  return { ok: ranOk(await teamSync.run({ force })) };
 }
 
 function touchesFolds(parts: Record<string, unknown>): boolean {
@@ -552,6 +638,9 @@ export function setupSync(): void {
         const change = changes.plan as Change;
         const tier = (value: unknown) => (value as { tier?: string } | undefined)?.tier ?? 'free';
         if (tier(change.oldValue) !== tier(change.newValue)) scheduleSync(0);
+        // Joined a team (or another one): its folders come in now.
+        const team = (value: unknown) => (value as { team?: { id?: string } | null } | undefined)?.team?.id ?? null;
+        if (team(change.newValue) && team(change.oldValue) !== team(change.newValue)) teamSync.schedule(0);
       }
     }
   });
@@ -561,6 +650,8 @@ export function setupSync(): void {
   });
   chromeSync.schedule(STARTUP_DELAY_MS);
   void cloudPullIfDue(STARTUP_DELAY_MS);
+  // A team's folders: read at every worker start (the pages ask again while they're open).
+  teamSync.schedule(STARTUP_DELAY_MS);
 }
 
 /**

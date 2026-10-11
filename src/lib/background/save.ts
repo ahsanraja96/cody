@@ -337,9 +337,11 @@ export async function recordChangeUndo(change: {
   folders?: LastAction['folders'];
   foldersMade?: LastAction['foldersMade'];
   siteKind?: LastAction['siteKind'];
+  /** Tabs this change wrote (a tab moved into or out of a team folder gets a new copy): Undo removes them. */
+  savedTabIds?: string[];
 }): Promise<string | null> {
   const folderChange = !!change.folders?.length || !!change.foldersMade?.length || !!change.siteKind;
-  if (!change.patches?.length && !change.putBack?.tabs.length && !folderChange) return null;
+  if (!change.patches?.length && !change.putBack?.tabs.length && !folderChange && !change.savedTabIds?.length) return null;
   const now = change.now ?? Date.now();
   const action: LastAction = {
     id: crypto.randomUUID(),
@@ -353,7 +355,7 @@ export async function recordChangeUndo(change: {
     freedBytes: 0,
     keptOpen: { pinned: 0, audible: 0 },
     intoUnsorted: false,
-    savedTabIds: [],
+    savedTabIds: change.savedTabIds ?? [],
     createdSession: false,
     windowSources: {},
     closed: false,

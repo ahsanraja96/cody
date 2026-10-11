@@ -17,6 +17,7 @@ import {
   type LastAction,
   type SnoozeBack,
 } from '../state';
+import { isTeamSession } from '../teams';
 import type { TabRecord } from '../types';
 import { classifyUrl, displayHost } from '../urls';
 import { broadcast, currentNormalWindowId, getNormalWindows, incognitoAllowed, ownOrigin, setAttentionBadge } from './browserState';
@@ -104,10 +105,15 @@ export async function snooze(command: Pick<SnoozeCommand, 'until' | 'tabRecordId
   if (command.tabIds?.length) {
     if (free && already.size + command.tabIds.length > FREE_LIMITS.snoozes) throw snoozeLimitError();
     const run = await foldTabs({ tabIds: command.tabIds, quiet: true });
-    const patches = run.existingCopies.map(before);
+    // A copy already in a team folder stays as it is for the team.
+    const teamFolds = new Set(
+      (await db.sessions.bulkGet([...new Set(run.existingCopies.map((c) => c.sessionId))])).filter((s) => isTeamSession(s)).map((s) => s!.id),
+    );
+    const copies = run.existingCopies.filter((c) => !teamFolds.has(c.sessionId));
+    const patches = copies.map(before);
     await db.transaction('rw', db.tabs, async () => {
       if (run.savedTabIds.length) await db.tabs.where('id').anyOf(run.savedTabIds).modify(marks);
-      for (const copy of run.existingCopies) await db.tabs.update(copy.id, marks);
+      for (const copy of copies) await db.tabs.update(copy.id, marks);
     });
     // Undo of the fold also un-snoozes the copies that were already folded.
     const actionId = run.outcome.actionId;
@@ -116,13 +122,14 @@ export async function snooze(command: Pick<SnoozeCommand, 'until' | 'tabRecordId
       if (action?.id === actionId) await lastAction.set({ ...action, patches: [...(action.patches ?? []), ...patches] });
     }
     await scheduleSnoozeAlarm(now);
-    return { snoozed: run.savedTabIds.length + run.existingCopies.length, actionId };
+    return { snoozed: run.savedTabIds.length + copies.length, actionId };
   }
 
   const ids = [...new Set(command.tabRecordIds ?? [])];
   const rows = (await db.tabs.bulkGet(ids)).filter((t): t is TabRecord => !!t);
   const sessions = await db.sessions.bulkGet([...new Set(rows.map((r) => r.sessionId))]);
-  const live = new Set(sessions.filter((s) => !!s && !s.deletedAt).map((s) => s!.id));
+  // A team's tabs are everyone's: snoozing one would hide it from the whole team.
+  const live = new Set(sessions.filter((s) => !!s && !s.deletedAt && !isTeamSession(s)).map((s) => s!.id));
   const tabs = rows.filter((r) => live.has(r.sessionId));
   if (tabs.length === 0) return { snoozed: 0, actionId: null };
   if (free && already.size + tabs.filter((t) => !already.has(t.id)).length > FREE_LIMITS.snoozes) throw snoozeLimitError();

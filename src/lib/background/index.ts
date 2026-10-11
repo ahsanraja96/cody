@@ -18,6 +18,7 @@ import { ensureMilestoneStart } from './pro';
 import { route } from './router';
 import { handleExternalMessage, pushLiveShares, setupShare, SHARE_ALARM } from './share';
 import { checkRecovery, promoteShutdownSnapshot, scheduleSnapshot, takeSnapshot } from './snapshots';
+import { setupTeams } from './teams';
 import { autoSuspendTick } from './suspend';
 import { forgetPendingTitle, onTabUpdated } from './titles';
 import { onUpdateAvailable, onUpdated } from './update';
@@ -215,4 +216,6 @@ export function setupBackground(): void {
   safely('snooze', setupSnooze);
   // Folders: the placement stamp on tab writes, the weekly tidy-up alarm, old AI projects into folders.
   setupFolders();
+  // Teams: following the plan's team (joined, left, removed, signed out), and its folders leaving here.
+  setupTeams();
 }

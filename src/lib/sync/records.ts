@@ -1,5 +1,6 @@
 import { CATEGORIES, type CategoryId } from '../categories';
 import { cleanKeywords } from '../keywords';
+import { cleanAddedBy } from '../teams';
 import { TAB_GROUP_COLORS, type TabGroupColor } from '../types';
 import { classifyUrl, dedupeKey, MAX_URL_LENGTH } from '../urls';
 
@@ -95,6 +96,8 @@ export interface SyncRecord {
   snoozedOn?: string;
   /** When its folder or snooze last changed (ms); unset: never. The newest change wins. */
   placedAt?: number;
+  /** In a team's copy only: the email of whoever added it to the team (`[9]`). */
+  addedBy?: string;
 }
 
 /** A tab removed on some computer: other computers remove their copy too. */
@@ -134,8 +137,8 @@ export interface RemoteState {
 
 /**
  * Packed records: `[id, url, title, savedAtSec, keywords?, folderId?, snoozeUntilSec?, snoozedOn?,
- * placedAtSec?]`. Fields after the keywords came in 0.6; empty trailing ones are left off, and older
- * readers ignore them.
+ * placedAtSec?, addedBy?]`. Fields after the keywords came in 0.6 (`addedBy`, in a team's copy only,
+ * with Teams); empty trailing ones are left off, and older readers ignore them.
  */
 type PackedRecord = [
   id: string,
@@ -147,6 +150,7 @@ type PackedRecord = [
   snoozeUntilSeconds?: number,
   snoozedOn?: string,
   placedAtSeconds?: number,
+  addedBy?: string,
 ];
 type PackedTombstone = [id: string, atSeconds: number, key: string];
 
@@ -236,6 +240,7 @@ function encodeRecord(record: SyncRecord): PackedRecord {
     snoozed ? seconds(record.snoozeUntil) : 0,
     snoozed ? (record.snoozedOn ?? '') : '',
     seconds(record.placedAt),
+    record.addedBy ?? '',
   ];
   let end = tail.length;
   const empty = (value: unknown) => value === '' || value === 0 || (Array.isArray(value) && value.length === 0);
@@ -261,7 +266,7 @@ export function placementOf(record: Pick<SyncRecord, 'folderId' | 'snoozeUntil' 
 
 export function decodeRecord(raw: unknown, limits: SyncLimits = SYNC_LIMITS): SyncRecord | null {
   if (!Array.isArray(raw) || raw.length < 4) return null;
-  const [id, url, title, savedSeconds, keywords, folderId, snoozeSeconds, snoozedOn, placedSeconds] = raw as unknown[];
+  const [id, url, title, savedSeconds, keywords, folderId, snoozeSeconds, snoozedOn, placedSeconds, addedBy] = raw as unknown[];
   if (typeof id !== 'string' || !SHORT_ID.test(id)) return null;
   if (typeof url !== 'string' || !isSyncable(url, limits)) return null;
   if (typeof title !== 'string') return null;
@@ -283,6 +288,8 @@ export function decodeRecord(raw: unknown, limits: SyncLimits = SYNC_LIMITS): Sy
   if (typeof placedSeconds === 'number' && Number.isFinite(placedSeconds) && placedSeconds > 0) {
     record.placedAt = Math.floor(placedSeconds) * 1000;
   }
+  const adder = cleanAddedBy(addedBy);
+  if (adder) record.addedBy = adder;
   return record;
 }
 

@@ -2,7 +2,7 @@ import { browser } from 'wxt/browser';
 import { db } from '../db';
 import { formatDay } from '../exporters';
 import type { Command, CommandResults, FoldOutcome } from '../messages';
-import { addFolder, cleanFolderName, listLiveFolders, listRoom, setTabsFolder } from '../folders';
+import { addFolder, cleanFolderName, listPersonalFolders, listRoom, setTabsFolder } from '../folders';
 import { CommandError } from '../messages';
 import { colourGroups, contextMarkdown, cutText, freshRuns, matchFolders, pickTabsForAi, readRuns, toAiTab } from '../pro/ai';
 import { api, ProError } from '../pro/api';
@@ -13,7 +13,7 @@ import { refreshPlan, signinFinish, signinStart, signOut, startTrial } from '../
 import { aiRuns, milestoneState, planState } from '../pro/state';
 import { hasFreeLimits, hasPro, hasProAi } from '../pro/tiers';
 import { AI_MAX_TABS, type AiGroup, type AiRuns, type BackupInfo, type OrganiseResult, type PlanState } from '../pro/types';
-import { getSessionGraph, listFoldedTabs, listLiveSessions, restoreRecords, setSmartName } from '../repo';
+import { getSessionGraph, listLiveSessions, listPersonalTabs, restoreRecords, setSmartName } from '../repo';
 import { cloudSyncActive } from '../sync/cloud';
 import { cloudSyncNow } from '../sync/engine';
 import { CLOUD_LIMITS, unpack } from '../sync/records';
@@ -114,7 +114,7 @@ async function storeRuns(value: unknown): Promise<AiRuns | null> {
  */
 export async function organise(now = Date.now()): Promise<OrganiseResult> {
   await requirePlan('pro-ai');
-  const loose = (await listFoldedTabs()).filter((t) => !t.folderId && !t.snoozeUntil);
+  const loose = (await listPersonalTabs()).filter((t) => !t.folderId && !t.snoozeUntil);
   const { sent, notSent } = pickTabsForAi(loose);
   if (sent.length === 0) {
     return { groups: [], ungrouped: [], notSent, runs: (await aiRuns.get()) ?? freshRuns(now) };
@@ -129,7 +129,7 @@ export async function organise(now = Date.now()): Promise<OrganiseResult> {
   }
   const runs = (await storeRuns(answer?.runs)) ?? (await aiRuns.get()) ?? freshRuns(now);
   const { groups, ungrouped } = colourGroups(answer?.groups, sent.map((t) => t.id));
-  return { groups: matchFolders(groups, await listLiveFolders()), ungrouped, notSent, runs };
+  return { groups: matchFolders(groups, await listPersonalFolders()), ungrouped, notSent, runs };
 }
 
 /**
@@ -140,7 +140,7 @@ export async function organise(now = Date.now()): Promise<OrganiseResult> {
  */
 export async function applyFolders(groups: AiGroup[], now = Date.now()): Promise<{ applied: number; folders: number }> {
   const unlimited = !hasFreeLimits(await planState.get());
-  const live = await listLiveFolders();
+  const live = await listPersonalFolders();
   const liveIds = new Set(live.map((f) => f.id));
   const byName = new Map(live.map((f) => [f.name.toLowerCase(), f.id]));
   const placed = new Set<string>();

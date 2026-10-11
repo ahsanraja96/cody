@@ -1,13 +1,13 @@
 import { browser } from 'wxt/browser';
 import { db } from '../db';
-import { addFolder, duplicateGroups, freeLimitsNow, listLiveFolders, setTabsFolder } from '../folders';
+import { addFolder, duplicateGroups, freeLimitsNow, listPersonalFolders as listLiveFolders, setTabsFolder } from '../folders';
 import { CommandError, type AskMatch, type Command, type CommandResults } from '../messages';
 import { cutText, pickAskTabs, pickTabsForAi, readAskMatches, readTidyGroups } from '../pro/ai';
 import { api } from '../pro/api';
 import { proConfigured } from '../pro/config';
 import { planState } from '../pro/state';
 import { hasProAi } from '../pro/tiers';
-import { listFoldedTabs, removeDuplicateCopies } from '../repo';
+import { listPersonalTabs as listFoldedTabs, removeDuplicateCopies } from '../repo';
 import { getSettings } from '../settings';
 import { tidyState, type TidyState, type TidySuggestion } from '../state';
 import type { TabRecord } from '../types';
