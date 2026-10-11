@@ -9,10 +9,13 @@ import type { Command, CommandResponse } from '../messages';
 import { onTabClosed as onCheckoutTabClosed, onTabUrl as onCheckoutTabUrl, setupCheckout } from '../pro/checkout';
 import { onPlanAlarm, PLAN_ALARM, PLAN_ALARM_MINUTES, setupPlan } from '../pro/plan';
 import { setupSync, syncTick } from '../sync/engine';
+import { AUTOFOLD_ALARM, AUTOFOLD_MINUTES, autoFoldTick, onTabActivated, setupSnooze, SNOOZE_ALARM, wakeDue } from './automation';
 import { forgetUnfinishedFold } from './fold';
-import { createMenus, onCommand, onMenuClicked } from './menus';
+import { setupLive } from './live';
+import { createMenus, onCommand, onMenuClicked, refreshSnoozeMenu } from './menus';
 import { ensureMilestoneStart } from './pro';
 import { route } from './router';
+import { handleExternalMessage, pushLiveShares, setupShare, SHARE_ALARM } from './share';
 import { checkRecovery, promoteShutdownSnapshot, scheduleSnapshot, takeSnapshot } from './snapshots';
 import { autoSuspendTick } from './suspend';
 import { forgetPendingTitle, onTabUpdated } from './titles';
@@ -32,6 +35,8 @@ const ALARMS = {
   sync: { name: 'tabfold-sync', periodInMinutes: 1 },
   /** Reads the plan from the Tabfold server (a cancelled or failed payment shows up here). */
   plan: { name: PLAN_ALARM, periodInMinutes: PLAN_ALARM_MINUTES },
+  /** Fold automatically rules, the snooze menu's times and live shares' catch-up; cheap with no rules. */
+  autoFold: { name: AUTOFOLD_ALARM, periodInMinutes: AUTOFOLD_MINUTES },
 } as const;
 
 const INSTALLED_AT = 'installedAt';
@@ -129,6 +134,14 @@ export function setupBackground(): void {
     return true;
   });
 
+  // "Save to my Tabfold" on a shared folder's page (externally_connectable: the share site only).
+  browser.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+    const response = handleExternalMessage(message, sender);
+    if (!response) return false;
+    response.then(sendResponse);
+    return true;
+  });
+
   browser.contextMenus.onClicked.addListener((info, tab) => safely('menu', () => onMenuClicked(info, tab)));
   browser.commands.onCommand.addListener((command, tab) => safely('shortcut', () => onCommand(command, tab)));
 
@@ -144,6 +157,13 @@ export function setupBackground(): void {
     else if (alarm.name === ALARMS.autoSuspend.name) safely('auto-suspend', () => autoSuspendTick());
     else if (alarm.name === ALARMS.daily.name) safely('daily', dailyMaintenance);
     else if (alarm.name === ALARMS.sync.name) safely('sync', syncTick);
+    else if (alarm.name === ALARMS.autoFold.name) {
+      safely('auto-fold', () => autoFoldTick());
+      safely('snooze menu', () => refreshSnoozeMenu());
+      safely('shared folders', pushLiveShares);
+    }
+    else if (alarm.name === SNOOZE_ALARM) safely('snooze', () => wakeDue());
+    else if (alarm.name === SHARE_ALARM) safely('shared folders', pushLiveShares);
     else onPlanAlarm(alarm.name);
   });
 
@@ -163,6 +183,8 @@ export function setupBackground(): void {
     // Stripe sent a checkout or billing tab back to the server: it becomes Tabfold's welcome page, or closes.
     if (change.url) safely('checkout tab', () => onCheckoutTabUrl(id, change.url!));
   });
+  // Only on a Chrome without tab.lastAccessed: when each tab was last looked at, for auto-fold rules.
+  browser.tabs.onActivated.addListener(({ tabId }) => safely('tab seen', () => onTabActivated(tabId)));
   browser.tabs.onMoved.addListener(() => scheduleSnapshot());
   browser.tabs.onAttached.addListener(() => scheduleSnapshot());
   browser.windows.onRemoved.addListener((windowId) => {
@@ -185,4 +207,9 @@ export function setupBackground(): void {
   setupCheckout();
   // When Tabfold first ran, for the memory milestone (never in its first 3 days).
   safely('milestone', () => ensureMilestoneStart());
+  // Live folders follow their Chrome tab groups; shared folders with "Keep it up to date" follow changes.
+  setupLive();
+  setupShare();
+  // Snoozed tabs: the toolbar number after a restart, and the alarm (ones due while Chrome was closed come back now).
+  safely('snooze', setupSnooze);
 }
