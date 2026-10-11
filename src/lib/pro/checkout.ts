@@ -77,9 +77,23 @@ async function setBilling(value: BillingWatch | null): Promise<void> {
   else await browser.storage.session.remove(BILLING_WATCH);
 }
 
-/** A live subscription (what paying gives; a trial isn't one). */
+/** Paid for: a live subscription (a trial isn't one), Pro for life, or a team's live plan. */
 export function isPaid(plan: PlanState): boolean {
+  if (plan.lifetime === true || !!plan.team) return true;
   return plan.tier !== 'free' && (plan.status === 'active' || plan.status === 'past_due');
+}
+
+/** Teams: seats 1–100 (default 3), the name at most 60 characters (server/API.md "Teams"). */
+export const TEAM_SEATS = { min: 1, max: 100, default: 3 } as const;
+
+/** The `POST /checkout` body: a subscription's period; Pro for life is one payment; Teams adds seats and a name. */
+export function checkoutBody(tier: CheckoutPlan, interval: BillingInterval, team: { seats?: number; teamName?: string } = {}): Record<string, unknown> {
+  if (tier === 'pro-lifetime') return { tier };
+  if (tier !== 'teams') return { tier, interval };
+  const asked = typeof team.seats === 'number' && Number.isFinite(team.seats) ? Math.round(team.seats) : TEAM_SEATS.default;
+  const seats = Math.min(TEAM_SEATS.max, Math.max(TEAM_SEATS.min, asked));
+  const teamName = (team.teamName ?? '').trim().slice(0, 60);
+  return { tier, interval, seats, ...(teamName ? { teamName } : {}) };
 }
 
 /** An https address from the server (http only for a server on this computer, as in the end-to-end test). */
@@ -171,10 +185,13 @@ export async function openCheckout(
   if (!proConfigured()) throw new ProError('not-configured');
   let answer: { url?: unknown; sessionId?: unknown };
   try {
-    const body = tier === 'teams' ? { tier, interval, seats: team.seats, teamName: team.teamName } : { tier, interval };
-    answer = await api('/checkout', { method: 'POST', body });
+    answer = await api('/checkout', { method: 'POST', body: checkoutBody(tier, interval, team) });
   } catch (error) {
-    if (error instanceof ProError && error.code === 'already-subscribed') return openBilling({}, source);
+    if (error instanceof ProError && error.code === 'already-subscribed') {
+      // Pro for life is bought once: there's no plan to change in billing.
+      if (tier === 'pro-lifetime') throw new ProError('already-subscribed', 'You already have Tabfold Pro for life.', error.status, error.body);
+      return openBilling({}, source);
+    }
     throw error;
   }
   const url = pageUrl(answer?.url);

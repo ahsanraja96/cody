@@ -4,7 +4,6 @@ import { ensureProfileKey, forgetDeviceToken, isToken, peekDeviceToken, PROFILE_
 import { api, ProError } from './api';
 import { proConfigured } from './config';
 import { aiRuns, forgetCloudSyncState, needsSignIn, planEnded, planState, readPlan } from './state';
-import { hasPro } from './tiers';
 import { FREE_PLAN, type PlanState, type SigninPurpose, type SigninResult, type Tier } from './types';
 
 /**
@@ -82,17 +81,27 @@ function codeOf(error: unknown): string {
 }
 
 /**
+ * Free, with the Free limits: no paid tier, no Pro for life, no team (a Teams plan or Pro for life
+ * counts as paid everywhere). The same rule as `hasFreeLimits` (src/ui/hooks.ts).
+ */
+function isFree(plan: PlanState): boolean {
+  return plan.tier === 'free' && !plan.lifetime && !plan.team;
+}
+
+/**
  * Store a plan. A paid plan or trial that ended while the same account stays signed in leaves a
- * one-time notice (`planEnded`); signing out doesn't, and paying again clears it. Signing in (the
- * email changed, or any sign-in with a code) registers the Chrome profile key.
+ * one-time notice (`planEnded`), only when the person ends up Free (a team ending for someone with
+ * Pro for life or their own plan says nothing); signing out doesn't, and paying again clears it.
+ * Signing in (the email changed, or any sign-in with a code) registers the Chrome profile key.
  */
 export async function applyPlan(next: PlanState, options: { viaProfile?: boolean; withCode?: boolean; now?: number } = {}): Promise<void> {
   const now = options.now ?? Date.now();
   const previous = await planState.get();
   await planState.set(next);
-  if (hasPro(previous) && next.tier === 'free' && previous.email !== null && next.email === previous.email) {
-    await planEnded.set({ at: now, tier: previous.tier as Exclude<Tier, 'free'>, wasTrial: previous.trial !== null });
-  } else if (hasPro(next) && (await planEnded.get())) {
+  if (!isFree(previous) && isFree(next) && previous.email !== null && next.email === previous.email) {
+    const tier: Exclude<Tier, 'free'> = previous.tier === 'free' ? 'pro' : previous.tier;
+    await planEnded.set({ at: now, tier, wasTrial: previous.trial !== null });
+  } else if (!isFree(next) && (await planEnded.get())) {
     await planEnded.set(null);
   }
   await scheduleTrialEnd(next);
