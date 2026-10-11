@@ -263,6 +263,24 @@ export interface ExternalAnswer {
   reason?: string;
   /** Tabs saved. */
   tabs?: number;
+  /** What the shared page shows when it didn't work (it reads `message`). */
+  message?: string;
+}
+
+/** The sentence the public share page shows for each reason it couldn't save. */
+const SAVE_MESSAGES: Record<string, string> = {
+  'list-full': 'Your free Tabfold list is full (500 tabs). Make room in Tabfold, or upgrade, then try again.',
+  'folder-limit': 'Free Tabfold has 3 folders. Delete one in Tabfold, or upgrade, then try again.',
+  'not-found': 'This link doesn’t work any more.',
+  offline: 'Tabfold couldn’t reach the internet. Check your connection and try again.',
+  'rate-limited': 'Too many tries. Wait a minute and try again.',
+  empty: 'There are no pages in this folder to save.',
+  'not-configured': 'This copy of Tabfold can’t save shared folders.',
+};
+
+function withMessage(answer: ExternalAnswer): ExternalAnswer {
+  if (answer.ok || answer.message) return answer;
+  return { ...answer, message: SAVE_MESSAGES[answer.reason ?? ''] ?? 'Tabfold couldn’t save this folder. Try again.' };
 }
 
 const SHARE_ID = /^[A-Za-z0-9]{4,64}$/;
@@ -290,11 +308,13 @@ export function handleExternalMessage(message: unknown, sender: { origin?: strin
   if (!fromShareSite(sender)) return undefined;
   if (!message || typeof message !== 'object' || (message as { type?: unknown }).type !== 'tabfold-save-share') return undefined;
   const id = (message as { id?: unknown }).id;
-  if (typeof id !== 'string' || !SHARE_ID.test(id)) return Promise.resolve({ ok: false, reason: 'bad-request' });
-  return saveShare(id).catch((error): ExternalAnswer => {
-    const code = error instanceof CommandError ? error.code : undefined;
-    return { ok: false, reason: code ?? 'error' };
-  });
+  if (typeof id !== 'string' || !SHARE_ID.test(id)) return Promise.resolve(withMessage({ ok: false, reason: 'bad-request' }));
+  return saveShare(id)
+    .catch((error): ExternalAnswer => {
+      const code = error instanceof CommandError ? error.code : undefined;
+      return { ok: false, reason: code ?? 'error' };
+    })
+    .then(withMessage);
 }
 
 interface PublicShare {

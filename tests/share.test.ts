@@ -221,8 +221,8 @@ describe('"Save to my Tabfold" from a shared page', () => {
     expect(handleExternalMessage({ type: 'tabfold-save-share', id: 'share00001' }, { origin: 'https://evil.example' })).toBeUndefined();
     expect(handleExternalMessage({ type: 'tabfold-save-share', id: 'share00001' }, { url: 'https://tabfold.app.evil.example/s' })).toBeUndefined();
     expect(handleExternalMessage({ type: 'something-else' }, site)).toBeUndefined();
-    expect(await handleExternalMessage({ type: 'tabfold-save-share', id: '../me' }, site)).toEqual({ ok: false, reason: 'bad-request' });
-    expect(await handleExternalMessage({ type: 'tabfold-save-share', id: 'missing00' }, site)).toEqual({ ok: false, reason: 'not-found' });
+    expect(await handleExternalMessage({ type: 'tabfold-save-share', id: '../me' }, site)).toMatchObject({ ok: false, reason: 'bad-request' });
+    expect(await handleExternalMessage({ type: 'tabfold-save-share', id: 'missing00' }, site)).toMatchObject({ ok: false, reason: 'not-found' });
   });
 
   it('saves the shared pages as a new folder named like the share, without a token', async () => {
@@ -241,11 +241,11 @@ describe('"Save to my Tabfold" from a shared page', () => {
   it('Free limits apply: a 4th folder, or more tabs than the list has room for, and nothing is saved', async () => {
     await planState.set({ ...FREE_PLAN, checkedAt: Date.now() });
     for (const id of ['f1', 'f2', 'f3']) await db.folders.add({ ...FOLDER, id: `${id}aaaaaaaaaa` });
-    expect(await handleExternalMessage({ type: 'tabfold-save-share', id: 'share00001' }, site)).toEqual({ ok: false, reason: 'folder-limit' });
+    expect(await handleExternalMessage({ type: 'tabfold-save-share', id: 'share00001' }, site)).toMatchObject({ ok: false, reason: 'folder-limit' });
     await db.folders.clear();
     const now = Date.now();
     await db.sessions.add({ id: 'full', name: 'Full', tags: [], pinned: 0, color: null, kind: 'session', source: 'save-all', createdAt: now, updatedAt: now, deletedAt: 0, deviceId: 'd', version: 1, tabCount: 499, windowCount: 1, preview: [] } satisfies SessionRecord);
-    expect(await handleExternalMessage({ type: 'tabfold-save-share', id: 'share00001' }, site)).toEqual({ ok: false, reason: 'list-full' });
+    expect(await handleExternalMessage({ type: 'tabfold-save-share', id: 'share00001' }, site)).toMatchObject({ ok: false, reason: 'list-full' });
     expect(await db.tabs.count()).toBe(0);
     expect(await db.folders.count()).toBe(0);
   });
