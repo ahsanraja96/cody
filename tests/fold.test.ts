@@ -469,14 +469,22 @@ describe('open all', () => {
 });
 
 describe('menus and shortcuts', () => {
-  it('the right-click menu has only "Fold this tab" and "Fold this tab with keywords…"', async () => {
+  it('the right-click menu has "Fold this tab", "Fold this tab with keywords…" and "Snooze this tab" with its times', async () => {
     vi.spyOn(fakeBrowser.contextMenus, 'removeAll').mockResolvedValue(undefined as never);
     const create = vi.spyOn(fakeBrowser.contextMenus, 'create').mockReturnValue(1 as never);
+    vi.spyOn(fakeBrowser.contextMenus, 'update').mockResolvedValue(undefined as never);
     await createMenus();
     expect(create.mock.calls.map(([item]) => [item.id, item.title, item.contexts])).toEqual([
       [MENU.foldTab, 'Fold this tab', ['page', 'frame']],
       [MENU.foldTabKeywords, 'Fold this tab with keywords…', ['page', 'frame']],
+      [MENU.snoozeTab, 'Snooze this tab', ['page', 'frame']],
+      [`${MENU.snoozeTab}:later-today`, 'Later today', ['page', 'frame']],
+      [`${MENU.snoozeTab}:tomorrow`, 'Tomorrow morning', ['page', 'frame']],
+      [`${MENU.snoozeTab}:weekend`, 'This weekend', ['page', 'frame']],
+      [`${MENU.snoozeTab}:next-week`, 'Next week', ['page', 'frame']],
+      [`${MENU.snoozeTab}:month`, 'In a month', ['page', 'frame']],
     ]);
+    expect(create.mock.calls.slice(3).every(([item]) => item.parentId === MENU.snoozeTab)).toBe(true);
   });
 
   it('"Fold this tab" folds it; "…with keywords" opens the keyword view; neither touches Incognito', async () => {
