@@ -20,6 +20,10 @@ const NAMES: Record<ImportSource, string> = {
   onetab: 'Imported from OneTab',
   'session-buddy': 'Imported from Session Buddy',
   bookmarks: 'Imported bookmarks',
+  toby: 'Imported from Toby',
+  workona: 'Imported from Workona',
+  json: 'Imported links',
+  links: 'Imported links',
 };
 
 /** Tabs written per transaction, so a huge import shows progress and never holds one giant write. */

@@ -222,7 +222,7 @@ describe('import', () => {
   it('creates one session per imported group, never capped', async () => {
     const sessions = Array.from({ length: 52 }, (_, i) => ({ name: `Group ${i}`, createdAt: null, windows: [capturedWindow([`https://g${i}.com`])] }));
     const result = await importSessions(sessions, 'd1');
-    expect(result).toEqual({ sessions: 52, tabs: 52, intoUnsorted: 0 });
+    expect(result).toEqual({ sessions: 52, tabs: 52, intoUnsorted: 0, folders: 0, skippedOverLimit: 0, withoutFolder: 0, duplicates: 0 });
   });
 });
 

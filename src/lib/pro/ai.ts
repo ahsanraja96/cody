@@ -1,5 +1,6 @@
 import { markdownLink } from '../exporters';
-import type { TabGroupColor, TabRecord } from '../types';
+import type { AskMatch } from '../messages';
+import type { FolderRecord, TabGroupColor, TabRecord } from '../types';
 import { displayHost } from '../urls';
 import { AI_MAX_TABS, AI_MAX_TITLE, AI_RUNS_PER_MONTH, type AiGroup, type AiRuns, type AiTab } from './types';
 
@@ -63,6 +64,129 @@ export function colourGroups(
     groups.push({ name: clean, color: PROJECT_COLORS[groups.length % PROJECT_COLORS.length]!, tabIds: ids });
   }
   return { groups, ungrouped: sentIds.filter((id) => !used.has(id)) };
+}
+
+/**
+ * Organise fills folders: a group named like a folder that's already there (any case) goes into
+ * it (`folderId`) and takes its colour; any other group will be a new folder.
+ */
+export function matchFolders(groups: AiGroup[], folders: Array<Pick<FolderRecord, 'id' | 'name' | 'color'>>): AiGroup[] {
+  const byName = new Map<string, Pick<FolderRecord, 'id' | 'name' | 'color'>>();
+  for (const folder of folders) {
+    const key = folder.name.trim().toLowerCase();
+    if (!byName.has(key)) byName.set(key, folder);
+  }
+  return groups.map((group) => {
+    const folder = byName.get(group.name.trim().toLowerCase());
+    return folder ? { ...group, folderId: folder.id, color: folder.color } : group;
+  });
+}
+
+// ---- Ask your tabs (Pro AI) ----
+
+const STOP_WORDS = new Set(
+  'a an and are as at be by did do for from had has have i in is it its last me my of on or that the this to was week were what when where which who with you your'.split(' '),
+);
+
+/** The words of a question worth matching: lower case, two letters or more, common words left out. */
+export function queryWords(query: string): string[] {
+  const words = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((word) => word.length >= 2 && !STOP_WORDS.has(word));
+  return [...new Set(words)];
+}
+
+/** How well a tab's title and site match the words (0: not at all). */
+export function askScore(tab: Pick<TabRecord, 'title' | 'url'>, words: string[]): number {
+  if (words.length === 0) return 0;
+  const title = tab.title.toLowerCase();
+  const host = displayHost(tab.url).toLowerCase();
+  let score = 0;
+  for (const word of words) {
+    if (title.includes(word)) score += 2;
+    if (host.includes(word)) score += 1;
+  }
+  return score;
+}
+
+/**
+ * What Ask sends: up to 300 tabs (never Incognito), those whose title or site match the question's
+ * words first (best first), then the newest to fill. Titles and sites only.
+ */
+export function pickAskTabs(tabs: TabRecord[], query: string, max = AI_MAX_TABS): AiTab[] {
+  const words = queryWords(query);
+  const eligible = tabs.filter((t) => !t.incognito).sort(newestFirst);
+  const scored = eligible.map((tab) => ({ tab, score: askScore(tab, words) })).filter((s) => s.score > 0);
+  scored.sort((a, b) => b.score - a.score || newestFirst(a.tab, b.tab));
+  const picked = scored.slice(0, max).map((s) => s.tab);
+  const ids = new Set(picked.map((t) => t.id));
+  for (const tab of eligible) {
+    if (picked.length >= max) break;
+    if (!ids.has(tab.id)) picked.push(tab);
+  }
+  return picked.map(toAiTab);
+}
+
+/** The AI's answer to Ask, checked: only tabs that were sent, each once, at most 8, reasons ≤ 80 characters. */
+export function readAskMatches(raw: unknown, sentIds: string[]): AskMatch[] {
+  const sent = new Set(sentIds);
+  const seen = new Set<string>();
+  const matches: AskMatch[] = [];
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { id, reason } = entry as { id?: unknown; reason?: unknown };
+    if (typeof id !== 'string' || !sent.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    matches.push({ tabRecordId: id, reason: typeof reason === 'string' ? cutText(reason, 80) : '' });
+    if (matches.length >= 8) break;
+  }
+  return matches;
+}
+
+// ---- The weekly tidy-up (Pro AI) ----
+
+export interface TidyGroup {
+  /** "38 tabs about Lisbon", its number matching the tabs kept. */
+  summary: string;
+  /** An existing folder, or null for a new one named `folderName`. */
+  folderId: string | null;
+  folderName: string;
+  tabIds: string[];
+}
+
+/**
+ * The AI's tidy-up suggestions, checked: only tabs that were sent, each in one suggestion, at least
+ * `min` tabs each, an existing folder only when it is one of `folders` (otherwise a new folder with
+ * its name), at most 3.
+ */
+export function readTidyGroups(
+  raw: unknown,
+  sentIds: string[],
+  folders: Array<Pick<FolderRecord, 'id' | 'name'>>,
+  min = 2,
+): TidyGroup[] {
+  const sent = new Set(sentIds);
+  const used = new Set<string>();
+  const known = new Map(folders.map((f) => [f.id, f]));
+  const groups: TidyGroup[] = [];
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { summary, folderId, folderName, tabIds } = entry as Record<string, unknown>;
+    if (!Array.isArray(tabIds)) continue;
+    const ids = tabIds.filter((id): id is string => typeof id === 'string' && sent.has(id) && !used.has(id));
+    if (ids.length < min) continue;
+    const folder = typeof folderId === 'string' ? known.get(folderId) : undefined;
+    const name = folder?.name ?? (typeof folderName === 'string' ? cutText(folderName, 60) : '');
+    if (!name) continue;
+    for (const id of ids) used.add(id);
+    let text = typeof summary === 'string' ? cutText(summary, 80) : '';
+    // The number the person reads is the number of tabs that will move.
+    text = /^\d[\d,]*\s/.test(text) ? text.replace(/^\d[\d,]*/, String(ids.length)) : `${ids.length} tabs about ${name}`;
+    groups.push({ summary: text, folderId: folder ? folder.id : null, folderName: name, tabIds: ids });
+    if (groups.length >= 3) break;
+  }
+  return groups;
 }
 
 /** Start of next month (UTC), when AI runs start again. */

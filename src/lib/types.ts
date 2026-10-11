@@ -131,6 +131,11 @@ export interface TabRecord {
   snoozedOn?: string;
   /** Last time it was opened from Tabfold (ms), for the weekly tidy-up's "not opened in a month". */
   lastOpenedAt?: number;
+  /**
+   * When `folderId` or the snooze last changed (ms). Between computers the newest change wins (sync).
+   * The worker stamps it on any such change that doesn't set it (src/lib/folders.ts).
+   */
+  placedAt?: number;
 }
 
 /**

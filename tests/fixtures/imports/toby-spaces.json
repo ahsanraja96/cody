@@ -1,0 +1,29 @@
+{
+  "spaces": [
+    {
+      "name": "Personal",
+      "collections": [
+        {
+          "title": "Holiday in Lisbon",
+          "createdAt": "2025-03-02T10:00:00.000Z",
+          "cards": [
+            { "title": "Time Out Lisbon", "url": "https://www.timeout.com/lisbon" },
+            { "title": "Lisbon flights", "url": "https://www.google.com/travel/flights?q=lisbon", "customTitle": "Flights" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Work",
+      "collections": [
+        {
+          "title": "Reading",
+          "tabs": [
+            { "title": "The Verge", "url": "https://www.theverge.com/" },
+            { "name": "A note without a link" }
+          ]
+        }
+      ]
+    }
+  ]
+}

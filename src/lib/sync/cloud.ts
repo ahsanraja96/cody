@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser';
 import { checkWiped } from '../dataGuard';
 import { db } from '../db';
+import { storedSiteKinds } from '../folders';
 import { api, ProError, type ApiRequest } from '../pro/api';
 import { proConfigured } from '../pro/config';
 import { refreshPlan } from '../pro/plan';
@@ -114,6 +115,8 @@ export function cloudSyncDeps(): SyncDeps {
     isWiped: async () => (await checkWiped(db)).wiped,
     now: () => Date.now(),
     limits: CLOUD_LIMITS,
+    // Folders and site kinds travel with every folded tab; the list has no limit on Pro.
+    siteKinds: storedSiteKinds,
   };
 }
 

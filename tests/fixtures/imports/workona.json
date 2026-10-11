@@ -1,0 +1,34 @@
+{
+  "exportedAt": "2026-09-30T08:15:00.000Z",
+  "account": { "name": "Ada", "url": "https://workona.com/account" },
+  "workspaces": [
+    {
+      "id": "ws_1",
+      "title": "Marketing",
+      "url": "https://workona.com/0/ws_1",
+      "tabs": [
+        { "title": "Campaign brief - Google Docs", "url": "https://docs.google.com/document/d/abc" },
+        { "title": "Figma - Landing page", "url": "https://www.figma.com/file/xyz" }
+      ],
+      "sections": [
+        {
+          "title": "Resources",
+          "resources": [
+            { "title": "Brand guidelines", "url": "https://brand.example.com/guidelines" },
+            { "title": "Analytics", "url": "https://analytics.google.com/analytics/web/" }
+          ]
+        },
+        {
+          "title": "Notes",
+          "resources": [{ "title": "A note", "type": "note", "text": "Call Sam" }]
+        }
+      ]
+    },
+    {
+      "id": "ws_2",
+      "name": "Hiring",
+      "tabs": [{ "title": "Greenhouse", "url": "https://app.greenhouse.io/dashboard" }],
+      "sections": []
+    }
+  ]
+}

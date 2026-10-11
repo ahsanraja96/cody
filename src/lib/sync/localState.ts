@@ -15,6 +15,8 @@ export interface SyncLocalState {
   /** Content hash in Chrome sync after the last run, and the search version then. */
   lastHash: string | null;
   lastVersion: number | null;
+  /** Fingerprint of the folders and site kinds here after the last run (0.6). */
+  lastFolders?: string | null;
   /** Below 1 after Chrome refused a write as too big. */
   budgetFactor: number;
   /** Failed runs in a row, and when to try again. */
