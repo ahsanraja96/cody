@@ -12,6 +12,13 @@ import { signWebhook, STRIPE_VERSION } from '../../server/supabase/functions/tab
  *   `apiBase: fake.url`).
  *
  * Signed webhook events go to `webhookUrl` when it's set; every event is also kept in `events`.
+ *
+ * In the end-to-end test, roughly:
+ *
+ *   const api = await serveWeb((req) => handle(req, deps), { port: API_PORT });
+ *   const stripe = await startFakeStripe({ port: STRIPE_PORT, webhookSecret: SECRET,
+ *     webhookUrl: `${api.url}/tabfold/stripe/webhook` });
+ *   deps.payments = createStripe({ secretKey: 'sk_test_e2e', webhookSecret: SECRET, apiBase: stripe.url });
  */
 
 /** Stripe objects are loose JSON here. */
@@ -24,7 +31,7 @@ export interface FakeStripeOptions {
   webhookUrl?: string;
   /** Signs the events, and is the secret of webhook endpoints made through the API. */
   webhookSecret?: string;
-  /** Start with Tabfold's two products and four prices (`pro-monthly`, …). */
+  /** Start with Tabfold's two products and four prices (`pro-monthly`, …), as the setup script makes them. Default true. */
   prices?: boolean;
   /** The clock (ms); default Date.now. */
   now?: () => number;
@@ -720,7 +727,7 @@ ${canCancel ? `<form method="post" action="/portal/${escapeHtml(portal.id)}/canc
     }
   }
 
-  if (options.prices) seedPrices();
+  if (options.prices !== false) seedPrices();
   return fake;
 }
 

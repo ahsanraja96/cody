@@ -29,7 +29,7 @@ const WEBHOOK = 'https://abcdefghijklmnopqrst.supabase.co/functions/v1/tabfold/s
 let fake: RunningFakeStripe;
 
 beforeEach(async () => {
-  fake = await startFakeStripe({ webhookSecret: 'whsec_from_setup' });
+  fake = await startFakeStripe({ webhookSecret: 'whsec_from_setup', prices: false });
 });
 
 afterEach(async () => {
