@@ -57,7 +57,13 @@ async function dispatch(command: Command, source: CommandSource): Promise<Comman
     case 'recover-from-mirror':
       return recoverFromMirror();
     case 'plan-refresh':
-    case 'plan-open':
+    case 'checkout-open':
+    case 'checkout-focus':
+    case 'billing-open':
+    case 'signin-start':
+    case 'signin-finish':
+    case 'trial-start':
+    case 'signout':
     case 'ai-organise':
     case 'ai-apply':
     case 'ai-context':
@@ -66,7 +72,8 @@ async function dispatch(command: Command, source: CommandSource): Promise<Comman
     case 'cloud-sync-now':
     case 'milestone-dismiss':
     case 'reopen-everything':
-      return handleProCommand(command);
+      // Checkout and billing tabs open next to the Tabfold page that asked.
+      return handleProCommand(command, source);
   }
 }
 
@@ -75,8 +82,11 @@ export async function route(command: Command, source: CommandSource = {}): Promi
   try {
     return { ok: true, data: await dispatch(command, source) };
   } catch (error) {
-    console.error('[tabfold] command failed', command.type, error);
-    if (error instanceof CommandError) return { ok: false, error: error.message, code: error.code };
+    // The command's type and the error's name only: commands can carry emails and sign-in codes.
+    console.error('[tabfold] command failed', command.type, error instanceof CommandError ? error.code : error);
+    if (error instanceof CommandError) {
+      return { ok: false, error: error.message, code: error.code, ...(error.details ? { details: error.details } : {}) };
+    }
     if (isQuotaError(error)) {
       return { ok: false, error: 'Browser storage is full. Nothing was closed.', code: 'quota' };
     }

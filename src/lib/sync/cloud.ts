@@ -4,7 +4,7 @@ import { db } from '../db';
 import { api, ProError, type ApiRequest } from '../pro/api';
 import { proConfigured } from '../pro/config';
 import { refreshPlan } from '../pro/plan';
-import { planState } from '../pro/state';
+import { CLOUD_SYNC_STATE_KEY, planState } from '../pro/state';
 import { hasPro } from '../pro/tiers';
 import { getDeviceId } from '../state';
 import type { SyncArea, SyncDeps, SyncFailure } from './engine';
@@ -18,9 +18,9 @@ import { CLOUD_LIMITS, pack, SYNC_PREFIX, toSyncTime } from './records';
  * first, and the engine reads and merges again shortly. While it runs, Chrome sync pauses.
  */
 
-export const CLOUD_SYNC_STATE_KEY = 'cloudSyncState';
+export { CLOUD_SYNC_STATE_KEY };
 
-/** What this computer remembers about the Tabfold account's copy (never synced). */
+/** What this computer remembers about the Tabfold account's copy (never synced; forgotten on sign-out). */
 export const cloudSyncState: SyncStateStore = {
   async get() {
     const stored = (await browser.storage.local.get(CLOUD_SYNC_STATE_KEY))[CLOUD_SYNC_STATE_KEY] as Partial<SyncLocalState> | undefined;

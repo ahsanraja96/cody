@@ -3,8 +3,17 @@ import { browser, type Browser } from 'wxt/browser';
 import { getSettings, updateSettings, watchSettings, DEFAULT_SETTINGS, type Settings } from '@/lib/settings';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/db';
-import { aiRuns as aiRunsState, cloudSyncStatus, milestoneState, planEnded as planEndedState, planState, projectsState } from '@/lib/pro/state';
-import { FREE_PLAN, type AiRuns, type MilestoneState, type PlanState, type ProjectsState } from '@/lib/pro/types';
+import {
+  aiRuns as aiRunsState,
+  checkoutState,
+  cloudSyncStatus,
+  milestoneState,
+  needsSignIn as needsSignInState,
+  planEnded as planEndedState,
+  planState,
+  projectsState,
+} from '@/lib/pro/state';
+import { FREE_PLAN, type AiRuns, type CheckoutState, type MilestoneState, type PlanState, type ProjectsState } from '@/lib/pro/types';
 import { listLiveSessions } from '@/lib/repo';
 import type { SessionRecord, TabRecord } from '@/lib/types';
 import {
@@ -398,7 +407,7 @@ function useStored<T>(read: () => Promise<T | undefined>, watch: (cb: (value: T 
   return value;
 }
 
-/** The plan (Free until ExtensionPay has been read). */
+/** The plan (Free until the server has been asked). */
 export function usePlan(): PlanState {
   return useStored(planState.get, planState.watch) ?? FREE_PLAN;
 }
@@ -428,4 +437,14 @@ export function usePlanEnded() {
 /** The plan, or undefined until it has been read, so a page doesn't flash Free-only lines on Pro. */
 export function useLoadedPlan(): PlanState | undefined {
   return useStored(planState.get, planState.watch);
+}
+
+/** The Stripe Checkout tab the worker is watching, if any (the plans page waits while it is open). */
+export function useCheckout(): CheckoutState | undefined {
+  return useStored(checkoutState.get, checkoutState.watch);
+}
+
+/** A payment from this computer landed on an account it isn't signed in to: the email to sign in with. */
+export function useNeedsSignIn(): string | undefined {
+  return useStored(needsSignInState.get, needsSignInState.watch)?.email ?? undefined;
 }

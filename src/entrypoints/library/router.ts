@@ -3,17 +3,20 @@ import { useEffect, useState } from 'react';
 /**
  * The full list's hash routes, shared with the popup's links: #/ the list, #/settings opens
  * Settings over it, #/how is "How Tabfold frees memory", #/import opens Import from OneTab over the
- * list, #/pro is the plans page (Pro-Plans). Anything unknown is the list.
+ * list, #/pro is the plans page (Pro-Plans), #/pro/welcome the page a Stripe checkout tab turns
+ * into after paying (Stripe-Welcome). Anything unknown is the list.
  */
-export type Route = 'list' | 'settings' | 'how' | 'import' | 'pro';
+export type Route = 'list' | 'settings' | 'how' | 'import' | 'pro' | 'welcome';
 
 export function parseHash(hash: string): Route {
-  const path = hash.replace(/^#\/?/, '').split(/[?/]/)[0];
+  const parts = hash.replace(/^#\/?/, '').split('?')[0]!.split('/');
+  const path = parts[0];
+  if (path === 'pro' && parts[1] === 'welcome') return 'welcome';
   return path === 'settings' || path === 'how' || path === 'import' || path === 'pro' ? path : 'list';
 }
 
 export function hashOf(route: Route): string {
-  return route === 'list' ? '#/' : `#/${route}`;
+  return route === 'list' ? '#/' : route === 'welcome' ? '#/pro/welcome' : `#/${route}`;
 }
 
 /** Closing a dialog replaces its entry, so Back doesn't reopen it. */

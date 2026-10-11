@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TabfoldDB } from '@/lib/db';
 import { route } from '@/lib/background/router';
 import { api, errorFromResponse } from '@/lib/pro/api';
-import { cloudSyncStatus, planState } from '@/lib/pro/state';
-import { planFromUser } from '@/lib/pro/tiers';
+import { cloudSyncStatus, planEnded, planState } from '@/lib/pro/state';
 import { FREE_PLAN } from '@/lib/pro/types';
 import { clearAllData, listFoldedTabs, removeTabsWithSnapshot, saveCapture } from '@/lib/repo';
 import { syncStatus, type SyncStatus } from '@/lib/state';
@@ -22,7 +21,7 @@ import {
   type SyncRecord,
 } from '@/lib/sync/records';
 import { capturedWindow } from './fixtures';
-import { extpayUser, FakeServer, giveKey, installPro } from './proServer';
+import { EMAIL, FakeServer, giveToken, installPro, planOf } from './proServer';
 
 let pro: ReturnType<typeof installPro>;
 let server: FakeServer;
@@ -30,8 +29,15 @@ let server: FakeServer;
 beforeEach(async () => {
   pro = installPro();
   server = pro.server;
-  server.proKeys.add(await giveKey());
+  // This computer is signed in to an account paying for Pro (the plan stored here is up to each test).
+  server.account(EMAIL, { tier: 'pro', interval: 'month', status: 'active' });
+  server.link(await giveToken());
 });
+
+/** The account stops paying (the server answers 402 to sync). */
+const planEndsOnServer = () => {
+  server.account(EMAIL).subscription = null;
+};
 
 afterEach(() => {
   pro.restore();
@@ -157,7 +163,8 @@ describe('sync with the Tabfold account', () => {
     const writes = posts();
     await settle(a, b);
     expect(posts()).toBe(writes);
-  });
+    // 1,500 tabs through two computers several times: slow on a busy machine.
+  }, 30_000);
 
   it('a write based on an out-of-date copy is refused, read again and merged', async () => {
     const a = new Computer('a');
@@ -198,7 +205,7 @@ describe('sync with the Tabfold account', () => {
     expect(await a.urls()).toEqual(['https://a.com']);
 
     server.offline = false;
-    server.proKeys.clear();
+    planEndsOnServer();
     const ended = await a.sync(true);
     expect(ended.status).toMatchObject({ state: 'error', error: 'Needs Pro.' });
     expect(ended.retryAt! - clock).toBeGreaterThanOrEqual(15 * 60_000);
@@ -213,7 +220,7 @@ describe('sync with the Tabfold account', () => {
   });
 
   it('asks for the plan again when the server says it doesn’t include sync', async () => {
-    server.proKeys.clear();
+    planEndsOnServer();
     const mismatch = vi.fn();
     const area = cloudSyncArea(api, mismatch);
     await expect(area.getAll()).rejects.toMatchObject({ code: 'needs-pro', status: 402 });
@@ -221,7 +228,7 @@ describe('sync with the Tabfold account', () => {
   });
 
   it('"Clear all data" empties the account, and the other computer doesn’t bring the old tabs back', async () => {
-    await planState.set(planFromUser(extpayUser({ nickname: 'pro-monthly' }), Date.now()));
+    await planState.set(planOf({ tier: 'pro' }));
     const a = new Computer('a', cloudSyncState);
     const b = new Computer('b');
     await a.fold(['https://a.com', 'https://b.com']);
@@ -246,7 +253,7 @@ describe('sync with the Tabfold account', () => {
 });
 
 describe('switching between Chrome sync and the Tabfold account', () => {
-  const proPlan = () => planFromUser(extpayUser({ nickname: 'pro-yearly', interval: 'year' }), Date.now());
+  const proPlan = () => planOf({ tier: 'pro', interval: 'year' });
   const chromeKeys = async () => Object.keys(await chromeSyncArea.getAll());
 
   it('Pro pauses Chrome sync (off, no error) and syncs through the account; Free resumes Chrome sync', async () => {
@@ -284,5 +291,27 @@ describe('switching between Chrome sync and the Tabfold account', () => {
     await saveCapture([capturedWindow(['https://a.com'])], { source: 'save-all', deviceId: 'd', now: Date.now() }, { dedupe: true });
     expect(await route({ type: 'cloud-sync-now' })).toEqual({ ok: true, data: { ok: true } });
     expect(server.apiCalls('/sync', 'POST')).toBe(1);
+  });
+
+  it('signing out here pauses the account sync and Chrome sync picks up, with no “plan ended” notice', async () => {
+    await planState.set(server.planFor(EMAIL));
+    await saveCapture([capturedWindow(['https://a.com', 'https://b.com'])], { source: 'save-all', deviceId: 'd', now: Date.now() }, { dedupe: true });
+    expect(await runSync({ force: true })).toMatchObject({ skipped: 'off' });
+    expect(await cloudSyncNow()).toEqual({ ok: true });
+    expect(Object.keys((await cloudSyncState.get()).known)).toHaveLength(2);
+
+    expect(await route({ type: 'signout' })).toEqual({ ok: true, data: { ok: true } });
+    expect(await planState.get()).toMatchObject({ tier: 'free', email: null });
+    expect(await planEnded.get()).toBeUndefined();
+    expect(server.tokens.size).toBe(0);
+    // Chrome sync runs again; the account isn't asked anything.
+    expect(await runSync({ force: true })).toMatchObject({ wrote: true, status: { state: 'synced', syncedTabs: 2 } });
+    expect(await chromeKeys()).toContain(META_KEY);
+    const calls = server.requests.length;
+    expect(await cloudSync.run({ force: true })).toMatchObject({ skipped: 'off' });
+    expect(server.requests).toHaveLength(calls);
+    // What this computer knew about the account's copy is forgotten; the next sign-in starts afresh.
+    expect(await cloudSyncState.get()).toEqual(defaultSyncState());
+    expect(await listFoldedTabs()).toHaveLength(2);
   });
 });

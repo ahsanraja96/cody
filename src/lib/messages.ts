@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser';
-import type { AiGroup, BackupInfo, OrganiseResult, PlanState } from './pro/types';
+import type { AiGroup, BackupInfo, BillingInterval, OrganiseResult, PlanState, SigninPurpose, SigninResult, Tier } from './pro/types';
 import type { ActiveFold } from './state';
 import type { TabGroupColor } from './types';
 
@@ -95,10 +95,25 @@ export type Command =
   /** Push folded tabs to Chrome sync now (normally it runs a few seconds after each change). */
   | { type: 'sync-now' }
   // ---- Pro and Pro AI (src/lib/pro) ----
-  /** Read the plan from ExtensionPay now. */
-  | { type: 'plan-refresh' }
-  /** Open ExtensionPay: checkout for a plan, the trial page, sign-in, or managing a subscription. */
-  | { type: 'plan-open'; page: 'payment' | 'trial' | 'login' | 'manage'; tier?: 'pro' | 'pro-ai'; interval?: 'month' | 'year' }
+  /** Read the plan from the server (`GET /me`), at most once a minute unless `force`. */
+  | { type: 'plan-refresh'; force?: boolean }
+  /**
+   * Open Stripe Checkout for a plan in a new tab and watch it: paying turns the tab into the
+   * welcome page, cancelling closes it. With a live subscription already, opens Stripe's billing page.
+   */
+  | { type: 'checkout-open'; tier: Exclude<Tier, 'free'>; interval: BillingInterval }
+  /** "Go to the Stripe tab": bring the watched checkout tab to the front. */
+  | { type: 'checkout-focus' }
+  /** Open Stripe's billing page (change plan, card, invoices, cancel) in a new tab; `payment-method` opens on the card form. */
+  | { type: 'billing-open'; flow?: 'payment-method' }
+  /** Email a 6-digit sign-in code. */
+  | { type: 'signin-start'; email: string; purpose: SigninPurpose }
+  /** Check the code and sign this computer in; with `startTrial`, start the Pro AI trial if this email never had one. */
+  | { type: 'signin-finish'; email: string; code: string; startTrial: boolean }
+  /** Start the Pro AI trial for the account this computer is signed in to. */
+  | { type: 'trial-start' }
+  /** Sign out on this computer (other computers stay signed in). */
+  | { type: 'signout' }
   /** Ask the AI for projects for the folded tabs (a preview; nothing changes). */
   | { type: 'ai-organise' }
   /** Put tabs in the projects the person kept (after the preview) and switch to By project. */
@@ -230,7 +245,13 @@ export interface CommandResults {
   'open-tabs': { opened: number; reason?: string };
   'sync-now': { ok: boolean };
   'plan-refresh': PlanState;
-  'plan-open': { opened: boolean; reason?: string };
+  'checkout-open': { opened: boolean; reason?: string };
+  'checkout-focus': { focused: boolean };
+  'billing-open': { opened: boolean; reason?: string };
+  'signin-start': { sent: true };
+  'signin-finish': SigninResult;
+  'trial-start': SigninResult;
+  signout: { ok: true };
   'ai-organise': OrganiseResult;
   'ai-apply': { applied: number };
   'ai-context': { markdown: string };
@@ -241,12 +262,16 @@ export interface CommandResults {
   'reopen-everything': { opened: number; failed: number };
 }
 
-export type CommandResponse<T> = { ok: true; data: T } | { ok: false; error: string; code?: string };
+/** A failure; `details` carries a few numbers a page may show (a sign-in code's tries left, seconds to wait). */
+export type CommandResponse<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string; code?: string; details?: Record<string, number> };
 
 export class CommandError extends Error {
   constructor(
     message: string,
     readonly code?: string,
+    readonly details?: Record<string, number>,
   ) {
     super(message);
     this.name = 'CommandError';
@@ -258,7 +283,7 @@ export async function send<C extends Command>(command: C): Promise<CommandResult
     | CommandResponse<CommandResults[C['type']]>
     | undefined;
   if (!response) throw new CommandError('Tabfold is starting up. Try again in a moment.', 'no-response');
-  if (!response.ok) throw new CommandError(response.error, response.code);
+  if (!response.ok) throw new CommandError(response.error, response.code, response.details);
   return response.data;
 }
 

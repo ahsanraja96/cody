@@ -4,22 +4,32 @@ import { afterFold, ensureMilestoneStart, recordFreedMemory } from '@/lib/backgr
 import { route } from '@/lib/background/router';
 import { db } from '@/lib/db';
 import { CommandError, type Command } from '@/lib/messages';
+import {
+  DEVICE_TOKEN_KEY,
+  ensureProfileKey,
+  getDeviceToken,
+  isToken,
+  newToken,
+  peekDeviceToken,
+  PROFILE_KEY,
+  SIGNED_OUT_KEY,
+} from '@/lib/pro/account';
 import { PROJECT_COLORS } from '@/lib/pro/ai';
 import { api, errorFromResponse, PRO_ERROR_MESSAGES, ProError } from '@/lib/pro/api';
-import { getApiKey } from '@/lib/pro/extpay';
+import { CHECKOUT_MAX_MS, onTabClosed, onTabUrl, pollCheckout, returnPage } from '@/lib/pro/checkout';
 import { milestoneDue, monthKey } from '@/lib/pro/milestone';
-import { getPageWatch, NOT_AVAILABLE, onPageClosed, pollPageWatch, refreshPlan, TRIAL_END_ALARM } from '@/lib/pro/plan';
-import { aiRuns, milestoneState, planEnded, planState, projectsState } from '@/lib/pro/state';
-import { planFromUser } from '@/lib/pro/tiers';
+import { refreshPlan, resetPlanRuntime, setupPlan, TRIAL_END_ALARM } from '@/lib/pro/plan';
+import { aiRuns, checkoutNotice, checkoutState, milestoneState, needsSignIn, planEnded, planState, projectsState } from '@/lib/pro/state';
 import { FREE_PLAN, type AiGroup, type PlanState } from '@/lib/pro/types';
 import { getSessionGraph, listFoldedTabs, listLiveSessions, saveCapture } from '@/lib/repo';
 import { getSettings } from '@/lib/settings';
 import { CLOUD_LIMITS, pack, syncId, toSyncTime, type SyncRecord } from '@/lib/sync/records';
 import { FakeChrome } from './chrome';
 import { capturedTab, capturedWindow } from './fixtures';
-import { API_URL, EXTPAY_ID, extpayUser, FakeServer, giveKey, installPro } from './proServer';
+import { API_URL, CODE, EMAIL, FakeServer, giveToken, installPro, planOf, signedIn, TOKEN } from './proServer';
 
 const DAY = 24 * 60 * 60 * 1000;
+const PROFILE = 'profile-key-'.padEnd(43, 'p');
 
 let pro: ReturnType<typeof installPro>;
 let server: FakeServer;
@@ -34,18 +44,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function send<C extends Command>(command: C) {
-  return route(command);
+async function send<C extends Command>(command: C, source: { tabId?: number } = {}) {
+  return route(command, source);
 }
 
-/** This install pays for `nickname` (or is in the trial), and the server agrees. */
+/** Signed in here to an account paying for `nickname` ("pro-monthly", "pro-ai-yearly"), the server agreeing. */
 async function onPlan(nickname: string): Promise<PlanState> {
-  const key = await giveKey();
-  server.users.set(key, extpayUser({ nickname }));
-  server.proKeys.add(key);
-  const plan = planFromUser(server.users.get(key)!, Date.now());
-  await planState.set(plan);
-  return plan;
+  return signedIn(server, nickname.startsWith('pro-ai') ? 'pro-ai' : 'pro', { interval: nickname.endsWith('yearly') ? 'year' : 'month' });
 }
 
 async function fold(urls: string[], now: number, extra: { incognito?: boolean; titles?: Record<string, string> } = {}) {
@@ -54,51 +59,104 @@ async function fold(urls: string[], now: number, extra: { incognito?: boolean; t
   return saveCapture([window], { source: 'save-all', deviceId: 'd', now }, { dedupe: false });
 }
 
+const local = async (key: string) => (await fakeBrowser.storage.local.get(key))[key];
+const synced = async (key: string) => (await fakeBrowser.storage.sync.get(key))[key];
+const paths = () => server.requests.map((r) => `${r.method} ${r.path}`);
+
+// ---------------------------------------------------------------------------------------------
+
+describe('account', () => {
+  it('device tokens and profile keys are 32 random bytes in base64url', async () => {
+    const a = newToken();
+    expect(a).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(newToken()).not.toBe(a);
+    expect(isToken(a)).toBe(true);
+    expect(isToken('short')).toBe(false);
+    expect(isToken('has space'.padEnd(43, 'x'))).toBe(false);
+  });
+
+  it('makes the device token once, on first need, and keeps it in local storage', async () => {
+    expect(await peekDeviceToken()).toBeNull();
+    const [one, two] = await Promise.all([getDeviceToken(), getDeviceToken()]);
+    expect(one).toBe(two);
+    expect(await local(DEVICE_TOKEN_KEY)).toBe(one);
+    expect(await getDeviceToken()).toBe(one);
+    // A damaged one is replaced.
+    await fakeBrowser.storage.local.set({ [DEVICE_TOKEN_KEY]: 'nope' });
+    expect(await peekDeviceToken()).toBeNull();
+    expect(isToken(await getDeviceToken())).toBe(true);
+  });
+
+  it('the profile key lives in Chrome sync; without sync storage there is none, and nothing breaks', async () => {
+    const key = await ensureProfileKey();
+    expect(isToken(key)).toBe(true);
+    expect(await synced(PROFILE_KEY)).toBe(key);
+    expect(await ensureProfileKey()).toBe(key);
+
+    fakeBrowser.reset();
+    vi.spyOn(fakeBrowser.storage.sync, 'get').mockRejectedValue(new Error('sync is off'));
+    vi.spyOn(fakeBrowser.storage.sync, 'set').mockRejectedValue(new Error('sync is off'));
+    expect(await ensureProfileKey()).toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------------------------------------
 
 describe('plan', () => {
-  it('is Free without a key, and asks ExtensionPay nothing', async () => {
-    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'free', trial: null });
-    expect(server.extpayCalls('user')).toBe(0);
+  it('is Free without a device token, and asks the server nothing', async () => {
+    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'free', trial: null, email: null });
+    expect(server.requests).toHaveLength(0);
+    expect(await peekDeviceToken()).toBeNull();
     expect((await planState.get()).checkedAt).toBeGreaterThan(0);
   });
 
-  it('reads a paid plan, at most once a minute unless forced', async () => {
-    const key = await giveKey();
-    server.users.set(key, extpayUser({ nickname: 'pro-ai-yearly', interval: 'year' }));
-    expect(await refreshPlan()).toMatchObject({ tier: 'pro-ai', interval: 'year', email: 'ada@example.com', trial: null, status: 'active' });
-    expect(server.requests.find((r) => r.url.includes('/api/v2/user'))!.url).toBe(
-      `https://extensionpay.com/extension/${EXTPAY_ID}/api/v2/user?api_key=key-1`,
-    );
+  it('reads the plan from /me with the device token, at most once a minute unless forced', async () => {
+    server.account(EMAIL, { tier: 'pro-ai', interval: 'year', status: 'active', renewsAt: Date.UTC(2027, 9, 12) });
+    server.link(await giveToken());
+    expect(await refreshPlan()).toEqual({
+      ...FREE_PLAN,
+      tier: 'pro-ai',
+      email: EMAIL,
+      interval: 'year',
+      status: 'active',
+      renewsAt: Date.UTC(2027, 9, 12),
+      checkedAt: expect.any(Number),
+    });
+    expect(server.requests[0]).toMatchObject({ method: 'GET', url: `${API_URL}/me`, auth: `Bearer ${TOKEN}` });
+    expect(await aiRuns.get()).toEqual(server.runs);
     expect(await refreshPlan()).toMatchObject({ tier: 'pro-ai' });
     // A page opening asks too: still within the minute.
     expect(await send({ type: 'plan-refresh' })).toMatchObject({ ok: true, data: { tier: 'pro-ai' } });
-    expect(server.extpayCalls('user')).toBe(1);
+    expect(server.apiCalls('/me')).toBe(1);
     await refreshPlan({ force: true });
-    expect(server.extpayCalls('user')).toBe(2);
+    expect(await send({ type: 'plan-refresh', force: true })).toMatchObject({ ok: true });
+    expect(server.apiCalls('/me')).toBe(3);
   });
 
-  it('keeps the cached plan when ExtensionPay is unreachable or failing', async () => {
+  it('keeps the cached plan when the server is unreachable, failing or makes no sense', async () => {
     const plan = await onPlan('pro-monthly');
     server.offline = true;
     expect(await refreshPlan({ force: true })).toEqual(plan);
     server.offline = false;
-    server.extpayDown = true;
+    server.overrides.set('GET /me', { status: 500, body: { error: 'server' } });
+    expect(await refreshPlan({ force: true })).toEqual(plan);
+    server.overrides.set('GET /me', { status: 200, body: { plan: { tier: 'gold' } } });
     expect(await refreshPlan({ force: true })).toEqual(plan);
     expect(await planState.get()).toEqual(plan);
     expect(await planEnded.get()).toBeUndefined();
   });
 
-  it('a trial gives Pro AI; when it runs out the plan ends once, and paying clears that', async () => {
-    const key = await giveKey();
-    server.users.set(key, extpayUser({ trialDaysAgo: 2 }));
+  it('the server trial gives Pro AI; when it runs out the plan ends once, and paying clears that', async () => {
+    const account = server.account(EMAIL);
+    account.trialStartedAt = Date.now() - 2 * DAY;
+    server.link(await giveToken());
     const trial = await refreshPlan({ force: true });
-    expect(trial).toMatchObject({ tier: 'pro-ai', trial: { endsAt: expect.any(Number) } });
+    expect(trial).toMatchObject({ tier: 'pro-ai', trialUsed: true, status: null, trial: { endsAt: account.trialStartedAt + 7 * DAY } });
     // The plan is read again right when the trial ends.
     expect((await fakeBrowser.alarms.get(TRIAL_END_ALARM))?.scheduledTime).toBe(trial.trial!.endsAt + 30_000);
 
-    server.users.set(key, extpayUser({ trialDaysAgo: 8 }));
-    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'free', trial: null });
+    account.trialStartedAt = Date.now() - 8 * DAY;
+    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'free', trial: null, trialUsed: true, email: EMAIL });
     const ended = await planEnded.get();
     expect(ended).toMatchObject({ tier: 'pro-ai', wasTrial: true });
     expect(await fakeBrowser.alarms.get(TRIAL_END_ALARM)).toBeUndefined();
@@ -106,31 +164,37 @@ describe('plan', () => {
     await refreshPlan({ force: true });
     expect(await planEnded.get()).toEqual(ended);
 
-    server.users.set(key, extpayUser({ nickname: 'pro-monthly', trialDaysAgo: 8 }));
-    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'pro' });
+    account.subscription = { tier: 'pro', interval: 'month', status: 'active' };
+    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'pro', status: 'active' });
     expect(await planEnded.get()).toBeUndefined();
   });
 
-  it('a cancelled or failed payment ends a paid plan', async () => {
-    const key = await giveKey();
-    server.users.set(key, extpayUser({ nickname: 'pro-monthly' }));
-    await refreshPlan({ force: true });
-    server.users.set(key, extpayUser({ nickname: 'pro-monthly', status: 'canceled' }));
-    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'free' });
+  it('a cancelled subscription that runs out ends a paid plan', async () => {
+    await onPlan('pro-monthly');
+    server.account(EMAIL).subscription = { tier: 'pro', interval: 'month', status: 'canceled' };
+    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'free', email: EMAIL });
     expect(await planEnded.get()).toMatchObject({ tier: 'pro', wasTrial: false });
+  });
+
+  it('a plan stored by the previous version still reads, and is read again at once', async () => {
+    const old = { tier: 'pro', trial: null, email: 'old@example.com', interval: 'month', status: 'active', cancelAt: null, checkedAt: Date.now() };
+    await fakeBrowser.storage.local.set({ plan: old });
+    expect(await planState.get()).toEqual({ ...old, trialUsed: false, renewsAt: null, checkedAt: 0 });
+    // No device token here: Free, and no "plan ended" notice (this computer isn't signed in).
+    expect(await refreshPlan({ maxAgeMs: 60 * 60_000 })).toMatchObject({ tier: 'free', email: null });
+    expect(await planEnded.get()).toBeUndefined();
+    expect(server.requests).toHaveLength(0);
   });
 
   it('a build without Pro is always Free, opens nothing and calls nothing', async () => {
     pro.restore();
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
-    await planState.set({ ...FREE_PLAN, tier: 'pro', checkedAt: 1 });
+    await planState.set(planOf({ tier: 'pro' }));
     expect(await refreshPlan({ force: true })).toEqual(FREE_PLAN);
     expect(await planState.get()).toEqual(FREE_PLAN);
-    expect(await send({ type: 'plan-open', page: 'payment', tier: 'pro', interval: 'month' })).toEqual({
-      ok: true,
-      data: { opened: false, reason: NOT_AVAILABLE },
-    });
+    expect(await send({ type: 'checkout-open', tier: 'pro', interval: 'month' })).toMatchObject({ ok: false, code: 'not-configured' });
+    expect(await send({ type: 'signin-start', email: EMAIL, purpose: 'signin' })).toMatchObject({ ok: false, code: 'not-configured' });
     expect(await send({ type: 'ai-organise' })).toMatchObject({ ok: false, code: 'not-configured' });
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -138,91 +202,359 @@ describe('plan', () => {
 
 // ---------------------------------------------------------------------------------------------
 
-describe('ExtensionPay pages', () => {
+describe('signing in with an emailed code', () => {
+  it('emails a code, signs in with it, and registers the Chrome profile key', async () => {
+    server.account(EMAIL, { tier: 'pro-ai', interval: 'year', status: 'active' });
+    expect(await send({ type: 'signin-start', email: ' Ada@Example.com ', purpose: 'signin' })).toEqual({ ok: true, data: { sent: true } });
+    const token = await peekDeviceToken();
+    expect(isToken(token)).toBe(true);
+    expect(server.sentCodes).toEqual([{ email: EMAIL, purpose: 'signin' }]);
+    expect(server.requests[0]).toMatchObject({ path: '/signin/start', auth: `Bearer ${token}`, body: { email: 'Ada@Example.com', purpose: 'signin' } });
+
+    const result = await send({ type: 'signin-finish', email: EMAIL, code: CODE, startTrial: false });
+    expect(result).toMatchObject({
+      ok: true,
+      data: { plan: { tier: 'pro-ai', interval: 'year', email: EMAIL }, trialStarted: false, trialUsed: false },
+    });
+    expect(await planState.get()).toMatchObject({ tier: 'pro-ai', email: EMAIL });
+    expect(await aiRuns.get()).toEqual(server.runs);
+    // Other computers on this Chrome profile can now sign themselves in.
+    const key = await synced(PROFILE_KEY);
+    expect(isToken(key)).toBe(true);
+    // Made on its own, never the device token (the server refuses that).
+    expect(key).not.toBe(token);
+    expect(server.profileKeys.get(key as string)).toBe(EMAIL);
+    expect(paths()).toEqual(['POST /signin/start', 'POST /signin/finish', 'POST /profile']);
+    expect(server.requests.every((r) => r.auth === `Bearer ${token}`)).toBe(true);
+    expect(await local(SIGNED_OUT_KEY)).toBeUndefined();
+  });
+
+  it('a wrong code says how many tries are left; five wrong tries or an old code has expired', async () => {
+    await send({ type: 'signin-start', email: EMAIL, purpose: 'signin' });
+    expect(await send({ type: 'signin-finish', email: EMAIL, code: '000000', startTrial: false })).toEqual({
+      ok: false,
+      code: 'wrong-code',
+      error: 'That code doesn’t match.',
+      details: { triesLeft: 4 },
+    });
+    for (let i = 0; i < 3; i += 1) await send({ type: 'signin-finish', email: EMAIL, code: '000000', startTrial: false });
+    expect(await send({ type: 'signin-finish', email: EMAIL, code: '000000', startTrial: false })).toMatchObject({ ok: false, code: 'code-expired' });
+    // Used up: even the right code no longer works.
+    expect(await send({ type: 'signin-finish', email: EMAIL, code: CODE, startTrial: false })).toMatchObject({ ok: false, code: 'code-expired' });
+    expect(await planState.get()).toMatchObject({ tier: 'free', email: null });
+  });
+
+  it('starts the trial with the code, once per email', async () => {
+    await send({ type: 'signin-start', email: EMAIL, purpose: 'trial' });
+    expect(server.sentCodes[0]).toEqual({ email: EMAIL, purpose: 'trial' });
+    const started = await send({ type: 'signin-finish', email: EMAIL, code: CODE, startTrial: true });
+    expect(started).toMatchObject({ ok: true, data: { trialStarted: true, trialUsed: false, plan: { tier: 'pro-ai', trial: { endsAt: expect.any(Number) } } } });
+    expect(await fakeBrowser.alarms.get(TRIAL_END_ALARM)).toBeDefined();
+
+    // Signed out, and back for another trial with the same email: no.
+    await send({ type: 'signout' });
+    server.account(EMAIL).trialStartedAt = Date.now() - 10 * DAY;
+    await send({ type: 'signin-start', email: EMAIL, purpose: 'trial' });
+    const again = await send({ type: 'signin-finish', email: EMAIL, code: CODE, startTrial: true });
+    expect(again).toMatchObject({ ok: true, data: { trialStarted: false, trialUsed: true, plan: { tier: 'free', trialUsed: true, email: EMAIL } } });
+    // Signed in all the same.
+    expect(await planState.get()).toMatchObject({ email: EMAIL });
+  });
+
+  it('trial-start starts the trial for a signed-in account without a code', async () => {
+    expect(await send({ type: 'trial-start' })).toMatchObject({ ok: false, code: 'not-signed-in' });
+    await signedIn(server, null);
+    expect(await send({ type: 'trial-start' })).toMatchObject({ ok: true, data: { trialStarted: true, plan: { tier: 'pro-ai' } } });
+    expect(await planState.get()).toMatchObject({ tier: 'pro-ai', trial: { startedAt: expect.any(Number) } });
+    expect(server.sentCodes).toHaveLength(0);
+  });
+
+  it('says why a code couldn’t be sent', async () => {
+    expect(await send({ type: 'signin-start', email: 'not an email', purpose: 'signin' })).toMatchObject({ ok: false, code: 'invalid-email' });
+    server.overrides.set('POST /signin/start', { status: 429, body: { error: 'rate-limited', message: 'Too many codes.', retryAfter: 1800 } });
+    expect(await send({ type: 'signin-start', email: EMAIL, purpose: 'signin' })).toEqual({
+      ok: false,
+      code: 'rate-limited',
+      error: 'Too many codes.',
+      details: { retryAfter: 1800 },
+    });
+    server.overrides.set('POST /signin/start', { status: 502, body: { error: 'send-failed' } });
+    expect(await send({ type: 'signin-start', email: EMAIL, purpose: 'signin' })).toMatchObject({ ok: false, code: 'send-failed' });
+    server.offline = true;
+    expect(await send({ type: 'signin-start', email: EMAIL, purpose: 'signin' })).toMatchObject({ ok: false, code: 'offline' });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+
+describe('the Chrome profile key', () => {
+  beforeEach(async () => {
+    server.account(EMAIL, { tier: 'pro', interval: 'year', status: 'active' });
+    server.profileKeys.set(PROFILE, EMAIL);
+  });
+
+  it('another computer on the same Chrome profile signs itself in with it, without a code', async () => {
+    await fakeBrowser.storage.sync.set({ [PROFILE_KEY]: PROFILE });
+    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'pro', email: EMAIL });
+    expect(paths()).toEqual(['POST /signin/profile']);
+    expect(server.requests[0]!.body).toEqual({ profileKey: PROFILE });
+    const token = await peekDeviceToken();
+    expect(server.tokens.get(token!)).toBe(EMAIL);
+    // Already registered: not sent again.
+    expect(server.apiCalls('/profile', 'POST')).toBe(0);
+  });
+
+  it('a computer with a token that isn’t signed in reads /me first, then uses the key', async () => {
+    await giveToken();
+    await fakeBrowser.storage.sync.set({ [PROFILE_KEY]: PROFILE });
+    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'pro', email: EMAIL });
+    expect(paths()).toEqual(['GET /me', 'POST /signin/profile']);
+  });
+
+  it('an unknown key is tried once per worker start, and Free stays without a token', async () => {
+    await fakeBrowser.storage.sync.set({ [PROFILE_KEY]: 'unknown-key-'.padEnd(43, 'u') });
+    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'free', email: null });
+    expect(await peekDeviceToken()).toBeNull();
+    await refreshPlan({ force: true });
+    expect(server.requests).toHaveLength(1);
+    resetPlanRuntime();
+    await refreshPlan({ force: true });
+    expect(server.requests).toHaveLength(2);
+  });
+
+  it('follows the key arriving through Chrome sync (another computer signed in)', async () => {
+    setupPlan();
+    await vi.waitFor(async () => expect((await planState.get()).checkedAt).toBeGreaterThan(0));
+    expect(server.requests).toHaveLength(0);
+    await fakeBrowser.storage.sync.set({ [PROFILE_KEY]: PROFILE });
+    await vi.waitFor(async () => expect(await planState.get()).toMatchObject({ tier: 'pro', email: EMAIL }));
+  });
+
+  it('every sign-in with a code registers the key again, even one that exists (the server may have dropped it)', async () => {
+    await signedIn(server, 'pro');
+    await fakeBrowser.storage.sync.set({ [PROFILE_KEY]: PROFILE });
+    server.profileKeys.clear();
+    await send({ type: 'signin-start', email: EMAIL, purpose: 'signin' });
+    await send({ type: 'signin-finish', email: EMAIL, code: CODE, startTrial: false });
+    expect(await synced(PROFILE_KEY)).toBe(PROFILE);
+    expect(server.profileKeys.get(PROFILE)).toBe(EMAIL);
+    expect(server.requests.at(-1)).toMatchObject({ path: '/profile', body: { profileKey: PROFILE } });
+    // Starting the trial (no code) doesn't.
+    const calls = server.apiCalls('/profile', 'POST');
+    await send({ type: 'trial-start' });
+    expect(server.apiCalls('/profile', 'POST')).toBe(calls);
+  });
+
+  it('after signing out here, the key is left alone until the person signs in again', async () => {
+    await signedIn(server, 'pro');
+    await fakeBrowser.storage.sync.set({ [PROFILE_KEY]: PROFILE });
+    expect(await send({ type: 'signout' })).toEqual({ ok: true, data: { ok: true } });
+    expect(await local(SIGNED_OUT_KEY)).toBe(true);
+    // The key stays for the other computers.
+    expect(await synced(PROFILE_KEY)).toBe(PROFILE);
+    const before = server.requests.length;
+    resetPlanRuntime();
+    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'free', email: null });
+    expect(server.requests).toHaveLength(before);
+
+    await send({ type: 'signin-start', email: EMAIL, purpose: 'signin' });
+    await send({ type: 'signin-finish', email: EMAIL, code: CODE, startTrial: false });
+    expect(await local(SIGNED_OUT_KEY)).toBeUndefined();
+    expect(server.profileKeys.get(PROFILE)).toBe(EMAIL);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+
+describe('signing out', () => {
+  it('signs out this computer only: Free here with no “plan ended” notice, the token goes, the key stays', async () => {
+    await onPlan('pro-ai-yearly');
+    server.link('other-computer-'.padEnd(43, 'o'));
+    await fakeBrowser.storage.sync.set({ [PROFILE_KEY]: PROFILE });
+    await aiRuns.set(server.runs);
+
+    expect(await send({ type: 'signout' })).toEqual({ ok: true, data: { ok: true } });
+    expect(server.requests.at(-1)).toMatchObject({ method: 'POST', path: '/signout', auth: `Bearer ${TOKEN}` });
+    expect(server.tokens.has(TOKEN)).toBe(false);
+    expect(server.tokens.size).toBe(1);
+    expect(await peekDeviceToken()).toBeNull();
+    expect(await planState.get()).toMatchObject({ tier: 'free', email: null, checkedAt: expect.any(Number) });
+    expect(await planEnded.get()).toBeUndefined();
+    expect(await aiRuns.get()).toBeUndefined();
+    expect(await synced(PROFILE_KEY)).toBe(PROFILE);
+  });
+
+  it('offline, it signs out here all the same', async () => {
+    await onPlan('pro-monthly');
+    server.offline = true;
+    expect(await send({ type: 'signout' })).toEqual({ ok: true, data: { ok: true } });
+    expect(await planState.get()).toMatchObject({ tier: 'free', email: null });
+    expect(await peekDeviceToken()).toBeNull();
+    expect(await planEnded.get()).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+
+describe('Stripe Checkout and billing tabs', () => {
   let chrome: FakeChrome;
+  let pageTab: number;
 
   beforeEach(() => {
     chrome = new FakeChrome().install();
-    chrome.openWindow(['https://work.com'], { focused: true });
+    chrome.openWindow(['https://work.com']);
+    pageTab = chrome.openWindow([{ url: 'chrome-extension://test/library.html#/pro', active: true }], { focused: true }).tabIds[0]!;
   });
 
-  it('creates the key on first use, opens checkout in a tab, and notices the payment there', async () => {
-    vi.spyOn(fakeBrowser.management, 'getSelf').mockResolvedValue({ installType: 'development' } as never);
-    expect(await send({ type: 'plan-open', page: 'payment', tier: 'pro', interval: 'year' })).toEqual({ ok: true, data: { opened: true } });
-    expect(server.keysCreated).toEqual([{ key: 'key-1', development: true }]);
-    expect(await getApiKey()).toBe('key-1');
-    const tab = chrome.tabs.find((t) => t.url.startsWith('https://extensionpay.com'))!;
-    expect(tab).toMatchObject({ url: `https://extensionpay.com/extension/${EXTPAY_ID}/choose-plan/pro-yearly?api_key=key-1`, active: true });
-    expect(await getPageWatch()).toMatchObject({ kind: 'tab', id: tab.id });
+  const stripeTab = () => chrome.tabs.find((t) => t.url.startsWith('https://checkout.stripe.test'));
+  const updates = () => vi.mocked(fakeBrowser.tabs.update).mock.calls;
+  /** The server sees the payment (webhook or /me asking Stripe) and signs this computer's token in. */
+  const pays = async (tier: 'pro' | 'pro-ai' = 'pro', interval: 'month' | 'year' = 'year') => {
+    server.account(EMAIL, { tier, interval, status: 'active' });
+    server.link((await peekDeviceToken())!);
+  };
 
-    expect(await pollPageWatch()).toBe('watching');
-    expect((await planState.get()).tier).toBe('free');
-    // The person pays in that tab: the next poll sees it.
-    server.users.set('key-1', extpayUser({ nickname: 'pro-yearly', interval: 'year' }));
-    expect(await pollPageWatch()).toBe('watching');
-    expect(await planState.get()).toMatchObject({ tier: 'pro', interval: 'year' });
+  it('opens checkout in a tab next to the page, waits, and turns it into the welcome page once paid', async () => {
+    expect(await send({ type: 'checkout-open', tier: 'pro', interval: 'year' }, { tabId: pageTab })).toEqual({ ok: true, data: { opened: true } });
+    expect(server.checkouts).toMatchObject([{ tier: 'pro', interval: 'year', sessionId: 'cs_test_1' }]);
+    const tab = stripeTab()!;
+    expect(tab).toMatchObject({ url: server.checkouts[0]!.url, active: true, windowId: chrome.tab(pageTab)!.windowId });
+    expect(await checkoutState.get()).toEqual({
+      tabId: tab.id,
+      sessionId: 'cs_test_1',
+      tier: 'pro',
+      interval: 'year',
+      startedAt: expect.any(Number),
+      openerTabId: pageTab,
+    });
 
-    // The tab closes: one more read, then it stops.
-    const reads = server.extpayCalls('user');
+    // Every 5 seconds while the tab is open: the plan.
+    expect(await pollCheckout()).toBe('watching');
+    expect(server.apiCalls('/me')).toBe(1);
+    await pays();
+    expect(await pollCheckout()).toBe('watching');
+    expect(await planState.get()).toMatchObject({ tier: 'pro', email: EMAIL });
+
+    // Stripe sends the tab back: it becomes the welcome page.
+    await onTabUrl(tab.id, `${API_URL}/checkout/done?session_id=cs_test_1`);
+    expect(updates().at(-1)).toEqual([tab.id, { url: 'chrome-extension://test-extension-id/library.html#/pro/welcome' }]);
+    expect(await checkoutState.get()).toBeUndefined();
+    expect(await checkoutNotice.get()).toBeUndefined();
+    // Paying signed this computer in: the profile key is registered for the account.
+    expect(server.profileKeys.get((await synced(PROFILE_KEY)) as string)).toBe(EMAIL);
+    expect(await pollCheckout()).toBe('idle');
+  });
+
+  it('cancel closes the tab, says nothing was charged, and brings the page back', async () => {
+    await send({ type: 'checkout-open', tier: 'pro-ai', interval: 'month' }, { tabId: pageTab });
+    const tab = stripeTab()!;
+    chrome.tab(pageTab)!.active = false;
+    await onTabUrl(tab.id, `${API_URL}/checkout/cancel`);
+    expect(chrome.tab(tab.id)).toBeUndefined();
+    expect(await checkoutState.get()).toBeUndefined();
+    expect(await checkoutNotice.get()).toEqual({ kind: 'closed', at: expect.any(Number) });
+    expect(chrome.tab(pageTab)!.active).toBe(true);
+    expect(chrome.focusCalls.at(-1)).toBe(chrome.tab(pageTab)!.windowId);
+  });
+
+  it('closing the Stripe tab without paying says so too; after paying it doesn’t', async () => {
+    await send({ type: 'checkout-open', tier: 'pro', interval: 'month' }, { tabId: pageTab });
+    let tab = stripeTab()!;
     await fakeBrowser.tabs.remove(tab.id);
-    await onPageClosed('tab', tab.id);
-    expect(server.extpayCalls('user')).toBe(reads + 1);
-    expect(await getPageWatch()).toBeUndefined();
-    expect(await pollPageWatch()).toBe('idle');
+    await onTabClosed(tab.id);
+    expect(await checkoutState.get()).toBeUndefined();
+    expect(await checkoutNotice.get()).toMatchObject({ kind: 'closed' });
+
+    await checkoutNotice.set(null);
+    await send({ type: 'checkout-open', tier: 'pro', interval: 'month' }, { tabId: pageTab });
+    tab = stripeTab()!;
+    await pays('pro', 'month');
+    await fakeBrowser.tabs.remove(tab.id);
+    await onTabClosed(tab.id);
+    expect(await checkoutNotice.get()).toBeUndefined();
+    expect(await planState.get()).toMatchObject({ tier: 'pro', status: 'active' });
+    // Other tabs closing cost nothing.
+    const calls = server.requests.length;
+    await onTabClosed(pageTab + 999);
+    expect(server.requests).toHaveLength(calls);
   });
 
-  it('a key made outside development says so, and an existing key is reused', async () => {
-    vi.spyOn(fakeBrowser.management, 'getSelf').mockResolvedValue({ installType: 'normal' } as never);
-    await send({ type: 'plan-open', page: 'manage' });
-    await send({ type: 'plan-open', page: 'payment' });
-    expect(server.keysCreated).toEqual([{ key: 'key-1', development: false }]);
-    const urls = chrome.tabs.filter((t) => t.url.startsWith('https://extensionpay.com')).map((t) => t.url);
-    expect(urls).toEqual([
-      `https://extensionpay.com/extension/${EXTPAY_ID}/choose-plan?api_key=key-1`,
-      `https://extensionpay.com/extension/${EXTPAY_ID}/choose-plan?api_key=key-1`,
-    ]);
-    // The second page took over the watch.
-    expect(await getPageWatch()).toMatchObject({ kind: 'tab', id: chrome.tabs.at(-1)!.id });
+  it('“Go to the Stripe tab” brings it to the front; the watch stops after 15 minutes', async () => {
+    await send({ type: 'checkout-open', tier: 'pro', interval: 'month' }, { tabId: pageTab });
+    const tab = stripeTab()!;
+    await fakeBrowser.tabs.update(pageTab, { active: true });
+    expect(await send({ type: 'checkout-focus' })).toEqual({ ok: true, data: { focused: true } });
+    expect(chrome.tab(tab.id)!.active).toBe(true);
+    expect(chrome.focusCalls.at(-1)).toBe(tab.windowId);
+
+    expect(await pollCheckout(Date.now() + CHECKOUT_MAX_MS + 1000)).toBe('done');
+    expect(await checkoutState.get()).toBeUndefined();
+    expect(await send({ type: 'checkout-focus' })).toEqual({ ok: true, data: { focused: false } });
   });
 
-  it('opens the trial and sign-in as small windows centred over the current one', async () => {
-    await giveKey('key-9');
-    await send({ type: 'plan-open', page: 'trial' });
-    expect(chrome.createdWindows.at(-1)).toEqual({
-      url: `https://extensionpay.com/extension/${EXTPAY_ID}/trial?api_key=key-9&period=7%20days`,
-      type: 'popup',
-      width: 500,
-      height: 700,
-      focused: true,
-      left: 350,
-      top: 50,
+  it('already paying: Stripe’s billing page opens instead, where plans change', async () => {
+    await onPlan('pro-monthly');
+    expect(await send({ type: 'checkout-open', tier: 'pro-ai', interval: 'year' }, { tabId: pageTab })).toEqual({ ok: true, data: { opened: true } });
+    expect(server.checkouts).toHaveLength(0);
+    expect(server.billingSessions).toHaveLength(1);
+    expect(chrome.tabs.some((t) => t.url === server.billingSessions[0]!.url)).toBe(true);
+    expect(await checkoutState.get()).toBeUndefined();
+  });
+
+  it('paid with an email that already had an account: the pages ask to sign in, and nothing says “not charged”', async () => {
+    await send({ type: 'checkout-open', tier: 'pro', interval: 'year' }, { tabId: pageTab });
+    const tab = stripeTab()!;
+    const token = (await peekDeviceToken())!;
+    server.account('sam@example.com', { tier: 'pro', interval: 'year', status: 'active' });
+    server.paidElsewhere.set(token, 'sam@example.com');
+    expect(await pollCheckout()).toBe('watching');
+    expect(await needsSignIn.get()).toEqual({ email: 'sam@example.com' });
+    expect(await planState.get()).toMatchObject({ tier: 'free', email: null });
+
+    await fakeBrowser.tabs.remove(tab.id);
+    await onTabClosed(tab.id);
+    expect(await checkoutNotice.get()).toBeUndefined();
+
+    // Signing in with the code clears it.
+    await send({ type: 'signin-start', email: 'sam@example.com', purpose: 'signin' });
+    expect(await send({ type: 'signin-finish', email: 'sam@example.com', code: CODE, startTrial: false })).toMatchObject({
+      ok: true,
+      data: { plan: { tier: 'pro', email: 'sam@example.com' } },
     });
-    const trialWindow = chrome.windows.at(-1)!;
-    expect(await getPageWatch()).toMatchObject({ kind: 'window', id: trialWindow.id });
-
-    await send({ type: 'plan-open', page: 'login' });
-    expect(chrome.createdWindows.at(-1)).toMatchObject({
-      url: `https://extensionpay.com/extension/${EXTPAY_ID}/reactivate?api_key=key-9&back=choose-plan&v2`,
-      type: 'popup',
-      width: 500,
-      height: 800,
-      top: 0,
-    });
-    expect(server.keysCreated).toEqual([]);
+    expect(await needsSignIn.get()).toBeUndefined();
   });
 
-  it('stops watching after 15 minutes even if the page stays open', async () => {
-    await giveKey();
-    await send({ type: 'plan-open', page: 'trial' });
-    expect(await pollPageWatch(Date.now() + 16 * 60_000)).toBe('done');
-    expect(await getPageWatch()).toBeUndefined();
+  it('billing: back at billing/done the tab closes, the page comes back, and the plan is read again', async () => {
+    await onPlan('pro-ai-yearly');
+    expect(await send({ type: 'billing-open', flow: 'payment-method' }, { tabId: pageTab })).toEqual({ ok: true, data: { opened: true } });
+    expect(server.billingSessions[0]).toMatchObject({ flow: 'payment-method', token: TOKEN });
+    const tab = chrome.tabs.find((t) => t.url === server.billingSessions[0]!.url)!;
+    expect(tab.active).toBe(true);
+
+    // The person cancels on Stripe's page.
+    const cancelAt = Date.now() + 200 * DAY;
+    server.account(EMAIL).subscription!.cancelAt = cancelAt;
+    await onTabUrl(tab.id, `${API_URL}/billing/done`);
+    expect(chrome.tab(tab.id)).toBeUndefined();
+    expect(chrome.tab(pageTab)!.active).toBe(true);
+    expect(await planState.get()).toMatchObject({ tier: 'pro-ai', cancelAt, renewsAt: null });
+
+    // Never paid: there's no billing page.
+    await signedIn(server, null, { email: 'new@example.com' });
+    expect(await send({ type: 'billing-open' })).toMatchObject({ ok: false, code: 'needs-pro' });
   });
 
-  it('explains when ExtensionPay is unreachable', async () => {
-    server.offline = true;
-    const result = await send({ type: 'plan-open', page: 'payment', tier: 'pro-ai', interval: 'month' });
-    expect(result).toMatchObject({ ok: true, data: { opened: false, reason: expect.stringContaining('ExtensionPay') } });
-    expect(chrome.tabs.some((t) => t.url.startsWith('https://extensionpay.com'))).toBe(false);
+  it('only the server’s own return pages count', async () => {
+    expect(returnPage(`${API_URL}/checkout/done?session_id=cs_1`)).toBe('checkout-done');
+    expect(returnPage(`${API_URL}/checkout/cancel`)).toBe('checkout-cancel');
+    expect(returnPage(`${API_URL}/billing/done/`)).toBe('billing-done');
+    expect(returnPage('https://evil.test/functions/v1/tabfold/checkout/done')).toBeNull();
+    expect(returnPage('https://api.tabfold.test/functions/v1/other/checkout/done')).toBeNull();
+    expect(returnPage(`${API_URL}/me`)).toBeNull();
+    const tab = chrome.tabs[0]!;
+    await onTabUrl(tab.id, 'https://example.com/checkout/done');
+    expect(chrome.tab(tab.id)).toBeDefined();
+    expect(server.requests).toHaveLength(0);
   });
 });
 
@@ -231,40 +563,52 @@ describe('ExtensionPay pages', () => {
 describe('server client', () => {
   it('maps HTTP errors to ProError codes, with the server’s message or a friendly one', () => {
     const runs = { used: 300, limit: 300, resetsAt: 1 };
+    expect(errorFromResponse(400, { error: 'wrong-code', triesLeft: 3 })).toMatchObject({ code: 'wrong-code', details: { triesLeft: 3 } });
+    expect(errorFromResponse(400, { error: 'code-expired' }).code).toBe('code-expired');
+    expect(errorFromResponse(400, { error: 'invalid-email' }).code).toBe('invalid-email');
+    expect(errorFromResponse(400, { error: 'server', message: 'Bad request.' })).toMatchObject({ code: 'server', message: 'Bad request.' });
     expect(errorFromResponse(401, {})).toMatchObject({ code: 'not-signed-in', status: 401, message: PRO_ERROR_MESSAGES['not-signed-in'] });
     expect(errorFromResponse(402, { error: 'needs-pro-ai', message: 'Pro AI only.' })).toMatchObject({ code: 'needs-pro-ai', message: 'Pro AI only.' });
     expect(errorFromResponse(402, null).code).toBe('needs-pro');
+    expect(errorFromResponse(409, { error: 'conflict', version: 7 })).toMatchObject({ code: 'conflict', status: 409, body: { version: 7 } });
+    expect(errorFromResponse(409, { error: 'already-subscribed' }).code).toBe('already-subscribed');
     expect(errorFromResponse(429, { error: 'runs-used-up', runs })).toMatchObject({ code: 'runs-used-up', body: { runs } });
+    expect(errorFromResponse(429, { error: 'rate-limited', retryAfter: 600 })).toMatchObject({ code: 'rate-limited', details: { retryAfter: 600 } });
+    expect(errorFromResponse(429, null, '/signin/start').code).toBe('rate-limited');
+    expect(errorFromResponse(429, null, '/ai').code).toBe('runs-used-up');
     expect(errorFromResponse(502, null, '/ai').code).toBe('ai-failed');
-    expect(errorFromResponse(502, null, '/sync').code).toBe('server');
-    expect(errorFromResponse(409, { error: 'conflict', version: 7 })).toMatchObject({ code: 'server', status: 409, body: { version: 7 } });
+    expect(errorFromResponse(502, { error: 'send-failed' }).code).toBe('send-failed');
+    expect(errorFromResponse(502, null, '/signin/start').code).toBe('send-failed');
+    expect(errorFromResponse(502, null, '/checkout').code).toBe('server');
     expect(errorFromResponse(413, { error: 'server', message: 'Too large.' }).message).toBe('Too large.');
     expect(errorFromResponse(500, 'oops')).toMatchObject({ code: 'server', message: PRO_ERROR_MESSAGES.server });
+    // A code that doesn't belong to the status isn't trusted.
+    expect(errorFromResponse(500, { error: 'wrong-code' }).code).toBe('server');
     expect(errorFromResponse(401, {})).toBeInstanceOf(CommandError);
+    expect(errorFromResponse(401, {}).details).toBeUndefined();
   });
 
-  it('sends the key as a bearer token; no key, no network, or no Pro build each fail clearly', async () => {
-    await expect(api('/sync')).rejects.toMatchObject({ code: 'not-signed-in' });
-    expect(server.requests).toHaveLength(0);
-
-    const key = await giveKey();
-    server.proKeys.add(key);
-    expect(await api('/sync')).toEqual({ items: {}, version: 0 });
-    expect(server.requests[0]).toMatchObject({ method: 'GET', url: `${API_URL}/sync`, auth: 'Bearer key-1' });
+  it('sends the device token as a bearer token, made on first use; offline or no Pro build fail clearly', async () => {
+    expect(await api('/me')).toMatchObject({ plan: { tier: 'free' } });
+    const token = await peekDeviceToken();
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(server.requests[0]).toMatchObject({ method: 'GET', url: `${API_URL}/me`, auth: `Bearer ${token}` });
+    await api('/me');
+    expect(server.requests[1]!.auth).toBe(`Bearer ${token}`);
 
     server.offline = true;
-    await expect(api('/sync')).rejects.toMatchObject({ code: 'offline', message: PRO_ERROR_MESSAGES.offline });
+    await expect(api('/me')).rejects.toMatchObject({ code: 'offline', message: PRO_ERROR_MESSAGES.offline });
     pro.restore();
-    await expect(api('/sync')).rejects.toBeInstanceOf(ProError);
-    await expect(api('/sync')).rejects.toMatchObject({ code: 'not-configured' });
+    await expect(api('/me')).rejects.toBeInstanceOf(ProError);
+    await expect(api('/me')).rejects.toMatchObject({ code: 'not-configured' });
   });
 
   it('a Pro feature without the plan reaches the page as a readable error with its code', async () => {
-    await giveKey();
+    await signedIn(server, null);
     expect(await send({ type: 'ai-organise' })).toEqual({ ok: false, code: 'needs-pro-ai', error: PRO_ERROR_MESSAGES['needs-pro-ai'] });
     expect(await send({ type: 'backups-list' })).toMatchObject({ ok: false, code: 'needs-pro' });
     // It read the plan again before saying no (the person may have just paid).
-    expect(server.extpayCalls('user')).toBeGreaterThan(0);
+    expect(server.apiCalls('/me')).toBeGreaterThan(0);
     expect(server.apiCalls('/ai', 'POST')).toBe(0);
   });
 });
@@ -472,7 +816,7 @@ describe('smart names and the milestone after a fold', () => {
 
     // Pro (without AI) doesn't name folds.
     server.offline = false;
-    await planState.set(planFromUser(extpayUser({ nickname: 'pro-monthly' }), Date.now()));
+    await planState.set(planOf({ tier: 'pro' }));
     const requests = server.aiRequests.length;
     await afterFold({ sessionId: saved.sessionId, savedTabs: 1, freedBytes: 0 });
     expect(server.aiRequests).toHaveLength(requests);

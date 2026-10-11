@@ -1,15 +1,23 @@
 import { browser } from 'wxt/browser';
+import { readRuns } from './ai';
+import { ensureProfileKey, forgetDeviceToken, isToken, peekDeviceToken, PROFILE_KEY, setSignedOutHere, usableProfileKey } from './account';
+import { api, ProError } from './api';
 import { proConfigured } from './config';
-import { ensureApiKey, EXTPAY_KEY, extpayPageUrl, fetchUser, type ExtPayPage } from './extpay';
-import { planEnded, planState } from './state';
-import { hasPro, planFromUser } from './tiers';
-import { FREE_PLAN, type BillingInterval, type PlanState, type Tier } from './types';
+import { aiRuns, forgetCloudSyncState, needsSignIn, planEnded, planState, readPlan } from './state';
+import { hasPro } from './tiers';
+import { FREE_PLAN, type PlanState, type SigninPurpose, type SigninResult, type Tier } from './types';
 
 /**
- * The plan, as ExtensionPay knows it, cached in `planState`. Read when the worker starts (at most
- * hourly), every 6 hours, when a Tabfold page opens (at most once a minute), when the trial ends,
- * and every 5 seconds while an ExtensionPay page Tabfold opened is open (that's how a payment,
- * trial or sign-in is noticed without ExtensionPay's content script).
+ * The plan, as the server works it out (`GET /me`), cached in `planState`. Read when the worker
+ * starts (at most hourly), every 6 hours, when a Tabfold page opens or comes back into focus (at
+ * most once a minute), when the trial ends, and every few seconds while a Stripe checkout tab is
+ * open (checkout.ts). A computer that never signed in, paid or started a trial has no device token
+ * and asks the server nothing.
+ *
+ * Signing in is an emailed 6-digit code (`signin-start`, `signin-finish`). After any sign-in this
+ * computer makes the Chrome profile key if there's none and registers it, so other computers on
+ * the same Chrome profile sign themselves in with it (`POST /signin/profile`), once per worker
+ * start and key, unless the person signed out there.
  */
 
 /** Pages ask on open; real reads happen at most this often unless forced. */
@@ -20,35 +28,99 @@ export const PLAN_ALARM = 'tabfold-plan';
 export const PLAN_ALARM_MINUTES = 6 * 60;
 export const TRIAL_END_ALARM = 'tabfold-trial-end';
 
-export const NOT_AVAILABLE = 'Pro isn’t available in this build of Tabfold yet.';
-const UNREACHABLE = 'Couldn’t reach ExtensionPay, which handles payments for Tabfold. Check your connection and try again.';
-
 let inFlight: Promise<PlanState> | null = null;
 let lastReadAt = 0;
-let pollTimer: ReturnType<typeof setTimeout> | undefined;
+/** The profile key this worker already tried to sign in with. */
+let profileTried: string | null = null;
 
-/** For tests: forget the in-memory throttle and stop polling. */
+/** For tests: forget the in-memory throttle and the profile key tried. */
 export function resetPlanRuntime(): void {
   lastReadAt = 0;
   inFlight = null;
-  clearTimeout(pollTimer);
-  pollTimer = undefined;
-  cachedWatch = undefined;
+  profileTried = null;
+}
+
+/** `GET /me`, `POST /signin/profile`: the plan and this month's AI runs (Pro AI). */
+interface PlanAnswer {
+  plan?: unknown;
+  runs?: unknown;
+  /** `GET /me` only: a checkout from here was paid with an email that already had an account; sign in with a code to use it. */
+  needsSignIn?: unknown;
+}
+
+/** Keep (or forget) "your payment is on … : sign in" for the pages; only while this computer isn't signed in. */
+async function storeNeedsSignIn(plan: PlanState, value: unknown): Promise<void> {
+  const email = value && typeof value === 'object' ? (value as { email?: unknown }).email : undefined;
+  if (plan.email === null && typeof email === 'string' && email.includes('@')) {
+    const current = await needsSignIn.get();
+    if (current?.email !== email) await needsSignIn.set({ email });
+  } else if (await needsSignIn.get()) {
+    await needsSignIn.set(null);
+  }
+}
+
+/** `POST /signin/finish`, `POST /trial`. */
+interface SigninAnswer extends PlanAnswer {
+  trialStarted?: unknown;
+  trialUsed?: unknown;
+}
+
+function planOf(answer: PlanAnswer | null | undefined): PlanState {
+  const plan = readPlan(answer?.plan);
+  if (!plan) throw new ProError('server', 'Tabfold’s server sent an unexpected answer.');
+  return plan;
+}
+
+async function storeRuns(value: unknown): Promise<void> {
+  const runs = readRuns(value);
+  if (runs) await aiRuns.set(runs);
+}
+
+/** The error's code (never its details) for the console. */
+function codeOf(error: unknown): string {
+  return error instanceof ProError ? error.code : ((error as Error)?.name ?? 'error');
 }
 
 /**
- * Store a newly read plan. A paid plan or trial that dropped to Free leaves a one-time notice
- * (`planEnded`); paying again clears it.
+ * Store a plan. A paid plan or trial that ended while the same account stays signed in leaves a
+ * one-time notice (`planEnded`); signing out doesn't, and paying again clears it. Signing in (the
+ * email changed, or any sign-in with a code) registers the Chrome profile key.
  */
-export async function applyPlan(next: PlanState, now = Date.now()): Promise<void> {
+export async function applyPlan(next: PlanState, options: { viaProfile?: boolean; withCode?: boolean; now?: number } = {}): Promise<void> {
+  const now = options.now ?? Date.now();
   const previous = await planState.get();
   await planState.set(next);
-  if (hasPro(previous) && next.tier === 'free') {
+  if (hasPro(previous) && next.tier === 'free' && previous.email !== null && next.email === previous.email) {
     await planEnded.set({ at: now, tier: previous.tier as Exclude<Tier, 'free'>, wasTrial: previous.trial !== null });
   } else if (hasPro(next) && (await planEnded.get())) {
     await planEnded.set(null);
   }
   await scheduleTrialEnd(next);
+  if (next.email) await storeNeedsSignIn(next, null);
+  if (next.email && (next.email !== previous.email || options.withCode)) {
+    await afterSignIn(previous.email, next.email, options.viaProfile === true);
+  }
+}
+
+/**
+ * Signed in (with a code, by paying, or with the profile key): this computer may use the profile
+ * key again, and other computers on this Chrome profile can sign in with it. The key is registered
+ * again after every code sign-in, even when it already exists: the server may have dropped it
+ * (when an account made by a checkout is first proved with a code, its other computers are signed
+ * out and its profile key goes).
+ */
+async function afterSignIn(previousEmail: string | null, email: string, viaProfile: boolean): Promise<void> {
+  await setSignedOutHere(false);
+  // Signed in as someone else: what this computer knew about the other account's copy doesn't apply.
+  if (previousEmail && previousEmail !== email) await forgetCloudSyncState();
+  if (viaProfile) return;
+  try {
+    const profileKey = await ensureProfileKey();
+    if (profileKey) await api('/profile', { method: 'POST', body: { profileKey } });
+  } catch (error) {
+    // Other computers then sign in with a code; nothing else depends on it.
+    console.warn('[tabfold] couldn’t register the Chrome profile key', codeOf(error));
+  }
 }
 
 /** Read the plan again exactly when the trial ends, so it doesn't run on until the next 6-hourly read. */
@@ -61,9 +133,58 @@ async function scheduleTrialEnd(plan: PlanState): Promise<void> {
   }
 }
 
+/** Sign in with the Chrome profile key. Null when the server doesn't know the key (then nothing changes). */
+async function signInWithProfile(profileKey: string, hadToken: boolean): Promise<PlanState | null> {
+  profileTried = profileKey;
+  let answer: PlanAnswer;
+  try {
+    answer = await api<PlanAnswer>('/signin/profile', { method: 'POST', body: { profileKey } });
+  } catch (error) {
+    if (error instanceof ProError && error.code === 'not-signed-in') {
+      // A token made just for this try is of no use: Free stays without one.
+      if (!hadToken) await forgetDeviceToken();
+      return null;
+    }
+    // Offline or the server failing: try again next time.
+    profileTried = null;
+    throw error;
+  }
+  const plan = planOf(answer);
+  await applyPlan(plan, { viaProfile: true });
+  await storeRuns(answer.runs);
+  return plan;
+}
+
+async function readFromServer(): Promise<PlanState> {
+  const token = await peekDeviceToken();
+  const profileKey = await usableProfileKey();
+  const tryProfile = profileKey !== null && profileTried !== profileKey;
+  if (!token) {
+    if (tryProfile) {
+      const signedIn = await signInWithProfile(profileKey, false);
+      if (signedIn) return signedIn;
+    }
+    // Never signed in here: Free, and the server isn't asked.
+    const free = { ...FREE_PLAN, checkedAt: Date.now() };
+    await applyPlan(free);
+    await storeNeedsSignIn(free, null);
+    return free;
+  }
+  const answer = await api<PlanAnswer>('/me');
+  const plan = planOf(answer);
+  if (plan.email === null && tryProfile) {
+    const signedIn = await signInWithProfile(profileKey, true);
+    if (signedIn) return signedIn;
+  }
+  await applyPlan(plan);
+  await storeRuns(answer.runs);
+  await storeNeedsSignIn(plan, answer.needsSignIn);
+  return plan;
+}
+
 /**
- * Read the plan from ExtensionPay and store it. Network and ExtensionPay errors keep the cached
- * plan. Without a key nothing is called: a Free user. In a build without Pro it is always Free.
+ * Read the plan from the server and store it. Network and server errors keep the cached plan. In
+ * a build without Pro it is always Free.
  */
 export async function refreshPlan(options: { force?: boolean; maxAgeMs?: number } = {}): Promise<PlanState> {
   if (!proConfigured()) {
@@ -74,20 +195,17 @@ export async function refreshPlan(options: { force?: boolean; maxAgeMs?: number 
   if (inFlight) return inFlight;
   const cached = await planState.get();
   const now = Date.now();
-  if (!options.force && now - Math.max(lastReadAt, cached.checkedAt) < (options.maxAgeMs ?? MIN_READ_INTERVAL_MS)) return cached;
+  // The server's clock may run ahead of this one.
+  const last = Math.max(lastReadAt, Math.min(cached.checkedAt, now));
+  if (!options.force && now - last < (options.maxAgeMs ?? MIN_READ_INTERVAL_MS)) return cached;
   lastReadAt = now;
   const run = (async () => {
-    let next: PlanState;
     try {
-      const user = await fetchUser();
-      const at = Date.now();
-      next = user ? planFromUser(user, at) : { ...FREE_PLAN, checkedAt: at };
+      return await readFromServer();
     } catch (error) {
-      console.warn('[tabfold] plan check failed', (error as Error)?.message ?? error);
+      console.warn('[tabfold] plan check failed', codeOf(error));
       return cached;
     }
-    await applyPlan(next);
-    return next;
   })();
   inFlight = run;
   try {
@@ -98,154 +216,69 @@ export async function refreshPlan(options: { force?: boolean; maxAgeMs?: number 
 }
 
 // ---------------------------------------------------------------------------------------------
-// ExtensionPay pages
+// Signing in and out
 
-/** An ExtensionPay tab or window Tabfold opened, watched until it closes (at most 15 minutes). */
-export interface PageWatch {
-  kind: 'tab' | 'window';
-  id: number;
-  until: number;
+/** Email a 6-digit code (valid 10 minutes, 5 tries). */
+export async function signinStart(email: string, purpose: SigninPurpose): Promise<{ sent: true }> {
+  await api('/signin/start', { method: 'POST', body: { email: email.trim(), purpose } });
+  return { sent: true };
 }
 
-const WATCH_KEY = 'planPageWatch';
-export const WATCH_POLL_MS = 5_000;
-export const WATCH_MAX_MS = 15 * 60_000;
-
-/** The watch, kept in memory too: tabs.onRemoved asks on every closed tab (hundreds during a fold). */
-let cachedWatch: PageWatch | null | undefined;
-
-export async function getPageWatch(): Promise<PageWatch | undefined> {
-  if (cachedWatch === undefined) {
-    cachedWatch = ((await browser.storage.session.get(WATCH_KEY))[WATCH_KEY] as PageWatch | undefined) ?? null;
-  }
-  return cachedWatch ?? undefined;
+async function signedIn(answer: SigninAnswer | null | undefined, withCode: boolean): Promise<SigninResult> {
+  const plan = planOf(answer);
+  lastReadAt = Date.now();
+  await applyPlan(plan, { withCode });
+  await storeRuns(answer?.runs);
+  return { plan, trialStarted: answer?.trialStarted === true, trialUsed: answer?.trialUsed === true };
 }
 
-async function setPageWatch(watch: PageWatch | null): Promise<void> {
-  cachedWatch = watch;
-  if (watch) await browser.storage.session.set({ [WATCH_KEY]: watch });
-  else await browser.storage.session.remove(WATCH_KEY);
+/** Check the code and sign this computer in; with `startTrial`, start the trial if this email never had one. */
+export async function signinFinish(email: string, code: string, startTrial: boolean): Promise<SigninResult> {
+  const answer = await api<SigninAnswer>('/signin/finish', {
+    method: 'POST',
+    body: { email: email.trim(), code: code.replace(/\D/g, ''), startTrial },
+  });
+  return signedIn(answer, true);
 }
 
-function schedulePoll(delayMs = WATCH_POLL_MS): void {
-  clearTimeout(pollTimer);
-  pollTimer = setTimeout(() => {
-    pollTimer = undefined;
-    pollPageWatch().catch((error) => console.warn('[tabfold] plan poll failed', error));
-  }, delayMs);
-}
-
-async function stillOpen(watch: PageWatch): Promise<boolean> {
-  try {
-    if (watch.kind === 'tab') await browser.tabs.get(watch.id);
-    else await browser.windows.get(watch.id);
-    return true;
-  } catch {
-    return false;
-  }
+/** Start the trial for the account this computer is signed in to (no code needed). */
+export async function startTrial(): Promise<SigninResult> {
+  return signedIn(await api<SigninAnswer>('/trial', { method: 'POST' }), false);
 }
 
 /**
- * One poll while an ExtensionPay page is open: read the plan; when the page has closed (or 15
- * minutes have passed), read it one last time and stop.
+ * Sign out on this computer: the server unlinks its token, this computer drops it and stops using
+ * the profile key, and the plan here is Free (no "plan ended" notice: the plan itself goes on).
+ * Offline, it signs out here all the same.
  */
-export async function pollPageWatch(now = Date.now()): Promise<'watching' | 'done' | 'idle'> {
-  const watch = await getPageWatch();
-  if (!watch) return 'idle';
-  if (now >= watch.until || !(await stillOpen(watch))) {
-    await setPageWatch(null);
-    await refreshPlan({ force: true });
-    return 'done';
-  }
-  await refreshPlan({ force: true });
-  schedulePoll();
-  return 'watching';
-}
-
-/** tabs.onRemoved / windows.onRemoved: the watched page closed, so read the plan once more. */
-export async function onPageClosed(kind: PageWatch['kind'], id: number): Promise<void> {
-  const watch = await getPageWatch();
-  if (!watch || watch.kind !== kind || watch.id !== id) return;
-  clearTimeout(pollTimer);
-  pollTimer = undefined;
-  await setPageWatch(null);
-  await refreshPlan({ force: true });
-}
-
-async function watchPage(kind: PageWatch['kind'], id: number): Promise<void> {
-  await setPageWatch({ kind, id, until: Date.now() + WATCH_MAX_MS });
-  schedulePoll();
-}
-
-/** A popup window centred over the window the person is in. */
-async function openCentredPopup(url: string, width: number, height: number) {
-  let position: { left?: number; top?: number } = {};
+export async function signOut(now = Date.now()): Promise<{ ok: true }> {
+  if (!proConfigured()) throw new ProError('not-configured');
   try {
-    const current = await browser.windows.getLastFocused();
-    if (current.left !== undefined && current.top !== undefined && current.width !== undefined && current.height !== undefined) {
-      position = {
-        left: Math.round(current.left + (current.width - width) / 2),
-        top: Math.max(current.top, Math.round(current.top + (current.height - height) / 2)),
-      };
-    }
-  } catch {
-    // No window to centre on: Chrome places it.
+    if (await peekDeviceToken()) await api('/signout', { method: 'POST' });
+  } catch (error) {
+    console.warn('[tabfold] sign-out request failed', codeOf(error));
   }
-  try {
-    return await browser.windows.create({ url, type: 'popup', width, height, focused: true, ...position });
-  } catch {
-    // Chrome refuses a position it thinks is off-screen.
-    return browser.windows.create({ url, type: 'popup', width, height, focused: true }).catch(() => undefined);
-  }
-}
-
-/**
- * Open ExtensionPay: checkout (a tab), managing the subscription (a tab), the trial sign-up or
- * sign-in (a small window). The plan is then read every 5 s while the page is open.
- */
-export async function openPlanPage(
-  page: ExtPayPage,
-  plan: { tier?: Exclude<Tier, 'free'>; interval?: BillingInterval } = {},
-): Promise<{ opened: boolean; reason?: string }> {
-  if (!proConfigured()) return { opened: false, reason: NOT_AVAILABLE };
-  let key: string;
-  try {
-    key = await ensureApiKey();
-  } catch {
-    return { opened: false, reason: UNREACHABLE };
-  }
-  const url = extpayPageUrl(page, key, plan);
-  try {
-    if (page === 'payment' || page === 'manage') {
-      const tab = await browser.tabs.create({ url, active: true });
-      if (tab.id !== undefined) await watchPage('tab', tab.id);
-    } else {
-      const created = await openCentredPopup(url, 500, page === 'trial' ? 700 : 800);
-      if (created?.id === undefined) return { opened: false, reason: 'Chrome couldn’t open the window. Try again.' };
-      await watchPage('window', created.id);
-    }
-  } catch {
-    return { opened: false, reason: 'Chrome couldn’t open the page. Try again.' };
-  }
-  return { opened: true };
+  await forgetDeviceToken();
+  await setSignedOutHere(true);
+  lastReadAt = now;
+  await applyPlan({ ...FREE_PLAN, checkedAt: now }, { now });
+  await Promise.all([aiRuns.set(null), needsSignIn.set(null), forgetCloudSyncState()]);
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------------------------
 // In the worker
 
-/** Called once at the worker's top level: read the plan (at most hourly), pick up a page being watched. */
+/** Called once at the worker's top level: read the plan (at most hourly), and follow the profile key. */
 export function setupPlan(): void {
-  // The key arrived from another computer through Chrome sync (or was created): read the plan.
+  // Another computer on this Chrome profile signed in: sign in here too (unless signed in already, or signed out here).
   browser.storage.onChanged.addListener((changes, area) => {
-    if ((area === 'sync' || area === 'local') && EXTPAY_KEY in changes) {
-      refreshPlan({ force: true }).catch(() => undefined);
-    }
+    if (area !== 'sync' || !(PROFILE_KEY in changes) || !isToken(changes[PROFILE_KEY]!.newValue)) return;
+    (async () => {
+      if ((await planState.get()).email === null) await refreshPlan({ force: true });
+    })().catch(() => undefined);
   });
-  (async () => {
-    await refreshPlan({ maxAgeMs: STARTUP_READ_INTERVAL_MS });
-    const watch = await getPageWatch();
-    if (watch) schedulePoll(0);
-  })().catch((error) => console.warn('[tabfold] plan setup failed', error));
+  refreshPlan({ maxAgeMs: STARTUP_READ_INTERVAL_MS }).catch((error) => console.warn('[tabfold] plan setup failed', codeOf(error)));
 }
 
 /** chrome.alarms: the 6-hourly read and the trial's end. Returns false for other alarms. */

@@ -1,46 +1,52 @@
 import type { TabGroupColor } from '../types';
 
 /**
- * Tabfold Pro and Pro AI (Pro-* boards). Free stays complete; Pro adds sync of every folded tab
- * through the Tabfold account, a daily backup kept 30 days and more export formats; Pro AI adds
- * Organise with AI, smart fold names and "Copy as context". Payments and sign-in are ExtensionPay;
- * the server (server/) checks the plan before sync, backups or AI.
+ * Tabfold Pro and Pro AI (Pro-* and Stripe-* boards). Free stays complete; Pro adds sync of every
+ * folded tab through the Tabfold account, a daily backup kept 30 days and more export formats; Pro
+ * AI adds Organise with AI, smart fold names and "Copy as context". Payments are Stripe Checkout
+ * and Stripe's billing page, opened in a tab; the account is an email address proved with an
+ * emailed code. The server (server/API.md) works out the plan and checks it before sync, backups
+ * or AI.
  */
 
 export type Tier = 'free' | 'pro' | 'pro-ai';
 export type BillingInterval = 'month' | 'year';
 
-/** What this install is entitled to, as last read from ExtensionPay (cached in storage). */
+/** What this computer is entitled to, as the server last said (`GET /me`, cached in storage). Same shape as server/API.md. */
 export interface PlanState {
   tier: Tier;
-  /** The 7-day Pro AI trial, while it runs. */
+  /** The server's 7-day Pro AI trial, while it runs and there's no live subscription. */
   trial: { startedAt: number; endsAt: number } | null;
-  /** A trial was started at some point (ExtensionPay allows one per email). */
-  trialUsed?: boolean;
-  /** The email the plan belongs to (payment or trial sign-up). */
+  /** This email has had its trial (one per email). */
+  trialUsed: boolean;
+  /** The signed-in account's email; null when this computer isn't signed in. */
   email: string | null;
-  /** A paid plan's billing period. */
+  /** A live subscription's billing period. */
   interval: BillingInterval | null;
-  /** Subscription state from the payment provider. */
+  /** A live subscription's state: 'active' (Stripe's active or trialing) or 'past_due'; else null. */
   status: 'active' | 'past_due' | 'canceled' | null;
-  /** The subscription ends at this time (cancelled but still paid up). */
+  /** Cancelled but still on until then (ms). */
   cancelAt: number | null;
-  /** When this was read. 0: never. */
+  /** Next charge (ms): the period end, or when billing starts after a trial. Null when cancelled. */
+  renewsAt: number | null;
+  /** When the server worked this out (ms). 0: never. */
   checkedAt: number;
 }
 
 export const FREE_PLAN: PlanState = {
   tier: 'free',
   trial: null,
+  trialUsed: false,
   email: null,
   interval: null,
   status: null,
   cancelAt: null,
+  renewsAt: null,
   checkedAt: 0,
 };
 
-/** Plan nicknames as set up in the ExtensionPay dashboard (one per tier and period). */
-export const PLAN_NICKNAMES: Record<Exclude<Tier, 'free'>, Record<BillingInterval, string>> = {
+/** Stripe Price lookup keys (server/scripts/stripe-setup.mjs creates them), one per tier and period. */
+export const PRICE_LOOKUP_KEYS: Record<Exclude<Tier, 'free'>, Record<BillingInterval, string>> = {
   pro: { month: 'pro-monthly', year: 'pro-yearly' },
   'pro-ai': { month: 'pro-ai-monthly', year: 'pro-ai-yearly' },
 };
@@ -120,13 +126,43 @@ export interface MilestoneState {
   dismissedUntil: number;
 }
 
-/** Why a Pro request failed, for the pages to explain. */
+/** Why a Pro request failed, for the pages to explain (server/API.md, "Errors", plus the first two). */
 export type ProErrorCode =
+  /** This build has no server (extension only). */
   | 'not-configured'
+  /** The server couldn't be reached (extension only). */
   | 'offline'
   | 'not-signed-in'
   | 'needs-pro'
   | 'needs-pro-ai'
+  | 'conflict'
+  | 'already-subscribed'
   | 'runs-used-up'
+  | 'rate-limited'
   | 'ai-failed'
+  | 'send-failed'
+  | 'invalid-email'
+  | 'wrong-code'
+  | 'code-expired'
   | 'server';
+
+/** Why a sign-in code is emailed; it only changes the email's wording. */
+export type SigninPurpose = 'signin' | 'trial';
+
+/** After a code (`POST /signin/finish`) or `POST /trial`: the plan now, whether the trial started, and whether this email had one before. */
+export interface SigninResult {
+  plan: PlanState;
+  trialStarted: boolean;
+  trialUsed: boolean;
+}
+
+/** A Stripe Checkout tab Tabfold opened and watches (`checkoutState` in chrome.storage.session). */
+export interface CheckoutState {
+  tabId: number;
+  sessionId: string;
+  tier: Exclude<Tier, 'free'>;
+  interval: BillingInterval;
+  startedAt: number;
+  /** The Tabfold page it was opened from, focused again when the person cancels. */
+  openerTabId?: number;
+}

@@ -6,7 +6,8 @@ import { colourGroups, contextMarkdown, cutText, freshRuns, pickTabsForAi, readR
 import { api, ProError } from '../pro/api';
 import { proConfigured } from '../pro/config';
 import { addFreed, dismissMilestone, monthKey } from '../pro/milestone';
-import { openPlanPage, refreshPlan } from '../pro/plan';
+import { focusCheckout, openBilling, openCheckout, type Source } from '../pro/checkout';
+import { refreshPlan, signinFinish, signinStart, signOut, startTrial } from '../pro/plan';
 import { aiRuns, milestoneState, planState, projectsState } from '../pro/state';
 import { hasPro, hasProAi } from '../pro/tiers';
 import { AI_MAX_TABS, type AiGroup, type AiRuns, type BackupInfo, type OrganiseResult, type PlanState } from '../pro/types';
@@ -18,9 +19,10 @@ import { CLOUD_LIMITS, unpack } from '../sync/records';
 import { restoreWindows } from './restore';
 
 /**
- * Pro and Pro AI in the worker: plan refresh and ExtensionPay pages, Organise with AI, Copy as
- * context, smart fold names, daily backups, sync with the Tabfold account, the memory milestone and
- * "Reopen everything". Only tab titles and sites ever go to the AI, never pages or Incognito tabs.
+ * Pro and Pro AI in the worker: the plan, signing in and out, Stripe Checkout and billing tabs,
+ * Organise with AI, Copy as context, smart fold names, daily backups, sync with the Tabfold
+ * account, the memory milestone and "Reopen everything". Only tab titles and sites ever go to the
+ * AI, never pages or Incognito tabs.
  */
 
 type ProCommand = Extract<
@@ -28,7 +30,13 @@ type ProCommand = Extract<
   {
     type:
       | 'plan-refresh'
-      | 'plan-open'
+      | 'checkout-open'
+      | 'checkout-focus'
+      | 'billing-open'
+      | 'signin-start'
+      | 'signin-finish'
+      | 'trial-start'
+      | 'signout'
       | 'ai-organise'
       | 'ai-apply'
       | 'ai-context'
@@ -40,12 +48,24 @@ type ProCommand = Extract<
   }
 >;
 
-export async function handleProCommand(command: ProCommand): Promise<CommandResults[ProCommand['type']]> {
+export async function handleProCommand(command: ProCommand, source: Source = {}): Promise<CommandResults[ProCommand['type']]> {
   switch (command.type) {
     case 'plan-refresh':
-      return refreshPlan();
-    case 'plan-open':
-      return openPlanPage(command.page, { tier: command.tier, interval: command.interval });
+      return refreshPlan({ force: command.force === true });
+    case 'checkout-open':
+      return openCheckout(command.tier, command.interval, source);
+    case 'checkout-focus':
+      return focusCheckout();
+    case 'billing-open':
+      return openBilling({ flow: command.flow }, source);
+    case 'signin-start':
+      return signinStart(command.email, command.purpose);
+    case 'signin-finish':
+      return signinFinish(command.email, command.code, command.startTrial);
+    case 'trial-start':
+      return startTrial();
+    case 'signout':
+      return signOut();
     case 'ai-organise':
       return organise();
     case 'ai-apply':
