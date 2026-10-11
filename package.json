@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "e2e": "node e2e/smoke.mjs",
     "e2e:pro": "node --experimental-transform-types --no-warnings e2e/pro.mjs",
+    "e2e:folders": "node e2e/folders.mjs",
     "icons": "node scripts/make-icons.mjs",
     "postinstall": "wxt prepare"
   },
