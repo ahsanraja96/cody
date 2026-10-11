@@ -124,9 +124,12 @@ describe('createStripe', () => {
     expect(await stripe.getCheckout(id)).toEqual({
       id,
       status: 'open',
+      mode: 'subscription',
+      paymentStatus: 'unpaid',
       customerId: null,
       email: null,
       subscriptionId: null,
+      paymentIntentId: null,
       clientReferenceId: 'acc-1',
       metadata: { account: 'acc-1' },
     });
@@ -135,7 +138,7 @@ describe('createStripe', () => {
       status: 'complete',
       customerId: expect.stringMatching(/^cus_/),
       email: 'sam@example.com',
-      subscriptionId: subscription.id,
+      subscriptionId: subscription!.id,
     });
     clock.now = NOW + 25 * 60 * MINUTE;
     const { id: late } = await stripe.createCheckout(checkoutInput);
@@ -162,6 +165,9 @@ describe('createStripe', () => {
       cancelAtPeriodEnd: true,
       trialEnd: NOW + 3 * 86400 * 1000,
       createdAt: NOW,
+      quantity: 1,
+      itemId: sub.items.data[0].id,
+      endedAt: null,
     });
   });
 
@@ -182,6 +188,71 @@ describe('createStripe', () => {
       createdAt: 0,
     });
     expect(() => readSubscription({})).toThrow('without an id');
+  });
+
+  it('creates a one-time payment session (Pro for life) that makes a customer', async () => {
+    const { id } = await stripe.createCheckout({
+      ...checkoutInput,
+      lookupKey: 'pro-lifetime',
+      mode: 'payment',
+      customerEmail: 'sam@example.com',
+      // Ignored outside subscriptions.
+      trialEnd: NOW / 1000 + 3 * 86400,
+      metadata: { plan: 'pro-lifetime' },
+    });
+    const post = fake.requests.find((r) => r.method === 'POST')!;
+    expect(post.params).toEqual({
+      mode: 'payment',
+      line_items: [{ price: fake.priceFor('pro-lifetime')!.id, quantity: '1' }],
+      success_url: checkoutInput.successUrl,
+      cancel_url: checkoutInput.cancelUrl,
+      allow_promotion_codes: 'true',
+      metadata: { plan: 'pro-lifetime' },
+      customer_email: 'sam@example.com',
+      customer_creation: 'always',
+    });
+    expect(await stripe.getCheckout(id)).toMatchObject({ mode: 'payment', status: 'open', paymentStatus: 'unpaid', paymentIntentId: null });
+    await fake.completeSession(id);
+    expect(await stripe.getCheckout(id)).toMatchObject({
+      status: 'complete',
+      paymentStatus: 'paid',
+      paymentIntentId: expect.stringMatching(/^pi_/),
+      customerId: expect.stringMatching(/^cus_/),
+      subscriptionId: null,
+      email: 'sam@example.com',
+    });
+    // With an existing customer, Stripe wants no customer_creation.
+    const customer = fake.addCustomer('kim@example.com');
+    await stripe.createCheckout({ ...checkoutInput, lookupKey: 'pro-lifetime', mode: 'payment', customer: customer.id });
+    expect(fake.requests.filter((r) => r.method === 'POST').at(-1)!.params.customer_creation).toBeUndefined();
+  });
+
+  it('asks for a quantity (a Teams plan’s seats), and the subscription has it', async () => {
+    const { id } = await stripe.createCheckout({ ...checkoutInput, lookupKey: 'teams-yearly', quantity: 7 });
+    expect(fake.requests.find((r) => r.method === 'POST')!.params.line_items).toEqual([{ price: fake.priceFor('teams-yearly')!.id, quantity: '7' }]);
+    const { subscription } = await fake.completeSession(id, { email: 'boss@example.com' });
+    expect(await stripe.getSubscription(subscription!.id)).toMatchObject({
+      lookupKey: 'teams-yearly',
+      interval: 'year',
+      quantity: 7,
+      itemId: subscription!.items.data[0].id,
+    });
+  });
+
+  it('changes a subscription item’s quantity, prorated', async () => {
+    const customer = fake.addCustomer('boss@example.com');
+    const sub = fake.addSubscription({ customer: customer.id, lookupKey: 'teams-monthly', quantity: 3 });
+    await stripe.updateQuantity(sub.items.data[0].id, 4);
+    const post = fake.requests.find((r) => r.method === 'POST')!;
+    expect(post.path).toBe(`/v1/subscription_items/${sub.items.data[0].id}`);
+    expect(post.params).toEqual({ quantity: '4', proration_behavior: 'create_prorations' });
+    expect((await stripe.getSubscription(sub.id)).quantity).toBe(4);
+    expect(fake.events.map((e) => [e.type, e.data.object.items.data[0].quantity])).toEqual([['customer.subscription.updated', 4]]);
+    await expect(stripe.updateQuantity('si_nope', 2)).rejects.toMatchObject({ name: 'PaymentsError', status: 404 });
+  });
+
+  it('reads when a subscription ended', () => {
+    expect(readSubscription({ id: 'sub_1', status: 'canceled', ended_at: 1_790_000_000 })).toMatchObject({ endedAt: 1_790_000_000_000, quantity: 1, itemId: null });
   });
 
   it('opens the billing portal, straight on the card form if asked', async () => {
