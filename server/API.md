@@ -100,6 +100,10 @@ server doesn't know. If this token started a Stripe checkout in the last 24 hour
 processed yet, the server asks Stripe about it first (so a payment shows up even before Stripe's
 webhook arrives) and, when it's complete, signs this computer in to the paying account.
 
+Optional `"needsSignIn": { "email": string }` (only while this computer isn't signed in): a checkout
+it started was paid with an email that already had a Tabfold account. The payment is on that
+account, but the computer must sign in with a code first (see `POST /checkout`).
+
 ### `POST /signin/start` (any token)
 Body `{ "email": string, "purpose": "signin" | "trial" }` → `{ "sent": true }`.
 Emails a 6-digit code, valid 10 minutes and for 5 tries; a new code replaces the old one. The
@@ -138,6 +142,10 @@ token started it. The extension opens `url` in a tab.
 
 - Signed in: checkout uses the account (its Stripe customer, or its email, which Stripe then
   can't change). Not signed in: Stripe asks for an email, and that email becomes the account.
+  Stripe doesn't check that email, so the payment signs this computer in only when it creates the
+  account. If the email already had an account, the plan lands on it, but the computer signs in
+  with a code (`GET /me` answers `needsSignIn`); otherwise anyone could reach someone else's
+  synced tabs by paying with their email.
 - During the server trial, a Pro AI checkout starts billing when the trial ends
   (`subscription_data.trial_end`), unless fewer than 48 hours are left (Stripe's minimum); then it
   charges at once. A Pro checkout charges at once (and the trial stops counting).
@@ -160,7 +168,7 @@ catch the tab first.
 ### `POST /stripe/webhook` (Stripe only)
 Checked with `Stripe-Signature` and `STRIPE_WEBHOOK_SECRET` (5-minute tolerance); 400 otherwise.
 Handles `checkout.session.completed` (links the Stripe customer to the account, stores the
-subscription, signs in the token that started the checkout) and
+subscription, signs in the token that started the checkout, as `POST /checkout` says) and
 `customer.subscription.created|updated|deleted` (re-reads the subscription from Stripe, so events
 arriving out of order don't matter). Each event id is processed once.
 

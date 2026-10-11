@@ -2,6 +2,7 @@
 project_id = "tabfold"
 
 [functions.tabfold]
-# The function checks the ExtensionPay key itself. Supabase's own sign-in check would turn the
-# extension away, because the extension never signs in to Supabase.
+# The function checks each computer's device token itself, and Stripe's webhook signature.
+# Supabase's own sign-in check would turn both away: neither the extension nor Stripe signs in to
+# Supabase.
 verify_jwt = false
