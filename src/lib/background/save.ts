@@ -2,6 +2,7 @@ import { browser, type Browser } from 'wxt/browser';
 import { isPlaceholderTitle, planCapture, rawTabUrl, wouldCloseEverything, type CapturePlan } from '../capture';
 import { db, isQuotaError } from '../db';
 import { refreshDataGuard } from '../dataGuard';
+import { undoFolderChanges } from '../folders';
 import { estimateBytes } from '../format';
 import {
   CommandError,
@@ -325,15 +326,20 @@ export async function recordUndo(input: {
 
 /**
  * Remember an action that changed tabs already folded without saving or closing anything (snoozing
- * folded tabs, a tab closed in a live folder's group), so Undo can put them back.
+ * folded tabs, a tab closed in a live folder's group, moving tabs between folders, deleting a
+ * folder, moving a site to another kind, Make room, removing duplicates), so Undo can put them back.
  */
 export async function recordChangeUndo(change: {
   patches?: LastAction['patches'];
   putBack?: LastAction['putBack'];
   sessionId?: string;
   now?: number;
+  folders?: LastAction['folders'];
+  foldersMade?: LastAction['foldersMade'];
+  siteKind?: LastAction['siteKind'];
 }): Promise<string | null> {
-  if (!change.patches?.length && !change.putBack?.tabs.length) return null;
+  const folderChange = !!change.folders?.length || !!change.foldersMade?.length || !!change.siteKind;
+  if (!change.patches?.length && !change.putBack?.tabs.length && !folderChange) return null;
   const now = change.now ?? Date.now();
   const action: LastAction = {
     id: crypto.randomUUID(),
@@ -353,6 +359,9 @@ export async function recordChangeUndo(change: {
     closed: false,
     ...(change.patches?.length ? { patches: change.patches } : {}),
     ...(change.putBack?.tabs.length ? { putBack: change.putBack } : {}),
+    ...(change.folders?.length ? { folders: change.folders } : {}),
+    ...(change.foldersMade?.length ? { foldersMade: change.foldersMade } : {}),
+    ...(change.siteKind ? { siteKind: change.siteKind } : {}),
   };
   await lastAction.set(action);
   return action.id;
@@ -522,6 +531,8 @@ export async function handleUndo(actionId: string): Promise<{ undone: boolean; r
   }
   if (action.createdSession) await deleteSessionsForever([action.sessionId]);
   else if (action.savedTabIds.length) await removeTabs(action.savedTabIds);
+  // Folders and site kinds first, so tabs put back into a folder find it there.
+  if (action.folders?.length || action.foldersMade?.length || action.siteKind) await undoFolderChanges(action);
   if (action.patches?.length) await applyPatches(action.patches);
   if (action.putBack?.tabs.length) await putBackTabs(action.putBack);
   return { undone: true };

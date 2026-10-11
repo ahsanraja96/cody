@@ -181,7 +181,7 @@ describe('sync merge', () => {
     const plan = planSync({ ...base, local: tabs, remote: remote() });
     expect(plan.packed.records.map((r) => r.id)).toEqual([syncId(uuid(3)), syncId(uuid(1))]);
     // The older copy of the same address is represented by the newer one; the long address stays here.
-    expect(plan.counts).toEqual({ synced: 2, localOnly: 1 });
+    expect(plan.counts).toEqual({ synced: 2, localOnly: 1, waiting: 0 });
     expect(plan.known).toEqual({ [syncId(uuid(3))]: urlKey(tabs[2]!.url), [syncId(uuid(1))]: urlKey(tabs[0]!.url) });
   });
 
@@ -255,7 +255,7 @@ describe('sync merge', () => {
     const a2 = planSync({ ...base, local: [onA], remote: remote(b1.packed.records), known: a1.known });
     expect(a2.adopt).toEqual([{ localId: uuid(1), record: { ...b1.packed.records[0]!, keywords: ['a'] } }]);
     expect(a2.packed.tombstones).toEqual([]);
-    expect(a2.counts).toEqual({ synced: 1, localOnly: 0 });
+    expect(a2.counts).toEqual({ synced: 1, localOnly: 0, waiting: 0 });
   });
 
   it('after "Clear all data", tabs folded before it are neither shared nor brought in, and nothing here is deleted', () => {
@@ -266,7 +266,7 @@ describe('sync merge', () => {
     expect(plan.remove).toEqual([]);
     expect(plan.packed.records.map((r) => r.id)).toEqual([syncId(uuid(2))]);
     expect(plan.floor).toBe(floor);
-    expect(plan.counts).toEqual({ synced: 1, localOnly: 1 });
+    expect(plan.counts).toEqual({ synced: 1, localOnly: 1, waiting: 0 });
   });
 });
 

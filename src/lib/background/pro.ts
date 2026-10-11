@@ -2,17 +2,18 @@ import { browser } from 'wxt/browser';
 import { db } from '../db';
 import { formatDay } from '../exporters';
 import type { Command, CommandResults, FoldOutcome } from '../messages';
-import { colourGroups, contextMarkdown, cutText, freshRuns, pickTabsForAi, readRuns, toAiTab } from '../pro/ai';
+import { addFolder, cleanFolderName, listLiveFolders, listRoom, setTabsFolder } from '../folders';
+import { CommandError } from '../messages';
+import { colourGroups, contextMarkdown, cutText, freshRuns, matchFolders, pickTabsForAi, readRuns, toAiTab } from '../pro/ai';
 import { api, ProError } from '../pro/api';
 import { proConfigured } from '../pro/config';
 import { addFreed, dismissMilestone, monthKey } from '../pro/milestone';
 import { focusCheckout, openBilling, openCheckout, type Source } from '../pro/checkout';
 import { refreshPlan, signinFinish, signinStart, signOut, startTrial } from '../pro/plan';
-import { aiRuns, milestoneState, planState, projectsState } from '../pro/state';
-import { hasPro, hasProAi } from '../pro/tiers';
+import { aiRuns, milestoneState, planState } from '../pro/state';
+import { hasFreeLimits, hasPro, hasProAi } from '../pro/tiers';
 import { AI_MAX_TABS, type AiGroup, type AiRuns, type BackupInfo, type OrganiseResult, type PlanState } from '../pro/types';
-import { getSessionGraph, listFoldedTabs, listLiveSessions, restoreRecords, setProjects, setSmartName } from '../repo';
-import { updateSettings } from '../settings';
+import { getSessionGraph, listFoldedTabs, listLiveSessions, restoreRecords, setSmartName } from '../repo';
 import { cloudSyncActive } from '../sync/cloud';
 import { cloudSyncNow } from '../sync/engine';
 import { CLOUD_LIMITS, unpack } from '../sync/records';
@@ -69,7 +70,7 @@ export async function handleProCommand(command: ProCommand, source: Source = {})
     case 'ai-organise':
       return organise();
     case 'ai-apply':
-      return applyProjects(command.groups);
+      return applyFolders(command.groups);
     case 'ai-context':
       return copyAsContext(command.tabRecordIds, command.name);
     case 'backups-list':
@@ -86,7 +87,7 @@ export async function handleProCommand(command: ProCommand, source: Source = {})
 }
 
 /** The plan includes this (reading it again first when the cached one says it doesn't), or a ProError. */
-async function requirePlan(need: 'pro' | 'pro-ai'): Promise<PlanState> {
+export async function requirePlan(need: 'pro' | 'pro-ai'): Promise<PlanState> {
   if (!proConfigured()) throw new ProError('not-configured');
   const includes = (plan: PlanState) => (need === 'pro' ? hasPro(plan) : hasProAi(plan));
   let plan = await planState.get();
@@ -107,10 +108,14 @@ async function storeRuns(value: unknown): Promise<AiRuns | null> {
   return runs;
 }
 
-/** Organise with AI: a preview of projects for the newest 300 folded tabs. Nothing changes yet. */
+/**
+ * Organise with AI: a preview of folders for the newest 300 folded tabs that aren't in a folder yet
+ * (or snoozed). A group named like a folder that's already there goes into it. Nothing changes yet.
+ */
 export async function organise(now = Date.now()): Promise<OrganiseResult> {
   await requirePlan('pro-ai');
-  const { sent, notSent } = pickTabsForAi(await listFoldedTabs());
+  const loose = (await listFoldedTabs()).filter((t) => !t.folderId && !t.snoozeUntil);
+  const { sent, notSent } = pickTabsForAi(loose);
   if (sent.length === 0) {
     return { groups: [], ungrouped: [], notSent, runs: (await aiRuns.get()) ?? freshRuns(now) };
   }
@@ -124,19 +129,46 @@ export async function organise(now = Date.now()): Promise<OrganiseResult> {
   }
   const runs = (await storeRuns(answer?.runs)) ?? (await aiRuns.get()) ?? freshRuns(now);
   const { groups, ungrouped } = colourGroups(answer?.groups, sent.map((t) => t.id));
-  return { groups, ungrouped, notSent, runs };
+  return { groups: matchFolders(groups, await listLiveFolders()), ungrouped, notSent, runs };
 }
 
-/** Keep the projects the person chose: tabs carry their project, and the list shows By project. */
-export async function applyProjects(groups: AiGroup[], now = Date.now()): Promise<{ applied: number }> {
-  const kept = groups.filter((g) => g.name.trim() && g.tabIds.length > 0);
-  const { applied, projects: names } = await setProjects(kept);
-  const colorOf = new Map<string, AiGroup['color']>();
-  for (const group of kept) if (!colorOf.has(group.name.trim())) colorOf.set(group.name.trim(), group.color);
-  const projects = names.map((name) => ({ name, color: colorOf.get(name) ?? 'blue' }));
-  await projectsState.set({ projects, organisedAt: now });
-  await updateSettings({ groupBy: 'project' });
-  return { applied };
+/**
+ * Keep the folders the person chose: each group's tabs go into its folder (`folderId`, or the
+ * folder with its name), and the other groups become new folders (source `ai`). Paid plans have no
+ * folder limit; on Free (a trial that just ended) groups past the 3rd folder stay by site. A tab
+ * listed twice stays in the first group. Tabs in no group stay where they are.
+ */
+export async function applyFolders(groups: AiGroup[], now = Date.now()): Promise<{ applied: number; folders: number }> {
+  const unlimited = !hasFreeLimits(await planState.get());
+  const live = await listLiveFolders();
+  const liveIds = new Set(live.map((f) => f.id));
+  const byName = new Map(live.map((f) => [f.name.toLowerCase(), f.id]));
+  const placed = new Set<string>();
+  let applied = 0;
+  let made = 0;
+  for (const group of groups) {
+    const name = cleanFolderName(group.name);
+    const wanted = (group.tabIds ?? []).filter((id) => typeof id === 'string' && !placed.has(id));
+    // Only tabs still in the list (an empty group makes no folder).
+    const ids = wanted.length ? (await db.tabs.bulkGet(wanted)).filter((t) => !!t).map((t) => t!.id) : [];
+    if (!name || ids.length === 0) continue;
+    let folderId = group.folderId && liveIds.has(group.folderId) ? group.folderId : byName.get(name.toLowerCase());
+    if (!folderId) {
+      try {
+        folderId = (await addFolder({ name, color: group.color, source: 'ai' }, { unlimited, now })).id;
+      } catch (error) {
+        if (error instanceof CommandError && error.code === 'folder-limit') continue;
+        throw error;
+      }
+      made += 1;
+      liveIds.add(folderId);
+      byName.set(name.toLowerCase(), folderId);
+    }
+    const { found } = await setTabsFolder(ids, folderId, { now });
+    for (const id of ids) placed.add(id);
+    applied += found;
+  }
+  return { applied, folders: made };
 }
 
 /** Copy as context: Markdown for Claude, ChatGPT or Cursor, with a short AI summary when it can have one. */
@@ -226,16 +258,25 @@ export async function listBackups(): Promise<BackupInfo[]> {
 
 const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/** Bring back the tabs in a daily backup that aren't in the list now, as one fold. Nothing is deleted. */
-export async function restoreBackup(day: string): Promise<{ restored: number; sessionId: string | null }> {
+/**
+ * Bring back the tabs in a daily backup that aren't in the list now, as one fold, each in its folder
+ * when that folder still exists. Nothing is deleted. A Free list takes only what fits.
+ */
+export async function restoreBackup(day: string): Promise<{ restored: number; sessionId: string | null; skippedOverLimit?: number }> {
   const match = DAY.exec(day);
   if (!match) throw new ProError('server', 'That backup doesn’t exist.');
-  await requirePlan('pro');
+  const plan = await requirePlan('pro');
   const answer = await api<{ items?: unknown }>(`/backups/${day}`);
   const items = answer?.items && typeof answer.items === 'object' ? (answer.items as Record<string, unknown>) : {};
   const { records } = unpack(items, CLOUD_LIMITS);
   const date = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  return restoreRecords(records, `Restored · ${formatDay(date, { year: false, utc: true })}`);
+  const { room } = await listRoom(plan);
+  const result = await restoreRecords(records, `Restored · ${formatDay(date, { year: false, utc: true })}`, { room });
+  return {
+    restored: result.restored,
+    sessionId: result.sessionId,
+    ...(result.skippedOverLimit ? { skippedOverLimit: result.skippedOverLimit } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -102,11 +102,13 @@ export interface AiTab {
   host: string;
 }
 
-/** A project the AI proposed: its tabs, by saved tab id. */
+/** A folder the AI proposed: its tabs, by saved tab id. */
 export interface AiGroup {
   name: string;
   color: TabGroupColor;
   tabIds: string[];
+  /** A folder that already has this name (any case): the tabs go into it. Unset: a new folder. */
+  folderId?: string;
 }
 
 export interface OrganiseResult {

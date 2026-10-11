@@ -11,6 +11,7 @@ import { onPlanAlarm, PLAN_ALARM, PLAN_ALARM_MINUTES, setupPlan } from '../pro/p
 import { setupSync, syncTick } from '../sync/engine';
 import { AUTOFOLD_ALARM, AUTOFOLD_MINUTES, autoFoldTick, onTabActivated, setupSnooze, SNOOZE_ALARM, wakeDue } from './automation';
 import { forgetUnfinishedFold } from './fold';
+import { setupFolders } from './folders';
 import { setupLive } from './live';
 import { createMenus, onCommand, onMenuClicked, refreshSnoozeMenu } from './menus';
 import { ensureMilestoneStart } from './pro';
@@ -212,4 +213,6 @@ export function setupBackground(): void {
   setupShare();
   // Snoozed tabs: the toolbar number after a restart, and the alarm (ones due while Chrome was closed come back now).
   safely('snooze', setupSnooze);
+  // Folders: the placement stamp on tab writes, the weekly tidy-up alarm, old AI projects into folders.
+  setupFolders();
 }
