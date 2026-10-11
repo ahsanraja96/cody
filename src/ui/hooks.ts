@@ -15,6 +15,10 @@ import {
 } from '@/lib/pro/state';
 import { FREE_PLAN, type AiRuns, type CheckoutState, type MilestoneState, type PlanState, type ProjectsState } from '@/lib/pro/types';
 import { listLiveSessions } from '@/lib/repo';
+import { avatarColors, isTeamSession } from '@/lib/teams';
+import { teamDetails as teamDetailsState, teamGone as teamGoneState } from '@/lib/pro/state';
+import type { TeamDetails, TeamGone, TeamInfo } from '@/lib/pro/types';
+import type { Person } from './components/Avatars';
 import type { FolderRecord, SessionRecord, TabRecord } from '@/lib/types';
 import type { SiteKinds } from '@/lib/categories';
 import { FREE_LIMITS } from '@/lib/limits';
@@ -481,9 +485,10 @@ export function useSiteKinds(): SiteKinds {
  */
 export function useFoldedCount(): { tabs: number; folders: number } | undefined {
   return useLiveQuery(async () => {
-    const folds = await listLiveSessions();
+    // A team's fold and folders count toward no Free limit.
+    const folds = (await listLiveSessions()).filter((fold) => !isTeamSession(fold));
     const tabs = folds.reduce((sum, fold) => sum + (fold.tabCount || 0), 0);
-    const folders = await db.folders.where('deletedAt').equals(0).count();
+    const folders = await db.folders.where('deletedAt').equals(0).filter((f) => !f.teamId).count();
     return { tabs, folders };
   }, []);
 }
@@ -531,4 +536,43 @@ import { autoFoldLast as autoFoldLastState, type AutoFoldRuns } from '@/lib/stat
 /** When each auto-fold rule last ran and what it folded, by rule id ("Last ran today 14:00 · folded 6 tabs"). */
 export function useAutoFoldLast(): AutoFoldRuns {
   return useStored(autoFoldLastState.get, autoFoldLastState.watch) ?? {};
+}
+
+// ---- Teams --------------------------------------------------------------------------------------
+
+/** The team as `team-get` last read it (people and invitations), or undefined. */
+export function useTeamDetails(): (TeamDetails & { at: number }) | undefined {
+  return useStored(teamDetailsState.get, teamDetailsState.watch) ?? undefined;
+}
+
+/** Teams whose folders left this computer, waiting on "Keep a copy" or dismiss. */
+export function useTeamGone(): TeamGone[] {
+  return useStored(teamGoneState.get, teamGoneState.watch) ?? [];
+}
+
+export interface TeamView {
+  /** The plan's team (signed in), or null. */
+  team: TeamInfo | null;
+  /** Everyone in it, owner first, with their avatar colours (empty until `team-get` has answered). */
+  people: Person[];
+  /** Someone's avatar colour (grey for someone no longer in the team). */
+  colorOf: (email: string) => Person['color'];
+  /** This computer's account. */
+  email: string | null;
+}
+
+/** The plan's team, its people and their colours, for the left column, folder headers and Settings. */
+export function useTeam(plan: PlanState): TeamView {
+  const details = useTeamDetails();
+  return useMemo(() => {
+    const team = plan.email ? (plan.team ?? null) : null;
+    const current = team && details?.team.id === team.id ? details : null;
+    const colors = avatarColors(current);
+    return {
+      team,
+      people: (current?.members ?? []).map((m) => ({ email: m.email, color: colors.get(m.email) ?? 'grey' })),
+      colorOf: (email: string) => colors.get(email.toLowerCase()) ?? 'grey',
+      email: plan.email,
+    };
+  }, [plan.email, plan.team, details]);
 }

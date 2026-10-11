@@ -7,6 +7,7 @@ import { ColorDot, FolderIcon } from '@/ui/components/FolderIcon';
 import type { MenuEntry } from '@/ui/components/Menu';
 import { ProTag } from '@/ui/components/ProBits';
 import { cx } from '@/ui/cx';
+import { personalFolders, teamFolders } from '@/lib/teams';
 import { FOLDER_COLORS, type TabGroup } from '@/ui/folders';
 import { hasFreeLimits } from '@/ui/hooks';
 import { snoozeChoices } from '@/ui/snooze';
@@ -35,25 +36,36 @@ export interface MenuContext {
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-/** "Move to ›": the folders, New folder…, Kind of site ›, Out of its folder (Fo-Folders-States). */
+/**
+ * "Move to ›": the person's folders, New folder…, the team's folders under "Team" (Mx-Share), Kind
+ * of site ›, Out of its folder (Fo-Folders-States).
+ */
 function moveEntries(tab: TabRecord, ctx: MenuContext): MenuEntry[] {
   const current = ctx.folders.find((f) => f.id === tab.folderId) ?? null;
   const kind = categorize(tab.url, ctx.siteKinds);
-  const entries: MenuEntry[] = ctx.folders.map((folder) => ({
+  const entry = (folder: FolderRecord): MenuEntry => ({
     key: `f:${folder.id}`,
     label: folder.name,
     icon: <FolderIcon color={folder.color} />,
     checked: folder.id === tab.folderId,
     onSelect: () => {
-      if (folder.id !== tab.folderId) void moveToFolder([tab], folder);
+      if (folder.id !== tab.folderId) void moveToFolder([tab], folder, current);
     },
-  }));
+  });
+  const entries: MenuEntry[] = personalFolders(ctx.folders).map(entry);
   entries.push({
     key: 'new',
     label: 'New folder…',
     icon: <FolderPlus {...ICON} />,
     onSelect: () => openDialog(folderLimitReached(ctx.plan, ctx.folders) ? { kind: 'folder-limit' } : { kind: 'new-folder', tabRecordIds: [tab.id] }),
   });
+  const team = teamFolders(ctx.folders);
+  // Folded from Incognito: it stays on this computer, so never in a team folder.
+  if (team.length && !tab.incognito) {
+    entries.push({ type: 'separator', key: 'st' });
+    entries.push({ type: 'heading', key: 'team', label: 'Team' });
+    entries.push(...team.map(entry));
+  }
   entries.push({ type: 'separator', key: 's1' });
   entries.push({
     key: 'kind',
@@ -101,12 +113,13 @@ export function snoozeEntries(tabs: TabRecord[], title: string): MenuEntry[] {
   return entries;
 }
 
-/** A folded tab's ⋯ menu, also on right-click and Shift+F10 (Up-Move-States). */
+/** A folded tab's ⋯ menu, also on right-click and Shift+F10 (Up-Move-States). A team's tab doesn't snooze (it's everyone's). */
 export function tabMenu(tab: TabRecord, ctx: MenuContext): MenuEntry[] {
   const title = tab.title || tab.url;
+  const inTeam = !!ctx.folders.find((f) => f.id === tab.folderId)?.teamId;
   return [
     { key: 'move', label: 'Move to', icon: <ArrowRight {...ICON} />, submenu: moveEntries(tab, ctx), submenuWidth: 220 },
-    { key: 'snooze', label: 'Snooze', icon: <Clock {...ICON} />, submenu: snoozeEntries([tab], title), submenuWidth: 252 },
+    ...(inTeam ? [] : [{ key: 'snooze', label: 'Snooze', icon: <Clock {...ICON} />, submenu: snoozeEntries([tab], title), submenuWidth: 252 }]),
     { key: 'bg', label: 'Open in background', icon: <ExternalLink {...ICON} />, onSelect: () => void openFolded(tab, false) },
     { type: 'separator', key: 's' },
     { key: 'remove', label: 'Remove from list', icon: <Trash2 {...ICON} />, danger: true, onSelect: () => void removeOne(tab) },

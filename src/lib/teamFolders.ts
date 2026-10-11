@@ -1,3 +1,4 @@
+import { resetDataGuard } from './dataGuard';
 import { bumpSearchVersion, db, type TabfoldDB } from './db';
 import { patchOf, quietPlacement, setTabsFolder, type TabPatch } from './folders';
 import { newId } from './format';
@@ -228,9 +229,12 @@ export async function keepTeamCopy(
   return result;
 }
 
-/** A team's folders, fold and tabs leave this computer for good. */
+/**
+ * A team's folders, fold and tabs leave this computer for good. Tabfold deleted them itself, so the
+ * wipe guard follows (a list that held only the team's fold mustn't look erased from outside).
+ */
 export async function purgeTeam(teamId: string, database: TabfoldDB = db): Promise<void> {
-  await database.transaction('rw', TABLES(database), async () => {
+  const purged = await database.transaction('rw', TABLES(database), async () => {
     const sessions = await teamSessions(teamId, database);
     const ids = sessions.map((s) => s.id);
     if (ids.length) {
@@ -241,7 +245,9 @@ export async function purgeTeam(teamId: string, database: TabfoldDB = db): Promi
     const folders = (await database.folders.toArray()).filter((f) => f.teamId === teamId).map((f) => f.id);
     if (folders.length) await database.folders.bulkDelete(folders);
     if (ids.length || folders.length) await bumpSearchVersion(database);
+    return ids.length > 0;
   });
+  if (purged) await resetDataGuard(database).catch(() => undefined);
 }
 
 /** For Undo of a team folder's deletion: what its tabs were. */

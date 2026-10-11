@@ -259,7 +259,8 @@ export function YourPlan({ open, onRestore }: { open: boolean; onRestore: () => 
           sub={lines([renews, aiRuns], [backedUp, synced])}
           actions={
             <>
-              {paid && plan.team?.role !== 'member' && (
+              {/* A team's owner manages billing in the Team section below; a member, their own plan here. */}
+              {paid && plan.team?.role !== 'owner' && (
                 <button type="button" disabled={busy !== null} onClick={() => void billing('manage')} className={SECONDARY_SM}>
                   {external('manage')}
                   Manage billing

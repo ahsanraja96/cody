@@ -3,9 +3,10 @@ import { fakeBrowser } from 'wxt/testing/fake-browser';
 import { handle } from '../server/supabase/functions/tabfold/app.ts';
 import { route } from '@/lib/background/router';
 import { checkTeams } from '@/lib/background/teams';
+import { checkWiped, refreshDataGuard } from '@/lib/dataGuard';
 import { db, TabfoldDB } from '@/lib/db';
 import { addFolder, countFoldedTabs, listLiveFolders, listRoom } from '@/lib/folders';
-import type { CommandResponse } from '@/lib/messages';
+import { CommandError, type CommandResponse } from '@/lib/messages';
 import { DEVICE_TOKEN_KEY } from '@/lib/pro/account';
 import { errorFromResponse, ProError, type ApiRequest } from '@/lib/pro/api';
 import { resetCheckoutRuntime } from '@/lib/pro/checkout';
@@ -24,6 +25,7 @@ import { copyFolderId, keepTeamCopy, placeTabs, purgeTeam, takeTeamOut } from '@
 import { avatarColors, displayName, initials, latestActivity, teamDeviceId } from '@/lib/teams';
 import type { FolderRecord, TabRecord } from '@/lib/types';
 import { FakeChrome } from './chrome';
+import { teamErrorText, teamSeatsLine } from '@/ui/pro';
 import { capturedWindow } from './fixtures';
 import { createServer, keyOf, newToken, PUBLIC_URL, type Server } from './server/fakes';
 
@@ -259,6 +261,22 @@ describe('the team’s people, by email', () => {
       invites: [{ email: 'mike@x.com', invitedAt: 7 }],
     });
     expect(readTeamDetails({ members: [] })).toBeNull();
+  });
+});
+
+describe('the Team section’s words', () => {
+  it('the seats line, as the owner and as a member', () => {
+    expect(teamSeatsLine(3, 'year')).toBe('3 people · $8 a person a month, billed yearly. Everyone gets Pro AI.');
+    expect(teamSeatsLine(1, 'month')).toBe('1 person · $10 a person a month, billed monthly. Everyone gets Pro AI.');
+    expect(teamSeatsLine(4, null)).toBe('4 people · Everyone gets Pro AI.');
+  });
+
+  it('a failure says the server’s own words, unless Tabfold couldn’t ask', () => {
+    expect(teamErrorText(new CommandError('Only the team’s owner can do this.', 'owner-only'))).toBe('Only the team’s owner can do this.');
+    expect(teamErrorText(new CommandError('A team can have up to 100 people, invitations included.', 'server'))).toBe(
+      'A team can have up to 100 people, invitations included.',
+    );
+    expect(teamErrorText(new CommandError('x', 'offline'))).toBe('You’re offline. Connect to the internet, then try again.');
   });
 });
 
@@ -745,11 +763,16 @@ describe('when the person is no longer in the team', () => {
   });
 
   it('signing out: the team’s folders leave quietly (they come back with the team’s copy)', async () => {
+    // Only the team's fold is here (the fold its tab came from is gone).
+    await db.sessions.filter((s) => s.deviceId !== teamDeviceId(teamId)).delete();
+    await refreshDataGuard();
     data(await route({ type: 'signout' }));
     await checkTeams();
     expect(await teamGone.get()).toEqual([]);
     expect(await db.folders.count()).toBe(0);
     expect(await db.tabs.count()).toBe(0);
+    // Only the team's fold was here: an emptied list isn't taken for one erased from outside.
+    expect((await checkWiped()).wiped).toBe(false);
   });
 
   it('back in the team while the question waits: the question goes, the team’s copy comes back', async () => {

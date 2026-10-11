@@ -1,30 +1,33 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronDown, ChevronRight, Clock, Ellipsis, ExternalLink, GripVertical, Radio, RotateCcw, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Clock, Ellipsis, ExternalLink, FolderPlus, GripVertical, Radio, RotateCcw, Users, X } from 'lucide-react';
 import { categorize, siteKey, type SiteKinds } from '@/lib/categories';
 import type { PlanState } from '@/lib/pro/types';
 import type { LiveFolder } from '@/lib/state';
+import { displayName, latestActivity } from '@/lib/teams';
 import type { FolderRecord, TabRecord } from '@/lib/types';
 import { displayHost } from '@/lib/urls';
+import { Avatar, AvatarStack } from '@/ui/components/Avatars';
+import { Chip } from '@/ui/components/ProBits';
 import { Favicon } from '@/ui/components/Favicon';
 import { ColorDot, FolderIcon } from '@/ui/components/FolderIcon';
 import { IncognitoMark } from '@/ui/components/IncognitoMark';
 import { anchorBelow, Menu, type MenuAnchor, type MenuEntry } from '@/ui/components/Menu';
 import { cx } from '@/ui/cx';
 import { groupTabs, type TabGroup } from '@/ui/folders';
-import { modKey, useNow } from '@/ui/hooks';
+import { modKey, useNow, useTeam, type TeamView } from '@/ui/hooks';
 import { formatSnoozeTime } from '@/ui/snooze';
 import { openFolded, openGroup, removeOne, undoRemoval, useRemovals, type Removal } from './actions';
 import { dropOnGroup, focusLive, foldLive, renameFolder, wakeTabs } from './folderActions';
 import { ago, count } from './format';
 import { folderMenu, siteGroupMenu, tabMenu, type MenuContext } from './menus';
 import { dropHandlers, Sidebar, type DropTarget } from './Sidebar';
-import { TAB_DRAG_TYPE, useDrag, useLibraryUi } from './uiStore';
+import { openDialog, TAB_DRAG_TYPE, useDrag, useLibraryUi } from './uiStore';
 
 /** Rows a group shows before "Show N more". */
 const FIRST_ROWS = 6;
 
-const SIZE = { head: 48, row: 34, more: 32, end: 8, label: 36, live: 30, empty: 34 } as const;
+const SIZE = { head: 48, row: 34, more: 32, end: 8, label: 36, live: 30, empty: 34, activity: 30 } as const;
 
 type Item =
   | { type: 'snooze-head'; key: string; n: number; expanded: boolean; first: boolean }
@@ -33,6 +36,12 @@ type Item =
   | { type: 'live-line'; key: string; group: TabGroup }
   | { type: 'empty'; key: string; group: TabGroup }
   | { type: 'label'; key: string }
+  /** "Team · Truewidgets" above the team's folders (Mx-Share). */
+  | { type: 'team-label'; key: string }
+  /** The team has no folders yet. */
+  | { type: 'team-empty'; key: string }
+  /** "Sara added 3 tabs · 2 h ago" under a team folder's header. */
+  | { type: 'activity'; key: string; group: TabGroup }
   | { type: 'row'; key: string; tab: TabRecord; group: TabGroup }
   | { type: 'removed'; key: string; removal: Removal; group: TabGroup }
   | { type: 'more'; key: string; group: TabGroup; hidden: number }
@@ -52,7 +61,12 @@ function sizeOf(item: Item): number {
     case 'end':
       return SIZE.end;
     case 'label':
+    case 'team-label':
       return SIZE.label;
+    case 'team-empty':
+      return SIZE.empty;
+    case 'activity':
+      return SIZE.activity;
     case 'live-line':
       return SIZE.live;
     case 'empty':
@@ -103,6 +117,7 @@ export function GroupedList({
   canCopyContext?: boolean;
 }) {
   const removals = useRemovals((s) => s.removals);
+  const team = useTeam(plan);
   const [expanded, setExpanded] = useState<Partial<Record<string, boolean>>>({});
   const [showAll, setShowAll] = useState<Partial<Record<string, boolean>>>({});
   const [menu, setMenu] = useState<OpenMenu | null>(null);
@@ -127,6 +142,7 @@ export function GroupedList({
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 
+  const hasTeam = !!team.team;
   const { items, heads, order } = useMemo(() => {
     const out: Item[] = [];
     const headIndex = new Map<string, number>();
@@ -146,9 +162,17 @@ export function GroupedList({
       const previous = out[out.length - 1];
       headIndex.set(id, out.length);
       ids.push(id);
-      out.push({ type: 'head', key: `h:${id}`, group, live, first: !previous || previous.type === 'label', expanded: isOpen });
+      out.push({
+        type: 'head',
+        key: `h:${id}`,
+        group,
+        live,
+        first: !previous || previous.type === 'label' || previous.type === 'team-label',
+        expanded: isOpen,
+      });
       if (!isOpen) return;
       if (group.folder && liveFolders[group.folder.id]) out.push({ type: 'live-line', key: `l:${id}`, group });
+      if (group.folder?.teamId && latestActivity(live)) out.push({ type: 'activity', key: `a:${id}`, group });
       if (group.items.length === 0) out.push({ type: 'empty', key: `n:${id}`, group });
       const visible = showAll[id] ? group.items : group.items.slice(0, FIRST_ROWS);
       for (const tab of visible) {
@@ -159,11 +183,19 @@ export function GroupedList({
       if (hidden > 0) out.push({ type: 'more', key: `m:${id}`, group, hidden });
       out.push({ type: 'end', key: `e:${id}`, group });
     };
-    shown.folders.forEach((group, index) => push(group, index < 2));
-    if (shown.folders.length && shown.sites.length) out.push({ type: 'label', key: 'label' });
-    shown.sites.forEach((group, index) => push(group, index < (shown.folders.length ? 1 : 2)));
+    const own = shown.folders.filter((g) => !g.folder?.teamId);
+    const teams = shown.folders.filter((g) => !!g.folder?.teamId);
+    own.forEach((group, index) => push(group, index < 2));
+    // The team's folders after the person's own, under "Team · Truewidgets" (Mx-Share).
+    if (teams.length || hasTeam) {
+      out.push({ type: 'team-label', key: 'team-label' });
+      if (teams.length === 0) out.push({ type: 'team-empty', key: 'team-empty' });
+      teams.forEach((group, index) => push(group, index < 2));
+    }
+    if ((shown.folders.length || hasTeam) && shown.sites.length) out.push({ type: 'label', key: 'label' });
+    shown.sites.forEach((group, index) => push(group, index < (shown.folders.length || hasTeam ? 1 : 2)));
     return { items: out, heads: headIndex, order: ids };
-  }, [shown, liveIds, expanded, showAll, removals, liveFolders]);
+  }, [shown, liveIds, expanded, showAll, removals, liveFolders, hasTeam]);
 
   const listRef = useRef<HTMLDivElement>(null);
   const [listTop, setListTop] = useState(0);
@@ -247,11 +279,13 @@ export function GroupedList({
       <Sidebar
         snoozed={real.snoozed.length}
         folders={folders}
-        folderGroups={real.folders}
+        folderGroups={real.folders.filter((g) => !g.folder?.teamId)}
+        teamGroups={real.folders.filter((g) => !!g.folder?.teamId)}
         sites={real.sites}
         current={current}
         liveFolders={liveFolders}
         plan={plan}
+        team={team}
         target={target}
         onJump={jump}
       />
@@ -275,6 +309,7 @@ export function GroupedList({
                   live={item.group.folder ? liveFolders[item.group.folder.id] : undefined}
                   windowLabel={windowLabel}
                   siteKinds={siteKinds}
+                  team={item.group.folder?.teamId ? team : undefined}
                   onToggle={() => setExpanded((e) => ({ ...e, [item.group.id]: !item.expanded }))}
                   onMenu={openGroupMenu}
                 />
@@ -296,6 +331,14 @@ export function GroupedList({
                   <h2 className="label-caps m-0">By site</h2>
                   <span className="text-small text-text-3">Tabs not in a folder</span>
                 </div>
+              ) : item.type === 'team-label' ? (
+                <TeamLabel team={team} />
+              ) : item.type === 'team-empty' ? (
+                <div className="flex h-[34px] items-center px-2 text-small text-text-3">
+                  No team folders yet. Make one, then move tabs into it: everyone in the team sees them.
+                </div>
+              ) : item.type === 'activity' ? (
+                <ActivityLine group={item.group} team={team} now={now} />
               ) : item.type === 'live-line' ? (
                 <LiveLine group={item.group} />
               ) : item.type === 'empty' ? (
@@ -369,6 +412,46 @@ function SnoozedRow({ tab, now }: { tab: TabRecord; now: number }) {
   );
 }
 
+/** "Team · Truewidgets" above the team's folders, with "New team folder". */
+function TeamLabel({ team }: { team: TeamView }) {
+  const name = team.team?.name ?? 'your team';
+  return (
+    <div className="flex h-9 items-end justify-between gap-3 border-t border-border px-2 pb-1.5">
+      <h2 className="label-caps m-0 min-w-0 truncate">Team · {name}</h2>
+      {team.team && (
+        <button
+          type="button"
+          onClick={() => {
+            // The left column's field when it shows (wide windows); a small dialog otherwise.
+            if (window.matchMedia('(min-width: 1320px)').matches) useLibraryUi.getState().setCreatingTeam(true);
+            else openDialog({ kind: 'new-folder', teamId: team.team!.id });
+          }}
+          className="inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-small text-text-2 hover:bg-hover hover:text-text"
+        >
+          <FolderPlus size={14} strokeWidth={1.75} aria-hidden className="text-text-3" />
+          New team folder
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** "Sara added 3 tabs · 2 h ago" (Mx-Share "A team folder"): the newest addition, from who added each tab. */
+function ActivityLine({ group, team, now }: { group: TabGroup; team: TeamView; now: number }) {
+  const activity = latestActivity(group.items);
+  if (!activity) return null;
+  const you = !!team.email && activity.email === team.email;
+  const when = ago(activity.at, now).replace(/^(Just now|Yesterday|Last week)/, (w) => w.toLowerCase());
+  return (
+    <div className="flex h-[30px] items-center gap-2 pr-2 pl-[34px] text-small text-text-3">
+      <Avatar email={activity.email} color={team.colorOf(activity.email)} size={18} />
+      <span className="min-w-0 truncate">
+        <b className="font-semibold text-text-2">{you ? 'You' : displayName(activity.email)}</b> added {count(activity.tabs, 'tab')} · {when}
+      </span>
+    </div>
+  );
+}
+
 /** Under a live folder's header (Mx-Live): a quiet line instead of the board's tab-strip picture. */
 function LiveLine({ group }: { group: TabGroup }) {
   return (
@@ -388,6 +471,7 @@ function GroupHead({
   live,
   windowLabel,
   siteKinds,
+  team,
   onToggle,
   onMenu,
 }: {
@@ -396,6 +480,8 @@ function GroupHead({
   live: LiveFolder | undefined;
   windowLabel: (windowId: number) => string;
   siteKinds: SiteKinds;
+  /** A team folder's team: the Team chip and its people. */
+  team?: TeamView;
   onToggle: () => void;
   onMenu: (group: TabGroup, anchor: MenuAnchor, returnFocus: HTMLElement | null) => void;
 }) {
@@ -455,6 +541,12 @@ function GroupHead({
                 {group.name}
               </span>
               <span className="shrink-0 font-normal text-text-3">{count(n, 'tab')}</span>
+              {team && (
+                <Chip tone="neutral">
+                  <Users size={11} strokeWidth={2} aria-hidden />
+                  Team
+                </Chip>
+              )}
               {live && (
                 <span className="inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-green-soft px-2 text-meta font-semibold text-green">
                   <span aria-hidden className="size-1.5 rounded-full bg-green" />
@@ -469,6 +561,9 @@ function GroupHead({
             {dropText}
           </span>
         ) : null}
+        {team && !dragTab && team.people.length > 0 && (
+          <AvatarStack people={team.people} label={`${team.people.length} ${team.people.length === 1 ? 'person' : 'people'} in ${team.team?.name ?? 'the team'}`} className="mr-1" />
+        )}
         {expanded || menuOpen ? (
           <>
             {!dragTab &&
@@ -501,7 +596,8 @@ function GroupHead({
             </button>
           </>
         ) : (
-          !dragTab && (
+          !dragTab &&
+          !team && (
             <span aria-hidden className="flex shrink-0 gap-[3px]">
               {hosts.map((url) => (
                 <Favicon key={url} url={url} size={14} />

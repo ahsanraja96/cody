@@ -126,6 +126,30 @@ function minutesText(seconds: number | undefined): string {
   return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
 }
 
+/**
+ * What the Team section says when a team request fails: the server's own words (a team at 100
+ * people, too many invitations today, "Only the team’s owner can do this."), except when Tabfold
+ * couldn't ask it at all.
+ */
+export function teamErrorText(error: unknown): string {
+  switch (errorCode(error)) {
+    case 'offline':
+    case 'not-signed-in':
+    case 'not-configured':
+      return proErrorText(error);
+    default:
+      return error instanceof Error && error.message ? error.message : proErrorText(error);
+  }
+}
+
+/** "3 people · $8 a person a month, billed yearly. Everyone gets Pro AI." (Mx-Share, Inviting people). */
+export function teamSeatsLine(seats: number, interval: BillingInterval | null): string {
+  const people = `${seats} ${seats === 1 ? 'person' : 'people'}`;
+  if (!interval) return `${people} · Everyone gets Pro AI.`;
+  const perMonth = interval === 'year' ? TEAMS_PRICES.year / 12 : TEAMS_PRICES.month;
+  return `${people} · ${dollars(perMonth)} a person a month, billed ${interval === 'year' ? 'yearly' : 'monthly'}. Everyone gets Pro AI.`;
+}
+
 /** What the sign-in dialog says when sending or checking a code fails (Stripe-Signin board). */
 export function signinErrorText(error: unknown): string {
   switch (errorCode(error)) {

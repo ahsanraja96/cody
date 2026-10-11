@@ -3,11 +3,13 @@ import { Clock, FolderPlus, Plus } from 'lucide-react';
 import { FREE_LIMITS } from '@/lib/limits';
 import type { PlanState } from '@/lib/pro/types';
 import type { LiveFolder } from '@/lib/state';
+import { personalFolders, teamFolders } from '@/lib/teams';
 import type { FolderRecord, TabRecord } from '@/lib/types';
+import { AvatarStack } from '@/ui/components/Avatars';
 import { ColorDot, FolderIcon } from '@/ui/components/FolderIcon';
 import { cx } from '@/ui/cx';
 import { nextFolderColor, type TabGroup } from '@/ui/folders';
-import { hasFreeLimits } from '@/ui/hooks';
+import { hasFreeLimits, type TeamView } from '@/ui/hooks';
 import { createFolder, folderLimitReached, renameFolder } from './folderActions';
 import { openDialog, useDrag, useLibraryUi } from './uiStore';
 
@@ -44,8 +46,8 @@ export function dropHandlers(group: TabGroup, target: DropTarget) {
 
 function Label({ children, right }: { children: ReactNode; right?: ReactNode }) {
   return (
-    <div className="mt-1 flex h-7 items-center justify-between pr-1 pl-2.5">
-      <h2 className="label-caps m-0">{children}</h2>
+    <div className="mt-1 flex h-7 items-center justify-between gap-2 pr-1 pl-2.5">
+      <h2 className="label-caps m-0 min-w-0 truncate">{children}</h2>
       {right}
     </div>
   );
@@ -102,8 +104,8 @@ function Item({
   );
 }
 
-/** The left column's "New folder" field (Fo-Folders-States): Enter makes it, Esc cancels. */
-function NewFolderField({ folders, onDone }: { folders: readonly FolderRecord[]; onDone: () => void }) {
+/** The left column's "New folder" field (Fo-Folders-States): Enter makes it, Esc cancels. With `teamId`, a team folder. */
+function NewFolderField({ folders, teamId, onDone }: { folders: readonly FolderRecord[]; teamId?: string; onDone: () => void }) {
   const [name, setName] = useState('');
   const color = nextFolderColor(folders);
   const busy = useRef(false);
@@ -116,7 +118,7 @@ function NewFolderField({ folders, onDone }: { folders: readonly FolderRecord[];
       return;
     }
     busy.current = true;
-    await createFolder(name, color);
+    await createFolder(name, color, [], teamId);
     busy.current = false;
     onDone();
   };
@@ -126,7 +128,7 @@ function NewFolderField({ folders, onDone }: { folders: readonly FolderRecord[];
         <FolderIcon color={color} size={15} />
         <input
           autoFocus
-          aria-label="Folder name"
+          aria-label={teamId ? 'Team folder name' : 'Folder name'}
           aria-describedby="new-folder-hint"
           value={name}
           maxLength={60}
@@ -191,35 +193,46 @@ function RenameField({ folder, onDone }: { folder: FolderRecord; onDone: () => v
 }
 
 /**
- * The left column (Fo-List, Mx-Live): "Snoozed" when any, the folders with "+" and "New folder ·
- * 2 of 3" on Free, then the kinds of site. Items jump to their group and take dropped tabs.
+ * The left column (Fo-List, Mx-Live, Mx-Share): "Snoozed" when any, the folders with "+" and "New
+ * folder · 2 of 3" on Free, the team's section on a Teams plan ("Team · Truewidgets" with its
+ * people, the team's folders and "New team folder"), then the kinds of site. Items jump to their
+ * group and take dropped tabs.
  */
 export function Sidebar({
   snoozed,
   folders,
   folderGroups,
+  teamGroups = [],
   sites,
   current,
   liveFolders,
   plan,
+  team,
   target,
   onJump,
 }: {
   snoozed: number;
   folders: readonly FolderRecord[];
   folderGroups: TabGroup[];
+  /** The team's folders (Teams). */
+  teamGroups?: TabGroup[];
   sites: TabGroup[];
   current: string | undefined;
   liveFolders: Record<string, LiveFolder>;
   plan: PlanState;
+  team?: TeamView;
   target: DropTarget;
   onJump: (id: string) => void;
 }) {
   const creating = useLibraryUi((s) => s.creating);
   const setCreating = useLibraryUi((s) => s.setCreating);
+  const creatingTeam = useLibraryUi((s) => s.creatingTeam);
+  const setCreatingTeam = useLibraryUi((s) => s.setCreatingTeam);
   const renaming = useLibraryUi((s) => s.renaming);
   const setRenaming = useLibraryUi((s) => s.setRenaming);
   const free = hasFreeLimits(plan);
+  const own = personalFolders(folders);
+  const teamInfo = team?.team ?? null;
   const startNew = () => {
     if (folderLimitReached(plan, folders)) openDialog({ kind: 'folder-limit' });
     else setCreating(true);
@@ -281,17 +294,61 @@ export function Sidebar({
         );
       })}
       {creating ? (
-        <NewFolderField folders={folders} onDone={() => setCreating(false)} />
+        <NewFolderField folders={own} onDone={() => setCreating(false)} />
       ) : (
         <button type="button" onClick={startNew} className={cx(ITEM, 'w-full text-left text-text-2 hover:bg-hover')}>
           <FolderPlus size={15} strokeWidth={1.75} aria-hidden className="shrink-0 text-text-3" />
           <span className="flex-1">New folder</span>
           {free && (
             <span className="text-meta text-text-3 tabular-nums">
-              {Math.min(folders.length, FREE_LIMITS.folders)} of {FREE_LIMITS.folders}
+              {Math.min(own.length, FREE_LIMITS.folders)} of {FREE_LIMITS.folders}
             </span>
           )}
         </button>
+      )}
+      {(teamInfo || teamGroups.length > 0) && (
+        <section aria-label={`Team · ${teamInfo?.name ?? 'your team'}`} className="contents">
+          <div className="h-2.5" />
+          {/* The name keeps its room: the people go on the next line when both don't fit. */}
+          <div className="mt-1 flex min-h-7 flex-wrap items-center justify-between gap-x-2 gap-y-1 py-1 pr-1 pl-2.5">
+            <h2 className="label-caps m-0 max-w-full truncate" title={`Team · ${teamInfo?.name ?? 'your team'}`}>
+              Team · {teamInfo?.name ?? 'your team'}
+            </h2>
+            {team && team.people.length > 0 && (
+              <AvatarStack
+                people={team.people}
+                size={18}
+                label={`${team.people.length} ${team.people.length === 1 ? 'person' : 'people'} in ${teamInfo?.name ?? 'the team'}`}
+              />
+            )}
+          </div>
+          {teamGroups.map((group) => {
+            const folder = group.folder!;
+            if (renaming?.id === folder.id && renaming.where === 'side') return <RenameField key={group.id} folder={folder} onDone={() => setRenaming(null)} />;
+            return (
+              <Item
+                key={group.id}
+                group={group}
+                active={group.id === current}
+                icon={<FolderIcon color={group.color} size={15} />}
+                n={group.items.length}
+                extra={liveFolders[folder.id] ? <span aria-label="Live" role="img" className="size-1.5 shrink-0 rounded-full bg-green" /> : undefined}
+                target={target}
+                onJump={onJump}
+                onRename={() => setRenaming({ id: folder.id, where: 'side' })}
+              />
+            );
+          })}
+          {teamInfo &&
+            (creatingTeam ? (
+              <NewFolderField folders={teamFolders(folders, teamInfo.id)} teamId={teamInfo.id} onDone={() => setCreatingTeam(false)} />
+            ) : (
+              <button type="button" onClick={() => setCreatingTeam(true)} className={cx(ITEM, 'w-full text-left text-text-2 hover:bg-hover')}>
+                <FolderPlus size={15} strokeWidth={1.75} aria-hidden className="shrink-0 text-text-3" />
+                <span className="flex-1">New team folder</span>
+              </button>
+            ))}
+        </section>
       )}
       {sites.length > 0 && (
         <>
