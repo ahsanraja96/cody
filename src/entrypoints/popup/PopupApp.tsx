@@ -1,24 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { browser } from 'wxt/browser';
 import { Search, Settings as SettingsIcon, X } from 'lucide-react';
-import type { CategoryGroup } from '@/lib/categories';
 import { send } from '@/lib/messages';
 import { openLibrary } from '@/lib/openLibrary';
 import { extUrl } from '@/lib/extUrl';
 import { hasPro } from '@/lib/pro/tiers';
 import { pendingFoldAsk, pendingKeywordSave } from '@/lib/state';
 import type { TabRecord } from '@/lib/types';
-import { FoldedList, useRemoveWithUndo } from '@/ui/components/FoldedList';
+import { FoldedList, useRemoveWithUndo, type OpenableGroup } from '@/ui/components/FoldedList';
 import { Logo } from '@/ui/components/Logo';
+import { UpgradeButton } from '@/ui/components/ProBits';
+import { PLANS_HASH } from '@/ui/pro';
 import { cx } from '@/ui/cx';
 import { describeWindows, foldChoice, type WindowInfo } from '@/ui/windows';
 import {
+  hasFreeLimits,
+  useAutoFoldNotice,
   useCloudSyncStatus,
+  useFoldedCount,
   useFoldedTabs,
+  useFolders,
   useFoldWindows,
+  useListRoom,
+  useLiveFolders,
   useLoadedPlan,
   useRecoveryOffer,
   useSettings,
+  useSiteKinds,
+  useSnoozeBack,
   useSyncStatus,
   useTabSearch,
   useUpdateReady,
@@ -27,6 +36,7 @@ import {
 import { FirstRun } from './FirstRun';
 import { Hero } from './Hero';
 import { KeywordFold } from './KeywordFold';
+import { AutoFoldLine, SearchActions, SnoozeBackLine, WorkingIn } from './Lines';
 import { MilestoneCard, useFoldMilestone } from './Milestone';
 import { OpenWindows } from './OpenWindows';
 import { CrashLine, OpenProblem, PopupFooter, SectionLabel } from './parts';
@@ -158,6 +168,19 @@ function Home({
   const milestone = useFoldMilestone(view);
   const shortcut = useFoldShortcut();
   const removal = useRemoveWithUndo();
+  // 0.6: folders, the free list's room (from the folds' counts, no tab scan), snooze and live folders.
+  const folders = useFolders();
+  const siteKinds = useSiteKinds();
+  const room = useListRoom();
+  const counted = useFoldedCount();
+  const liveFolders = useLiveFolders();
+  const snoozeBack = useSnoozeBack();
+  const autoNotice = useAutoFoldNotice();
+  const free = !!plan && hasFreeLimits(plan);
+  const toLibrary = (hash: string) => void openLibrary(hash).finally(() => window.close());
+  const limit = room
+    ? { full: room.full, near: room.near, room: room.room, onUpgrade: () => toLibrary(PLANS_HASH), onMakeRoom: () => toLibrary('#/room') }
+    : null;
 
   const [query, setQuery] = useState('');
   const searching = query.trim().length > 0;
@@ -201,11 +224,11 @@ function Home({
     [currentWindowId],
   );
   const onOpenAll = useCallback(
-    (group: CategoryGroup<TabRecord>) => {
+    (group: OpenableGroup) => {
       void send({
         type: 'open-tabs',
         tabRecordIds: group.items.map((t) => t.id),
-        asGroup: { name: group.category.name, color: group.category.color },
+        asGroup: { name: group.name, color: group.color },
         windowId: currentWindowId,
       })
         .then((result) => {
@@ -279,6 +302,7 @@ function Home({
             </button>
           )}
         </label>
+        {free && <UpgradeButton size="sm" onClick={() => toLibrary(PLANS_HASH)} />}
         <button
           type="button"
           aria-label="Settings"
@@ -294,6 +318,13 @@ function Home({
 
       {problem && <OpenProblem text={problem} onDismiss={() => setProblem(null)} />}
       {searching ? (
+        <>
+        <SearchActions
+          query={query}
+          tab={windows.find((w) => w.id === currentWindowId)?.tabs.find((t) => t.active)}
+          folders={folders ?? []}
+          onProblem={setProblem}
+        />
         <SearchResults
           onProblem={setProblem}
           query={query}
@@ -306,9 +337,12 @@ function Home({
             inputRef.current?.focus();
           }}
         />
+        </>
       ) : (
         <>
           {offer && <CrashLine offer={offer} windowId={currentWindowId} />}
+          <SnoozeBackLine back={snoozeBack} />
+          <AutoFoldLine notice={autoNotice} />
           <Hero
             view={view}
             stats={stats}
@@ -330,7 +364,9 @@ function Home({
               onCancel: () => setAsking(false),
               onFocusChange: setHighlight,
             }}
+            limit={limit}
           />
+          {!free && folders && <WorkingIn folders={folders} live={liveFolders} tabs={foldedTabs} onProblem={setProblem} />}
           {firstRun ? (
             <FirstRun top={ready && openWindows} />
           ) : (
@@ -338,9 +374,23 @@ function Home({
               {ready && openWindows}
               {foldedTabs && (
                 <>
-                  <SectionLabel count={foldedTabs.length}>Folded</SectionLabel>
+                  <SectionLabel
+                    countText={
+                      room ? (
+                        <span className={room.near ? 'font-semibold text-amber' : undefined}>
+                          {room.tabs.toLocaleString()} of {room.limit.toLocaleString()}
+                        </span>
+                      ) : (
+                        (counted?.tabs ?? foldedTabs.length).toLocaleString()
+                      )
+                    }
+                  >
+                    Folded
+                  </SectionLabel>
                   <FoldedList
                     tabs={foldedTabs}
+                    folders={folders}
+                    siteKinds={siteKinds}
                     removal={removal}
                     newSince={newSince}
                     live={view.kind === 'folding'}

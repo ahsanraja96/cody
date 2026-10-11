@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Search, Tag } from 'lucide-react';
 import { send } from '@/lib/messages';
@@ -49,6 +49,8 @@ export function SearchResults({
   scrollRef,
   onClear,
   onActive,
+  top,
+  onShiftEnter,
 }: {
   query: string;
   windows: OpenWindow[];
@@ -56,6 +58,10 @@ export function SearchResults({
   scrollRef: RefObject<HTMLElement | null>;
   onClear: () => void;
   onActive: (id: string | undefined) => void;
+  /** Shown above the results: "Best matches" from Ask your tabs (Pro AI). */
+  top?: ReactNode;
+  /** Shift+Enter in the search box (Ask). */
+  onShiftEnter?: () => void;
 }) {
   const own = location.origin;
   const openDocs = useMemo(() => openDocsFrom(windows).filter((d) => !d.url.startsWith(own)), [windows, own]);
@@ -116,6 +122,9 @@ export function SearchResults({
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         move(active + (e.key === 'ArrowDown' ? 1 : -1));
+      } else if (e.key === 'Enter' && inBox && e.shiftKey && onShiftEnter) {
+        e.preventDefault();
+        onShiftEnter();
       } else if (e.key === 'Enter' && inBox && options[active]) {
         e.preventDefault();
         void openHit(options[active]!.hit, e.metaKey || e.ctrlKey);
@@ -128,7 +137,9 @@ export function SearchResults({
   const trimmed = query.trim();
   if (result && rows.length === 0) {
     return (
-      <div role="status" className="flex flex-col items-center gap-2 px-3 pt-16 pb-3 text-center">
+      <>
+      {top}
+      <div role="status" className={cx('flex flex-col items-center gap-2 px-3 pb-3 text-center', top ? 'pt-8' : 'pt-16')}>
         <Search size={24} strokeWidth={1.75} aria-hidden className="text-text-3" />
         <div className="text-section font-semibold">No tabs match “{trimmed}”</div>
         <p className="m-0 max-w-[320px] text-text-2">
@@ -144,6 +155,7 @@ export function SearchResults({
           </button>
         </div>
       </div>
+      </>
     );
   }
 
@@ -157,6 +169,7 @@ export function SearchResults({
           </span>
         )}
       </div>
+      {top}
       <div
         ref={listRef}
         id="search-results"

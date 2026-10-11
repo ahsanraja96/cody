@@ -4,15 +4,16 @@ import { useEffect, useState } from 'react';
  * The full list's hash routes, shared with the popup's links: #/ the list, #/settings opens
  * Settings over it, #/how is "How Tabfold frees memory", #/import opens Import from OneTab over the
  * list, #/pro is the plans page (Pro-Plans), #/pro/welcome the page a Stripe checkout tab turns
- * into after paying (Stripe-Welcome). Anything unknown is the list.
+ * into after paying (Stripe-Welcome), #/room opens "Make room" over the list (the popup's full
+ * card links there). Anything unknown is the list.
  */
-export type Route = 'list' | 'settings' | 'how' | 'import' | 'pro' | 'welcome';
+export type Route = 'list' | 'settings' | 'how' | 'import' | 'pro' | 'welcome' | 'room';
 
 export function parseHash(hash: string): Route {
   const parts = hash.replace(/^#\/?/, '').split('?')[0]!.split('/');
   const path = parts[0];
   if (path === 'pro' && parts[1] === 'welcome') return 'welcome';
-  return path === 'settings' || path === 'how' || path === 'import' || path === 'pro' ? path : 'list';
+  return path === 'settings' || path === 'how' || path === 'import' || path === 'pro' || path === 'room' ? path : 'list';
 }
 
 export function hashOf(route: Route): string {

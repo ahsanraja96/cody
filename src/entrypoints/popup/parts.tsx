@@ -15,11 +15,15 @@ export function Kbd({ children }: { children: ReactNode }) {
   );
 }
 
-export function SectionLabel({ children, count }: { children: ReactNode; count?: number }) {
+export function SectionLabel({ children, count, countText }: { children: ReactNode; count?: number; countText?: ReactNode }) {
   return (
     <div className="flex h-9 items-center gap-1.5 px-2">
       <h2 className="text-meta font-semibold tracking-[.04em] text-text-3 uppercase">{children}</h2>
-      {count !== undefined && <span className="text-meta text-text-3 tabular-nums">· {count.toLocaleString()}</span>}
+      {countText !== undefined ? (
+        <span className="text-meta text-text-3 tabular-nums">· {countText}</span>
+      ) : (
+        count !== undefined && <span className="text-meta text-text-3 tabular-nums">· {count.toLocaleString()}</span>
+      )}
     </div>
   );
 }

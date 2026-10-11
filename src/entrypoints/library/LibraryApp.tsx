@@ -1,21 +1,45 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Zap } from 'lucide-react';
 import type { TabRecord } from '@/lib/types';
 import { ConfirmHost } from '@/ui/components/Dialog';
-import { ToastViewport } from '@/ui/components/Toast';
+import { dismissToast, toast, ToastViewport } from '@/ui/components/Toast';
 import { ImportDialog } from '@/ui/ImportPanel';
 import { browser } from 'wxt/browser';
 import { extUrl } from '@/lib/extUrl';
 import { hasProAi } from '@/lib/pro/tiers';
 import { FREE_PLAN } from '@/lib/pro/types';
 import { send } from '@/lib/messages';
-import { useActiveFold, useCloudSyncStatus, useFoldedTabs, useFoldWindows, useLoadedPlan, useProjects, useSettings, useSyncStatus } from '@/ui/hooks';
+import {
+  useActiveFold,
+  useAutoFoldNotice,
+  useCloudSyncStatus,
+  useFoldedTabs,
+  useFolders,
+  useFoldWindows,
+  useLastAction,
+  useListRoom,
+  useLiveFolders,
+  useLoadedPlan,
+  useSettings,
+  useSiteKinds,
+  useSyncStatus,
+  useTidy,
+  useWorkerEvents,
+} from '@/ui/hooks';
+import { autoFoldText } from '@/ui/limits';
 import { describeWindows, foldChoice, type WindowInfo } from '@/ui/windows';
 import { AccountDialogHost, useCheckoutClosedToast } from './AccountDialogs';
+import { AskChip, BestMatches, looksLikeQuestion, useAsk } from './ask';
+import { CommandPalette } from './CommandPalette';
+import { DuplicatesDialog } from './DuplicatesDialog';
 import { EmptyState } from './EmptyState';
 import { isFolding, startFold, useFoldCandidates, useFoldToast } from './fold';
+import { folderLimitReached, undoAction } from './folderActions';
+import { FolderDialogHost } from './FolderDialogs';
 import { FoldedHeading } from './FoldedHeading';
 import { GroupedList } from './GroupedList';
 import { HowPage } from './HowPage';
+import { MakeRoomDialog } from './LimitBits';
 import { Notices } from './Notices';
 import { OpenWindows } from './OpenWindows';
 import { OrganiseDialog } from './OrganiseDialog';
@@ -24,8 +48,11 @@ import { RecentFolds } from './RecentFolds';
 import { goToPlans, parseHash, useRoute, type Route } from './router';
 import { SearchResults } from './SearchResults';
 import { SettingsDialog, useFoldShortcut } from './SettingsDialog';
+import { ShareDialog } from './ShareDialog';
+import { showTidy, TidyCard } from './TidyCard';
 import { TopBar } from './TopBar';
-import { undoLatest } from './undo';
+import { openDialog, useLibraryUi } from './uiStore';
+import { dropUndo, registerUndo, undoLatest } from './undo';
 import { useRemovals } from './actions';
 import { WelcomePage } from './WelcomePage';
 
@@ -50,34 +77,74 @@ function usePlanRefresh() {
   }, []);
 }
 
+/**
+ * Every automatic fold says what it did, with Undo while it lasts: a toast when a rule runs while
+ * the page is open (or ran just before it opened).
+ */
+function useAutoFoldToast() {
+  const notice = useAutoFoldNotice();
+  const action = useLastAction();
+  const shown = useRef<number>(0);
+  const openedAt = useRef(Date.now());
+  useEffect(() => {
+    if (!notice || notice.at <= shown.current || notice.folded <= 0) return;
+    if (notice.at < openedAt.current - 2 * 60_000) return;
+    shown.current = notice.at;
+    const message = autoFoldText(notice);
+    const live = !!notice.actionId && !!action && action.id === notice.actionId && !action.undone && action.expiresAt > Date.now();
+    const left = live ? action!.expiresAt - Date.now() : 0;
+    const key = `auto:${notice.at}`;
+    let id = 0;
+    const undo = () => {
+      dropUndo(key);
+      dismissToast(id);
+      if (notice.actionId) void undoAction(notice.actionId);
+    };
+    id = toast(message, {
+      icon: <Zap size={16} strokeWidth={1.75} aria-hidden className="shrink-0" />,
+      duration: live ? left : 8_000,
+      countdown: live,
+      ...(live ? { action: { label: 'Undo', onClick: undo } } : {}),
+    });
+    if (live) registerUndo(key, undo, action!.expiresAt);
+  }, [notice, action]);
+}
+
 function isTyping(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   return !!el && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement || el.isContentEditable);
 }
 
 /**
- * The full list (Min-List-Windows): top bar with search, sync line, Settings and Fold tabs; the
- * open windows, each with its own Fold; the last three folds; every folded tab grouped by kind of
- * site, or by project after Organise with AI (Pro-List-Projects). Search results replace the list
- * while there is a query. Settings and Import open over it; How it works, the plans page
- * (Pro-Plans) and the page a paid checkout lands on (Stripe-Welcome) are their own pages.
+ * The full list (Fo-List, Min-List-Windows): top bar with search, sync line, Upgrade (Free),
+ * Settings and Fold tabs; the open windows, each with its own Fold; the last three folds; the
+ * weekly tidy-up (Pro AI); every folded tab, snoozed ones first, then the person's folders, then
+ * by kind of site. Search results replace the list while there is a query. Settings, Import, Make
+ * room and Ctrl+K open over it; How it works, the plans page (Mx-Plans) and the page a paid
+ * checkout lands on (Stripe-Welcome) are their own pages.
  */
 export function LibraryApp() {
   const [route, navigate] = useRoute();
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
-  const [settings, updateSettings, settingsLoaded] = useSettings();
+  const [settings, , settingsLoaded] = useSettings();
   const folded = useFoldedTabs();
+  const folders = useFolders();
+  const siteKinds = useSiteKinds();
+  const room = useListRoom();
+  const liveFolders = useLiveFolders();
+  const tidy = useTidy();
   const fold = useActiveFold();
   const syncStatus = useSyncStatus();
   const loadedPlan = useLoadedPlan();
   const plan = loadedPlan ?? FREE_PLAN;
   const cloudStatus = useCloudSyncStatus();
-  const projects = useProjects();
   const [organising, setOrganising] = useState(false);
   const { windows, allWindows, foldsIncognito } = useFoldWindows();
   const [currentWindowId, setCurrentWindowId] = useState<number>();
+  const dialog = useLibraryUi((s) => s.dialog);
+  const closeDialog = useLibraryUi((s) => s.close);
   useEffect(() => {
     browser.windows
       .getCurrent()
@@ -95,9 +162,19 @@ export function LibraryApp() {
   const shortcut = useFoldShortcut();
   const hasRemovals = useRemovals((s) => s.removals.size > 0);
   const [activeResult, setActiveResult] = useState<string | undefined>();
+  const { ask, run: runAsk } = useAsk(query);
   useFoldToast();
   usePlanRefresh();
   useCheckoutClosedToast();
+  useAutoFoldToast();
+
+  // A Free action hit a limit where no page asked (the shortcut, a rule).
+  useWorkerEvents((event) => {
+    if (event.type !== 'limit-hit') return;
+    if (event.code === 'list-full') useLibraryUi.getState().setLimitHit('list-full');
+    else if (event.code === 'folder-limit') openDialog({ kind: 'folder-limit' });
+    else if (event.code === 'snooze-limit') openDialog({ kind: 'snooze-limit' });
+  });
 
   const tabs = folded?.tabs ?? NO_TABS;
   const recent = useMemo(
@@ -109,6 +186,8 @@ export function LibraryApp() {
     [folded],
   );
   const searching = query.trim().length > 0;
+  const askable = searching && looksLikeQuestion(query);
+  const proAi = hasProAi(plan);
 
   useEffect(() => {
     document.title = route === 'how' ? 'How Tabfold frees memory' : route === 'pro' || route === 'welcome' ? 'Tabfold Pro' : 'Tabfold';
@@ -120,12 +199,16 @@ export function LibraryApp() {
     if ((route === 'pro' || route === 'welcome') && value.trim()) navigate('list');
   };
 
-  // / focuses search, Esc clears it, ⌘Z / Ctrl+Z undoes the last removal or fold.
+  // / focuses search, Esc clears it, ⌘K / Ctrl+K opens the palette, ⌘Z / Ctrl+Z undoes the last removal or fold.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || document.querySelector('dialog[open]')) return;
       const typing = isTyping(e.target);
-      if (e.key === '/' && !typing && route === 'list') {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (route !== 'list') navigate('list');
+        openDialog({ kind: 'palette' });
+      } else if (e.key === '/' && !typing && route === 'list') {
         e.preventDefault();
         searchRef.current?.focus();
         searchRef.current?.select();
@@ -138,7 +221,7 @@ export function LibraryApp() {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [query, route]);
+  }, [query, route, navigate]);
 
   // A new query starts at the top.
   useEffect(() => {
@@ -152,6 +235,14 @@ export function LibraryApp() {
     if (parseHash(location.hash) === from) navigate('list', { replace: true });
   };
   const openImport = () => navigate('import');
+  const makeRoom = () => navigate('room');
+  const windowLabel = useCallback((id: number) => infos.find((w) => w.id === id)?.name ?? 'Another window', [infos]);
+  const newFolder = () => {
+    if (folderLimitReached(plan, folders)) openDialog({ kind: 'folder-limit' });
+    // The left column's field when it shows (wide windows); a small dialog otherwise.
+    else if (window.matchMedia('(min-width: 1320px)').matches && !searching) useLibraryUi.getState().setCreating(true);
+    else openDialog({ kind: 'new-folder' });
+  };
 
   const hosts = (
     <>
@@ -160,16 +251,51 @@ export function LibraryApp() {
         onClose={() => closeRoute('settings')}
         onHow={() => navigate('how')}
         onImport={() => navigate('import', { replace: true })}
+        onDuplicates={() => openDialog({ kind: 'duplicates' })}
         syncStatus={syncStatus}
         foldedCount={tabs.length}
       />
       <ImportDialog open={route === 'import'} onClose={() => closeRoute('import')} />
-      <OrganiseDialog open={organising && route === 'list'} onClose={() => setOrganising(false)} tabs={tabs} />
+      <MakeRoomDialog open={route === 'room'} onClose={() => closeRoute('room')} />
+      <OrganiseDialog open={organising && route === 'list'} onClose={() => setOrganising(false)} tabs={tabs} folders={folders ?? []} />
+      <FolderDialogHost
+        render={(d, close) => {
+          if (d.kind === 'duplicates') return <DuplicatesDialog onClose={close} />;
+          if (d.kind === 'share') {
+            const folder = folders?.find((f) => f.id === d.folderId);
+            const pages = tabs.filter((t) => t.folderId === d.folderId && !t.incognito).length;
+            return folder ? <ShareDialog folder={folder} pages={pages} onClose={close} /> : null;
+          }
+          if (d.kind === 'palette') {
+            return (
+              <CommandPalette
+                onClose={close}
+                folders={folders ?? []}
+                tabs={tabs}
+                plan={plan}
+                liveFolders={liveFolders}
+                actions={{
+                  settings: () => navigate('settings'),
+                  importer: openImport,
+                  makeRoom,
+                  organise: () => setOrganising(true),
+                }}
+              />
+            );
+          }
+          return null;
+        }}
+      />
       <AccountDialogHost />
       <ToastViewport />
       <ConfirmHost />
     </>
   );
+
+  // A dialog from the store stays only on the list (a route change closes it).
+  useEffect(() => {
+    if (dialog && route !== 'list' && route !== 'settings' && route !== 'room') closeDialog();
+  }, [route, dialog, closeDialog]);
 
   if (route === 'how') {
     return (
@@ -180,8 +306,7 @@ export function LibraryApp() {
     );
   }
 
-  const empty = folded !== undefined && tabs.length === 0 && !hasRemovals;
-  const groupBy = settings.groupBy === 'project' && projects.projects.length > 0 ? 'project' : 'site';
+  const empty = folded !== undefined && tabs.length === 0 && !hasRemovals && (folders?.length ?? 0) === 0;
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-bg text-text">
@@ -195,6 +320,8 @@ export function LibraryApp() {
         cloudStatus={cloudStatus}
         onSyncAll={goToPlans}
         onSettings={() => navigate('settings')}
+        onUpgrade={goToPlans}
+        askChip={askable ? <AskChip proAi={proAi} busy={ask?.status === 'loading'} onAsk={runAsk} /> : undefined}
         onFold={() => void startFold()}
         fold={fold}
         candidates={candidates}
@@ -221,53 +348,67 @@ export function LibraryApp() {
                 navigate('list', { replace: true });
                 setOrganising(true);
               }}
+              onTeam={() => navigate('settings', { replace: true })}
             />
           )}
         </main>
       ) : (
-      <main ref={scrollRef} className="scroll-thin relative min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]">
-        <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,880px)_minmax(0,1fr)] px-8 pt-6 pb-12 max-[720px]:px-4">
-          <div className="col-start-2 row-start-1 min-w-0">
-            <Notices fold={fold} onImport={openImport} />
-            {searching ? (
-              <SearchResults
-                query={query}
-                windows={windows}
-                foldedCount={tabs.length}
+        <main ref={scrollRef} className="scroll-thin relative min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]">
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,880px)_minmax(0,1fr)] px-8 pt-6 pb-12 max-[720px]:px-4">
+            <div className="col-start-2 row-start-1 min-w-0">
+              <Notices fold={fold} onImport={openImport} onMakeRoom={makeRoom} />
+              {searching ? (
+                <SearchResults
+                  query={query}
+                  windows={windows}
+                  foldedCount={tabs.length}
+                  scrollRef={scrollRef}
+                  onClear={() => {
+                    setQuery('');
+                    searchRef.current?.focus();
+                  }}
+                  onActive={onActiveResult}
+                  top={ask ? <BestMatches ask={ask} tabs={tabs} folders={folders ?? []} /> : undefined}
+                  onShiftEnter={askable && proAi ? runAsk : undefined}
+                />
+              ) : empty ? (
+                <>
+                  <OpenWindows windows={infos} disabled={isFolding(fold)} onFold={foldWindow} />
+                  <EmptyState onImport={openImport} foldable={candidates.tabs} />
+                </>
+              ) : (
+                <>
+                  {proAi && showTidy(tidy, settings.tidyUp) && <TidyCard tidy={tidy} onSettings={() => navigate('settings')} />}
+                  <OpenWindows windows={infos} disabled={isFolding(fold)} onFold={foldWindow} />
+                  <RecentFolds folds={recent} tabs={tabs} />
+                  {folded && (
+                    <FoldedHeading
+                      tabs={room ? room.tabs : tabs.length}
+                      limit={room ? room.limit : null}
+                      near={!!room?.near}
+                      folders={folders?.length ?? 0}
+                      spaced={recent.length > 0}
+                      onNewFolder={newFolder}
+                      onOrganise={() => setOrganising(true)}
+                    />
+                  )}
+                </>
+              )}
+            </div>
+            {!searching && !empty && folded && (
+              <GroupedList
+                tabs={tabs}
+                folders={folders ?? []}
+                siteKinds={siteKinds}
+                liveFolders={liveFolders}
+                plan={plan}
+                windowLabel={windowLabel}
                 scrollRef={scrollRef}
-                onClear={() => {
-                  setQuery('');
-                  searchRef.current?.focus();
-                }}
-                onActive={onActiveResult}
+                canCopyContext={proAi}
               />
-            ) : empty ? (
-              <>
-                <OpenWindows windows={infos} disabled={isFolding(fold)} onFold={foldWindow} />
-                <EmptyState onImport={openImport} foldable={candidates.tabs} />
-              </>
-            ) : (
-              <>
-                <OpenWindows windows={infos} disabled={isFolding(fold)} onFold={foldWindow} />
-                <RecentFolds folds={recent} tabs={tabs} />
-                {folded && (
-                  <FoldedHeading
-                    tabs={tabs}
-                    spaced={recent.length > 0}
-                    groupBy={groupBy}
-                    projects={projects}
-                    onGroupBy={(by) => updateSettings({ groupBy: by })}
-                    onOrganise={() => setOrganising(true)}
-                  />
-                )}
-              </>
             )}
           </div>
-          {!searching && !empty && folded && (
-            <GroupedList tabs={tabs} scrollRef={scrollRef} groupBy={groupBy} projects={projects.projects} canCopyContext={hasProAi(plan)} />
-          )}
-        </div>
-      </main>
+        </main>
       )}
       {hosts}
     </div>

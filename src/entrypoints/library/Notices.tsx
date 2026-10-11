@@ -7,12 +7,15 @@ import { send } from '@/lib/messages';
 import { planEnded } from '@/lib/pro/state';
 import type { ActiveFold } from '@/lib/state';
 import { toast } from '@/ui/components/Toast';
-import { currentScreen, useLoadedPlan, usePlanEnded, useRecoveryOffer, useUpdateReady } from '@/ui/hooks';
+import { FREE_LIMITS } from '@/lib/limits';
+import { currentScreen, hasFreeLimits, useFoldedCount, useListRoom, useLoadedPlan, usePlanEnded, useRecoveryOffer, useUpdateReady } from '@/ui/hooks';
 import { tierName } from '@/ui/pro';
 import { errorText } from './actions';
 import { startFold, useFoldError } from './fold';
 import { count, foldTime } from './format';
+import { FullBanner, NeedsRoomCard } from './LimitBits';
 import { goToPlans } from './router';
+import { useLibraryUi } from './uiStore';
 
 const PRIMARY_SM =
   'inline-flex h-7 shrink-0 items-center justify-center rounded-control bg-accent px-3 text-small font-semibold text-on-accent hover:bg-accent-hover disabled:opacity-60';
@@ -202,9 +205,27 @@ function LeaveSiteLine({ fold }: { fold: ActiveFold | undefined }) {
 }
 
 /** Couldn't fold (Min-States "Fold failed · storage full"): tabs close only after they are saved. */
-function FoldFailedLine() {
+function FoldFailedLine({ onMakeRoom }: { onMakeRoom: () => void }) {
   const { error, set } = useFoldError();
   if (!error) return null;
+  if (error.code === 'list-full') {
+    // "This fold needs room for 23 tabs" (Fo-Limit-States): nothing was saved or closed.
+    return (
+      <NeedsRoomCard
+        needed={error.details?.needed}
+        room={error.details?.room}
+        onMakeRoom={() => {
+          set(null);
+          onMakeRoom();
+        }}
+        onUpgrade={() => {
+          set(null);
+          goToPlans();
+        }}
+        onDismiss={() => set(null)}
+      />
+    );
+  }
   return (
     <div role="alert" className="flex flex-col gap-2.5 rounded-card border border-red-line bg-red-soft px-3.5 py-3">
       <div className="flex items-start gap-2.5">
@@ -235,13 +256,16 @@ const TIER_RANK = { free: 0, pro: 1, 'pro-ai': 2 } as const;
 function PlanEndedLine() {
   const ended = usePlanEnded();
   const plan = useLoadedPlan();
+  const counted = useFoldedCount();
   // Nothing until the plan is read, and nothing once a plan at least as good is back.
   if (!ended || !plan || TIER_RANK[plan.tier] >= TIER_RANK[ended.tier]) return null;
   const title = ended.wasTrial ? 'Your Pro AI trial has ended' : `Your ${tierName(ended.tier)} plan has ended`;
-  const detail =
-    ended.tier === 'pro-ai' || ended.wasTrial
-      ? 'Your list, projects and backups stay. Organising with AI and syncing more than 500 tabs are paused.'
-      : 'Your list and backups stay. Syncing more than 500 tabs is paused.';
+  const over = counted && hasFreeLimits(plan) && (counted.tabs > FREE_LIMITS.tabs || counted.folders > FREE_LIMITS.folders) ? counted : null;
+  const detail = over
+    ? `All ${count(over.tabs, 'tab')} and ${count(over.folders, 'folder')} stay, readable and exportable. Free holds ${FREE_LIMITS.tabs} tabs and ${FREE_LIMITS.folders} folders, so Fold and new folders are paused until there’s room.`
+    : ended.tier === 'pro-ai' || ended.wasTrial
+      ? 'Your list, folders and backups stay. Organising with AI and syncing more than 500 tabs are paused.'
+      : 'Your list, folders and backups stay. Syncing more than 500 tabs is paused.';
   return (
     <div role="status" className="flex items-start gap-2.5 rounded-card border border-border bg-bg-subtle py-3 pr-2 pl-3.5">
       <Info size={16} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0 text-text-2" />
@@ -257,12 +281,28 @@ function PlanEndedLine() {
   );
 }
 
+/**
+ * "Your free list is full: 500 of 500 tabs" while it is, or after a fold that didn't fit was
+ * started where no page could say so (the shortcut, a rule: worker event `limit-hit`).
+ */
+function ListFullLine({ onMakeRoom }: { onMakeRoom: () => void }) {
+  const room = useListRoom();
+  const limitHit = useLibraryUi((s) => s.limitHit);
+  const setLimitHit = useLibraryUi((s) => s.setLimitHit);
+  const fold = useFoldError((s) => s.error);
+  if (!room) return null;
+  // A fold from this page that didn't fit says so in its own card.
+  if (!room.full && (limitHit !== 'list-full' || fold?.code === 'list-full')) return null;
+  return <FullBanner tabs={room.tabs} full={room.full} onMakeRoom={onMakeRoom} onDismiss={() => setLimitHit(null)} />;
+}
+
 /** The small states at the top of the full list, newest concern first. Nothing when all is well. */
-export function Notices({ fold, onImport }: { fold: ActiveFold | undefined; onImport: () => void }) {
+export function Notices({ fold, onImport, onMakeRoom }: { fold: ActiveFold | undefined; onImport: () => void; onMakeRoom: () => void }) {
   return (
     <div className="flex flex-col gap-3 empty:hidden [&:not(:empty)]:mb-6">
       <UpdateLine />
-      <FoldFailedLine />
+      <ListFullLine onMakeRoom={onMakeRoom} />
+      <FoldFailedLine onMakeRoom={onMakeRoom} />
       <LeaveSiteLine fold={fold} />
       <CrashLine />
       <WipedLine onImport={onImport} />

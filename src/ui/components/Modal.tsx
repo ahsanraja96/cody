@@ -13,6 +13,7 @@ export function Modal({
   width,
   children,
   className,
+  toasts = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -20,6 +21,8 @@ export function Modal({
   width: number;
   children: ReactNode;
   className?: string;
+  /** It shows its own toasts (a <ToastViewport inDialog /> inside): the page's hide meanwhile. */
+  toasts?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -36,6 +39,7 @@ export function Modal({
       ref={ref}
       tabIndex={-1}
       aria-labelledby={labelledBy}
+      data-toasts={toasts ? '' : undefined}
       onClose={onClose}
       onClick={(e) => {
         if (e.target === ref.current) onClose();

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { ExternalLink, LoaderCircle, LogIn, Sparkles, TriangleAlert } from 'lucide-react';
+import { ExternalLink, LoaderCircle, LogIn, Sparkles, TriangleAlert, Users } from 'lucide-react';
 import { send } from '@/lib/messages';
 import { hasPro, hasProAi } from '@/lib/pro/tiers';
 import { FREE_PLAN, PRICES, type BackupInfo, type PlanState } from '@/lib/pro/types';
@@ -8,7 +8,21 @@ import { Chip } from '@/ui/components/ProBits';
 import { toast } from '@/ui/components/Toast';
 import { cx } from '@/ui/cx';
 import { useAiRuns, useCloudSyncStatus, useLoadedPlan } from '@/ui/hooks';
-import { daysLeftLabel, dollars, intervalName, isTrialing, longDate, openBilling, paidTier, runsLine, shortDate, tierName, trialDaysLeft } from '@/ui/pro';
+import {
+  daysLeftLabel,
+  dollars,
+  intervalName,
+  isLifetime,
+  isTrialing,
+  longDate,
+  openBilling,
+  paidTier,
+  runsLine,
+  shortDate,
+  teamLine,
+  tierName,
+  trialDaysLeft,
+} from '@/ui/pro';
 import { openSignIn, openSignOut } from './AccountDialogs';
 import { backupLabel } from './BackupDialog';
 import { goToPlans } from './router';
@@ -76,8 +90,9 @@ function priceOf(plan: PlanState): string | null {
 }
 
 /**
- * Settings › Your plan (Stripe-Plan-States): Free (signed in or not, with "Already paid? Sign in"),
- * the Pro AI trial, a paid plan ("Renews … for $X", Manage billing, Restore a backup…), a payment
+ * Settings › Your plan (Stripe-Plan-States, Mx-Plans): Free (signed in or not, with "Already paid?
+ * Sign in"), the Pro AI trial, a paid plan ("Renews … for $X", Manage billing, Restore a
+ * backup…), Pro for life (no renewal), a Teams plan ("Team · Truewidgets · 3 people"), a payment
  * that didn't go through (Update card), a cancelled plan still on (Keep Pro AI), and who is signed
  * in, with Sign out.
  */
@@ -88,7 +103,7 @@ export function YourPlan({ open, onRestore }: { open: boolean; onRestore: () => 
   const cloud = useCloudSyncStatus();
   const [backup, setBackup] = useState<BackupInfo | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const pro = hasPro(plan);
+  const pro = hasPro(plan) || isLifetime(plan) || !!plan.team;
 
   // The latest backup, for "Backed up today 09:12" (Pro only; quietly nothing when it can't be read).
   useEffect(() => {
@@ -144,12 +159,14 @@ export function YourPlan({ open, onRestore }: { open: boolean; onRestore: () => 
     );
   } else {
     const paid = paidTier(plan);
-    const trialing = !paid && isTrialing(plan, now);
+    const lifetime = isLifetime(plan);
+    const team = teamLine(plan);
+    const trialing = !paid && !lifetime && !plan.team && isTrialing(plan, now);
     const ai = hasProAi(plan);
     const synced = cloudText(cloud);
     const price = priceOf(plan);
     const name = tierName(paid ?? (ai ? 'pro-ai' : 'pro'));
-    const title = `${name}${plan.interval ? ` · ${intervalName(plan.interval)}` : ''}`;
+    const title = lifetime && !paid ? 'Pro for life' : `${name}${plan.interval ? ` · ${intervalName(plan.interval)}` : ''}`;
     const aiRuns = ai ? `AI runs: ${runsLine(runs)} this month` : null;
     const backedUp = backup ? `Backed up ${backupLabel(backup).replace(/^(Today|Yesterday)/, (w) => w.toLowerCase())}` : null;
     const lines = (first: Array<string | null>, second: Array<string | null> = []) => {
@@ -160,6 +177,12 @@ export function YourPlan({ open, onRestore }: { open: boolean; onRestore: () => 
           {a.join(' · ')}
           {a.length > 0 && b.length > 0 && <br />}
           {b.join(' · ')}
+          {team && (
+            <span className="mt-1 flex items-center gap-1.5 text-text-2">
+              <Users size={13} strokeWidth={1.75} aria-hidden className="shrink-0" />
+              {team}
+            </span>
+          )}
         </>
       );
     };
@@ -224,7 +247,7 @@ export function YourPlan({ open, onRestore }: { open: boolean; onRestore: () => 
         />
       );
     } else {
-      const renews = plan.renewsAt ? `Renews ${longDate(plan.renewsAt)}${price ? ` for ${price}` : ''}` : null;
+      const renews = lifetime && !paid ? 'One payment, no renewal' : plan.renewsAt ? `Renews ${longDate(plan.renewsAt)}${price ? ` for ${price}` : ''}` : null;
       box = (
         <Box
           title={
@@ -236,7 +259,7 @@ export function YourPlan({ open, onRestore }: { open: boolean; onRestore: () => 
           sub={lines([renews, aiRuns], [backedUp, synced])}
           actions={
             <>
-              {paid && (
+              {paid && plan.team?.role !== 'member' && (
                 <button type="button" disabled={busy !== null} onClick={() => void billing('manage')} className={SECONDARY_SM}>
                   {external('manage')}
                   Manage billing

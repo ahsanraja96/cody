@@ -1,22 +1,25 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { browser } from 'wxt/browser';
-import { ChevronDown, CirclePause, LoaderCircle, TriangleAlert, Trash, Upload, X } from 'lucide-react';
+import { ChevronDown, CirclePause, CopyX, LoaderCircle, Sparkles, TriangleAlert, Trash, Upload, X } from 'lucide-react';
 import { send } from '@/lib/messages';
-import { hasPro } from '@/lib/pro/tiers';
+import { hasPro, hasProAi } from '@/lib/pro/tiers';
 import type { SyncStatus } from '@/lib/state';
 import { Kbd } from '@/ui/components/Chips';
 import { Segmented, Switch } from '@/ui/components/Controls';
 import { confirmAction } from '@/ui/components/Dialog';
+import { ProTag } from '@/ui/components/ProBits';
 import { toast, ToastViewport } from '@/ui/components/Toast';
 import { cx } from '@/ui/cx';
-import { useCloudSyncStatus, useIncognitoAccess, usePlan, useSettings } from '@/ui/hooks';
+import { useAutoFoldNotice, useCloudSyncStatus, useFolders, useIncognitoAccess, usePlan, useSettings, useSiteKinds } from '@/ui/hooks';
 import { proErrorText } from '@/ui/pro';
 import { clearEverything, errorText } from './actions';
+import { AutoFoldSection } from './AutoFold';
 import { BackupDialog } from './BackupDialog';
 import { ExportMenu } from './ExportMenu';
 import { count } from './format';
 import { RemoveDialog } from './RemoveDialog';
 import { goToPlans } from './router';
+import { SitesYouMoved } from './SitesYouMoved';
 import { CloudSyncLine, SyncLine } from './SyncLine';
 import { YourPlan } from './YourPlan';
 
@@ -142,14 +145,16 @@ function SyncNowButton() {
 }
 
 /**
- * Settings (Min-Settings), over the list: the few choices the minimal Tabfold has. Everything
- * else keeps its default.
+ * Settings (Min-Settings, Mx-Auto, Up-Move-States), over the list: the few choices the minimal
+ * Tabfold has, Fold automatically, your tabs (import, duplicates, export, the sites you moved) and
+ * the weekly tidy-up (Pro AI). Everything else keeps its default.
  */
 export function SettingsDialog({
   open,
   onClose,
   onHow,
   onImport,
+  onDuplicates,
   syncStatus,
   foldedCount,
 }: {
@@ -157,6 +162,8 @@ export function SettingsDialog({
   onClose: () => void;
   onHow: () => void;
   onImport: () => void;
+  /** "Find duplicates" (Mx-Ask "Same page twice"). */
+  onDuplicates: () => void;
   syncStatus: SyncStatus | undefined;
   foldedCount: number;
 }) {
@@ -168,6 +175,10 @@ export function SettingsDialog({
   const plan = usePlan();
   const cloudStatus = useCloudSyncStatus();
   const pro = hasPro(plan);
+  const proAi = hasProAi(plan);
+  const folders = useFolders() ?? [];
+  const siteKinds = useSiteKinds();
+  const autoNotice = useAutoFoldNotice();
   const [backups, setBackups] = useState(false);
   const [removing, setRemoving] = useState(false);
 
@@ -283,6 +294,7 @@ export function SettingsDialog({
               }
               control={<Switch checked={settings.autoSuspend} onChange={(v) => update({ autoSuspend: v })} label="Put idle tabs to sleep" />}
             />
+            <AutoFoldSection settings={settings} update={update} plan={plan} folders={folders} notice={autoNotice} />
             {pro ? (
               <SettingRow
                 title="Sync with your Tabfold account"
@@ -347,17 +359,42 @@ export function SettingsDialog({
                 />
               }
             />
-            <SettingRow
-              center
-              title="Your tabs"
-              control={
-                <>
+            <section aria-labelledby="tabs-h" className="border-b border-border py-6">
+              <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+                <h2 id="tabs-h" className="m-0 min-w-0 flex-1 text-body font-semibold">
+                  Your tabs
+                </h2>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
                   <button type="button" className={SECONDARY} onClick={onImport}>
                     <Upload size={14} strokeWidth={1.75} aria-hidden className="text-text-2" />
-                    Import from OneTab…
+                    Import…
+                  </button>
+                  <button type="button" className={SECONDARY} onClick={onDuplicates}>
+                    <CopyX size={14} strokeWidth={1.75} aria-hidden className="text-text-2" />
+                    Find duplicates
                   </button>
                   <ExportMenu pro={pro} className={SECONDARY} />
+                </div>
+              </div>
+              <SitesYouMoved siteKinds={siteKinds} />
+            </section>
+            <SettingRow
+              title={
+                <>
+                  Weekly tidy-up
+                  {!proAi && <ProTag label="Pro AI" />}
                 </>
+              }
+              description="Every Monday, a few suggestions at the top of your list: tabs to put in a folder, the same page twice, tabs you haven’t opened in a month. One click each, with Undo."
+              control={
+                proAi ? (
+                  <Switch checked={settings.tidyUp} onChange={(v) => update({ tidyUp: v })} label="Weekly tidy-up" />
+                ) : (
+                  <button type="button" className={SECONDARY} onClick={goToPlans}>
+                    <Sparkles size={14} strokeWidth={1.75} aria-hidden className="text-accent-text" />
+                    See Pro AI
+                  </button>
+                )
               }
             />
             <SettingRow

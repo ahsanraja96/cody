@@ -1,5 +1,5 @@
 import { CommandError, send } from '@/lib/messages';
-import { AI_RUNS_PER_MONTH, PRICES, type AiRuns, type BillingInterval, type PlanState, type Tier } from '@/lib/pro/types';
+import { AI_RUNS_PER_MONTH, PRICES, TEAMS_PRICES, type AiRuns, type BillingInterval, type CheckoutPlan, type PlanState, type Tier } from '@/lib/pro/types';
 
 /**
  * Small helpers the Pro screens share: plan wording, which plan is paid for, trial days left, what
@@ -34,9 +34,21 @@ export function trialUsed(plan: PlanState): boolean {
   return plan.trialUsed;
 }
 
+/** Pro for life: a one-time payment, no renewal. */
+export function isLifetime(plan: PlanState): boolean {
+  return plan.lifetime === true;
+}
+
+/** "Team · Truewidgets · 3 people", for a Teams plan. */
+export function teamLine(plan: PlanState): string | null {
+  const team = plan.team;
+  if (!team) return null;
+  return `Team · ${team.name} · ${team.seats} ${team.seats === 1 ? 'person' : 'people'}`;
+}
+
 /** "Pro", "Pro AI", "Pro AI trial" for the plan chip; null on Free. */
 export function planChipLabel(plan: PlanState, now = Date.now()): string | null {
-  if (plan.tier === 'free') return null;
+  if (plan.tier === 'free') return plan.lifetime ? 'Pro' : plan.team ? 'Pro AI' : null;
   if (plan.tier === 'pro-ai' && isTrialing(plan, now) && !paidTier(plan)) return 'Pro AI trial';
   return plan.tier === 'pro-ai' ? 'Pro AI' : 'Pro';
 }
@@ -51,7 +63,7 @@ export function intervalName(interval: BillingInterval | null): string {
 
 /** "Save up to 22%": the best yearly saving across the paid plans. */
 export function bestYearlySaving(): number {
-  return Math.max(...Object.values(PRICES).map((p) => Math.floor((1 - p.year / (p.month * 12)) * 100)));
+  return Math.max(...[...Object.values(PRICES), TEAMS_PRICES].map((p) => Math.floor((1 - p.year / (p.month * 12)) * 100)));
 }
 
 /** "$4", "$7", "$4.50": a whole-dollar price stays whole. */
@@ -147,9 +159,12 @@ async function opening(run: () => Promise<{ opened: boolean; reason?: string }>)
   }
 }
 
-/** Open Stripe Checkout for a plan in a new tab (the worker watches it). */
-export function openCheckout(tier: Exclude<Tier, 'free'>, interval: BillingInterval): Promise<string | null> {
-  return opening(() => send({ type: 'checkout-open', tier, interval }));
+/**
+ * Open Stripe Checkout for a plan in a new tab (the worker watches it): a subscription, Pro for
+ * life (one payment; the interval is ignored), or a Teams plan with its seats and name.
+ */
+export function openCheckout(tier: CheckoutPlan, interval: BillingInterval, team: { seats?: number; teamName?: string } = {}): Promise<string | null> {
+  return opening(() => send({ type: 'checkout-open', tier, interval, ...(tier === 'teams' ? team : {}) }));
 }
 
 /** Open Stripe's billing page in a new tab; `payment-method` opens on the card form. */

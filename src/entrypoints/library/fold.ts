@@ -5,6 +5,7 @@ import { CommandError, send, type FoldOutcome } from '@/lib/messages';
 import { UNDO_WINDOW_MS, type ActiveFold } from '@/lib/state';
 import { dismissToast, toast } from '@/ui/components/Toast';
 import { useActiveFold, useLastAction } from '@/ui/hooks';
+import { listFullFrom } from '@/ui/limits';
 import type { WindowInfo } from '@/ui/windows';
 import { approxBytes, count } from './format';
 import { dropUndo, registerUndo } from './undo';
@@ -12,7 +13,11 @@ import { dropUndo, registerUndo } from './undo';
 interface FoldError {
   message: string;
   quota: boolean;
+  /** 'list-full': the free list had no room ({ room, needed, limit }). */
+  code?: string;
+  details?: Record<string, number>;
 }
+
 
 /** A fold that failed, for the red line above the list (Min-States "Fold failed"). */
 export const useFoldError = create<{ error: FoldError | null; set: (error: FoldError | null) => void }>((set) => ({
@@ -92,7 +97,9 @@ export async function startFold(options: { windowId?: number; keepWindowOpen?: b
     showFoldToast(outcome.foldId, outcome, Date.now());
   } catch (error) {
     const quota = error instanceof CommandError && error.code === 'quota';
-    useFoldError.getState().set({ message: error instanceof Error ? error.message : 'Something went wrong.', quota });
+    const code = error instanceof CommandError ? error.code : undefined;
+    const details = error instanceof CommandError ? error.details : undefined;
+    useFoldError.getState().set({ message: error instanceof Error ? error.message : 'Something went wrong.', quota, code, details });
   }
 }
 
@@ -107,7 +114,12 @@ export function useFoldToast(): void {
   useEffect(() => {
     if (!fold) return;
     if (fold.phase === 'failed' && fold.finishedAt && Date.now() - fold.finishedAt < 30_000) {
-      useFoldError.getState().set({ message: fold.error ?? 'Something went wrong.', quota: /storage|quota|space/i.test(fold.error ?? '') });
+      const full = listFullFrom(fold.error);
+      useFoldError.getState().set({
+        message: fold.error ?? 'Something went wrong.',
+        quota: !full && /storage|quota|space/i.test(fold.error ?? ''),
+        ...(full ? { code: 'list-full', details: Object.fromEntries(Object.entries(full).filter(([, v]) => v !== undefined)) as Record<string, number> } : {}),
+      });
       return;
     }
     if (fold.phase === 'done' && fold.outcome) showFoldToast(fold.foldId, fold.outcome, fold.finishedAt ?? fold.startedAt);

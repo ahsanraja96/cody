@@ -1,12 +1,14 @@
-import { forwardRef, useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AppWindow, Archive, Layers, Search, Settings, X } from 'lucide-react';
 import { hasPro } from '@/lib/pro/tiers';
 import type { PlanState } from '@/lib/pro/types';
 import type { ActiveFold, SyncStatus } from '@/lib/state';
 import { Kbd } from '@/ui/components/Chips';
 import { Logo } from '@/ui/components/Logo';
-import { PlanChip } from '@/ui/components/ProBits';
+import { PlanChip, TrialChip, UpgradeButton } from '@/ui/components/ProBits';
 import { cx } from '@/ui/cx';
+import { hasFreeLimits } from '@/ui/hooks';
+import { isTrialing, paidTier, trialDaysLeft } from '@/ui/pro';
 import { isFolding } from './fold';
 import { approxBytes, count } from './format';
 import { CloudSyncLine, SyncLine } from './SyncLine';
@@ -26,9 +28,10 @@ export interface FoldMenuChoice {
 }
 
 /**
- * The full list's top bar (Min-List-Windows): logo, the wide search, the sync line, Settings and
- * the primary "Fold tabs", which asks "Just this window" or "All N windows" when several windows
- * have tabs to fold. While a fold runs the button shows its progress.
+ * The full list's top bar (Min-List-Windows, Up-List): logo, the wide search, the sync line,
+ * "✦ Upgrade" on Free (the trial's days left while it runs), Settings and the primary "Fold tabs",
+ * which asks "Just this window" or "All N windows" when several windows have tabs to fold. While a
+ * fold runs the button shows its progress.
  */
 export const TopBar = forwardRef<
   HTMLInputElement,
@@ -44,6 +47,10 @@ export const TopBar = forwardRef<
     /** Free, over Chrome sync's 500: "Latest 500 synced · Sync all" opens the plans page. */
     onSyncAll: () => void;
     onSettings: () => void;
+    /** "✦ Upgrade" and the trial chip open the plans page. */
+    onUpgrade: () => void;
+    /** Inside the search field while there's a query: Ask your tabs. */
+    askChip?: ReactNode;
     onFold: () => void;
     fold: ActiveFold | undefined;
     candidates: { tabs: number; bytes: number };
@@ -53,11 +60,29 @@ export const TopBar = forwardRef<
     activeDescendant?: string;
   }
 >(function TopBar(
-  { query, onQuery, syncStatus, syncEnabled, plan, cloudStatus, onSyncAll, onSettings, onFold, fold, candidates, choice, shortcut, activeDescendant },
+  {
+    query,
+    onQuery,
+    syncStatus,
+    syncEnabled,
+    plan,
+    cloudStatus,
+    onSyncAll,
+    onSettings,
+    onUpgrade,
+    askChip,
+    onFold,
+    fold,
+    candidates,
+    choice,
+    shortcut,
+    activeDescendant,
+  },
   searchRef,
 ) {
   const [menuOpen, setMenuOpen] = useState(false);
   const folding = isFolding(fold);
+  const trialing = !!plan && isTrialing(plan) && !paidTier(plan);
   const progress = folding && fold ? (fold.phase === 'saving' ? 'Folding…' : `Folding ${Math.min(fold.closed, fold.total)} of ${fold.total}…`) : '';
   const title = choice.ask
     ? `Asks: just this window, or all ${choice.windowCount}. Pinned and playing tabs stay open.${shortcut ? ` ${shortcut}` : ''}`
@@ -69,7 +94,7 @@ export const TopBar = forwardRef<
       <div className="flex shrink-0 items-center gap-2.5 min-[1320px]:w-[236px]">
         <Logo size={28} />
         <span className="text-section font-semibold max-[720px]:sr-only">Tabfold</span>
-        {plan && <PlanChip plan={plan} className="max-[720px]:hidden" />}
+        {plan && !trialing && <PlanChip plan={plan} className="max-[720px]:hidden" />}
       </div>
       <label
         className={cx(
@@ -96,6 +121,7 @@ export const TopBar = forwardRef<
           aria-label="Search open and folded tabs by title, address or keyword"
           className="h-full min-w-0 flex-1 border-0 bg-transparent p-0 text-text outline-none [&::-webkit-search-cancel-button]:hidden"
         />
+        {query && askChip}
         {query ? (
           <button
             type="button"
@@ -117,6 +143,8 @@ export const TopBar = forwardRef<
         <SyncLine status={syncStatus} enabled={syncEnabled} compact onSyncAll={onSyncAll} className="shrink-0 max-[860px]:hidden" />
       )}
       <span className="w-1 shrink-0" />
+      {plan && hasFreeLimits(plan) && <UpgradeButton onClick={onUpgrade} className="max-[560px]:hidden" />}
+      {plan && trialing && <TrialChip days={trialDaysLeft(plan)} onClick={onUpgrade} className="max-[560px]:hidden" />}
       <button
         type="button"
         aria-label="Settings"
