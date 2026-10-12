@@ -132,9 +132,11 @@ async function readLocalFolders(deps: SyncDeps, scope: SyncScope = PERSONAL): Pr
   const team = scope.team?.id ?? null;
   const folders = rows
     .filter((f) => (team ? f.teamId === team : !f.teamId))
+    // A team folder's star is each person's own (`starredTeamFolders`): never in the team's copy.
+    .map((f) => (team && f.starredAt ? { ...f, starredAt: 0 } : f))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const text = JSON.stringify([
-    folders.map((f) => [f.id, f.name, f.color, f.order, f.updatedAt, f.deletedAt]),
+    folders.map((f) => [f.id, f.name, f.color, f.order, f.updatedAt, f.deletedAt, f.starredAt ?? 0, f.note ?? '', f.noteAt ?? 0]),
     Object.entries(kinds.kinds).sort(),
     Object.entries(kinds.removals).sort(),
   ]);
@@ -425,11 +427,15 @@ export async function syncOnce(
 }
 
 /**
- * What the shared copy brings, as this runner may take it: a team's copy brings no site kinds; the
- * person's own copy says nothing about who added a tab.
+ * What the shared copy brings, as this runner may take it: a team's copy brings no site kinds and
+ * no stars; the person's own copy says nothing about who added a tab.
  */
 function forScope(remote: RemoteState, scope: SyncScope): RemoteState {
-  if (scope.team) return remote.folders?.kinds.length ? { ...remote, folders: { ...remote.folders, kinds: [] } } : remote;
+  if (scope.team) {
+    if (!remote.folders) return remote;
+    const folders = remote.folders.folders.map(({ starredAt: _star, ...folder }) => folder);
+    return { ...remote, folders: { folders, kinds: [] } };
+  }
   if (!remote.records.some((r) => r.addedBy)) return remote;
   return { ...remote, records: remote.records.map(({ addedBy: _adder, ...record }) => record) };
 }

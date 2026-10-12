@@ -122,6 +122,11 @@ describe('Fold automatically: tabs not looked at for N days', () => {
     const rules = [weekday(18), idle(5, { enabled: false }), idle(3), idle(1, { id: 'second-idle' })];
     expect(runnableRules({ autoFold: rules }, true).map((r) => r.id)).toEqual(['idle-3']);
     expect(runnableRules({ autoFold: rules }, false).map((r) => r.id)).toEqual(['weekday', 'idle-3', 'second-idle']);
+    // 1.0: Free's one rule may also be "a window has more than N tabs", when it comes first.
+    const cap: AutoFoldRule = { id: 'cap', enabled: true, when: { type: 'window-cap', max: 25 }, into: { type: 'site' }, createdAt: 0 };
+    expect(runnableRules({ autoFold: [weekday(18), cap, idle(3)] }, true).map((r) => r.id)).toEqual(['cap']);
+    expect(runnableRules({ autoFold: [idle(3), cap] }, true).map((r) => r.id)).toEqual(['idle-3']);
+    expect(runnableRules({ autoFold: [{ ...cap, when: { type: 'window-cap', max: 1 } }] }, true)).toEqual([]);
 
     await updateSettings({ autoFold: rules });
     chrome.openWindow([{ url: 'https://two-days.com', lastAccessed: now - 2 * DAY }, { url: 'https://fresh.com', lastAccessed: now }], { focused: true });

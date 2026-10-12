@@ -3,6 +3,7 @@ import { bumpSearchVersion, db } from '../db';
 import {
   addFolder,
   cleanFolderName,
+  cleanFolderNote,
   duplicateGroups,
   freeLimitsNow,
   hostIsSite,
@@ -11,6 +12,7 @@ import {
   listLiveFolders,
   listRoom,
   migrateProjectsToFolders,
+  noteRecentFolders,
   patchOf,
   placed,
   purgeDeletedFolders,
@@ -23,7 +25,7 @@ import { ProError } from '../pro/api';
 import { planState } from '../pro/state';
 import type { FolderRecord, TabGroupColor } from '../types';
 import { listLiveSessions, listPersonalTabs, removeDuplicateCopies, removeTabsWithSnapshot } from '../repo';
-import { getDeviceId } from '../state';
+import { getDeviceId, starredTeamFolders } from '../state';
 import { placeTabs, teamFolderTabs } from '../teamFolders';
 import { isTeamSession } from '../teams';
 import { recordChangeUndo } from './save';
@@ -68,7 +70,7 @@ export async function handleFolderCommand(command: FolderCommand): Promise<Comma
     case 'folder-create':
       return createFolder(command.name, command.color, command.tabRecordIds, command.teamId);
     case 'folder-update':
-      return updateFolder(command.id, { name: command.name, color: command.color });
+      return updateFolder(command.id, { name: command.name, color: command.color, starred: command.starred, note: command.note });
     case 'folder-reorder':
       return reorderFolders(command.ids);
     case 'folder-delete':
@@ -116,9 +118,18 @@ async function teamContext(teamId?: string | null): Promise<{ email: string; tea
   return { email: plan.email, teamName: plan.team?.name ?? 'your team', deviceId: await getDeviceId() };
 }
 
-/** Rename or recolour. */
-export async function updateFolder(id: string, patch: { name?: string; color?: TabGroupColor }): Promise<{ folder: FolderRecord }> {
-  return db.transaction('rw', [db.folders, db.meta], async () => {
+/**
+ * Rename, recolour, star or note a folder. A personal folder's star is part of the folder (it
+ * syncs, `starredAt`); a team folder's star is this person's own (`starredTeamFolders`, never sent
+ * to the team). A note is one line of at most 140 characters ('' removes it; `noteAt` stays, so the
+ * removal syncs); a team folder's note is the team's.
+ */
+export async function updateFolder(
+  id: string,
+  patch: { name?: string; color?: TabGroupColor; starred?: boolean; note?: string },
+  now = Date.now(),
+): Promise<{ folder: FolderRecord }> {
+  const result = await db.transaction('rw', [db.folders, db.meta], async () => {
     const folder = await requireFolder(id);
     const next: FolderRecord = { ...folder };
     if (patch.name !== undefined) {
@@ -130,13 +141,39 @@ export async function updateFolder(id: string, patch: { name?: string; color?: T
       if (!isFolderColor(patch.color)) throw new CommandError('That isn’t one of the colours.', 'invalid-color');
       next.color = patch.color;
     }
-    if (next.name === folder.name && next.color === folder.color) return { folder };
-    next.updatedAt = Date.now();
+    let changed = next.name !== folder.name || next.color !== folder.color;
+    if (patch.starred !== undefined && !folder.teamId && patch.starred !== (folder.starredAt ?? 0) > 0) {
+      next.starredAt = patch.starred ? now : 0;
+      changed = true;
+    }
+    if (changed) next.updatedAt = now;
+    let noted = false;
+    if (patch.note !== undefined) {
+      const note = cleanFolderNote(patch.note);
+      if (note !== (folder.note ?? '')) {
+        next.note = note;
+        next.noteAt = now;
+        noted = true;
+      }
+    }
+    if (!changed && !noted) return { folder };
     await db.folders.put(next);
     // Names show in search results ("in Truewidgets").
     await bumpSearchVersion();
     return { folder: next };
   });
+  if (patch.starred !== undefined && result.folder.teamId) await starTeamFolder(result.folder.id, patch.starred, now);
+  return { folder: result.folder };
+}
+
+/** A team folder's star: this person's own, kept on this computer (`starredTeamFolders`). */
+async function starTeamFolder(id: string, starred: boolean, now: number): Promise<void> {
+  const current = await starredTeamFolders.get();
+  if (starred === (current[id] ?? 0) > 0) return;
+  const next = { ...current };
+  if (starred) next[id] = now;
+  else delete next[id];
+  await starredTeamFolders.set(next);
 }
 
 /**
@@ -200,6 +237,7 @@ export async function moveTabs(tabRecordIds: string[], folderId: string | null):
   const fromTeam = sessions.some((s) => isTeamSession(s));
   if (!folder?.teamId && !fromTeam) {
     const { moved, before } = await setTabsFolder(tabRecordIds, folderId);
+    if (moved && folderId) await noteRecentFolders([folderId]);
     return { moved, actionId: moved ? await undoable({ patches: before }) : null };
   }
   const context = await teamContext(folder?.teamId ?? null);
@@ -210,6 +248,7 @@ export async function moveTabs(tabRecordIds: string[], folderId: string | null):
   const actionId = result.moved
     ? await undoable({ patches: result.before, putBack: result.putBack, savedTabIds: result.newIds })
     : null;
+  if (result.moved && folder) await noteRecentFolders([folder.id]);
   return { moved: result.moved, actionId };
 }
 

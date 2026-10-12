@@ -1,6 +1,7 @@
 import Dexie from 'dexie';
 import { browser } from 'wxt/browser';
 import { DB_NAME, db } from '../db';
+import { cleanFolderNote, listPersonalFolders } from '../folders';
 import { FREE_LIMITS } from '../limits';
 import { CommandError, type Command, type CommandResults } from '../messages';
 import { api, ProError } from '../pro/api';
@@ -45,6 +46,8 @@ const SHARE_SENT = 'shareSent';
 interface ShareBody {
   name: string;
   color: TabGroupColor;
+  /** The folder's note (1.0): one line, '' when none (server/API.md "1.0 additions"). */
+  note: string;
   tabs: Array<{ title: string; url: string }>;
   live: boolean;
 }
@@ -81,12 +84,13 @@ async function sharedTabs(folderId: string): Promise<ShareBody['tabs']> {
 }
 
 async function bodyFor(folder: FolderRecord, live: boolean): Promise<ShareBody> {
-  return { name: folder.name, color: folder.color, tabs: await sharedTabs(folder.id), live };
+  return { name: folder.name, color: folder.color, note: cleanFolderNote(folder.note ?? ''), tabs: await sharedTabs(folder.id), live };
 }
 
 /** A small fingerprint of what a share shows, to skip sending an unchanged folder. */
 function fingerprint(body: ShareBody): string {
-  const text = JSON.stringify([body.name, body.color, body.tabs.map((t) => [t.title, t.url])]);
+  // The note joins only when there is one, so shares sent before 1.0 aren't all sent again.
+  const text = JSON.stringify([body.name, body.color, body.tabs.map((t) => [t.title, t.url]), ...(body.note ? [body.note] : [])]);
   let hash = 2166136261;
   for (let i = 0; i < text.length; i += 1) {
     hash ^= text.charCodeAt(i);
@@ -325,12 +329,14 @@ export function handleExternalMessage(message: unknown, sender: { origin?: strin
 interface PublicShare {
   name: string;
   color: TabGroupColor;
+  /** The folder's note (1.0), '' when none. */
+  note: string;
   tabs: Array<{ title: string; url: string }>;
 }
 
 function readPublicShare(value: unknown): PublicShare | null {
   if (!value || typeof value !== 'object') return null;
-  const v = value as { name?: unknown; color?: unknown; tabs?: unknown };
+  const v = value as { name?: unknown; color?: unknown; note?: unknown; tabs?: unknown };
   if (!Array.isArray(v.tabs)) return null;
   const tabs = v.tabs
     .filter((t): t is { title?: unknown; url: string } => !!t && typeof t === 'object' && typeof (t as { url?: unknown }).url === 'string')
@@ -339,7 +345,7 @@ function readPublicShare(value: unknown): PublicShare | null {
     .slice(0, SHARE_MAX_TABS);
   const name = (typeof v.name === 'string' ? v.name.trim() : '').slice(0, 60) || 'Shared folder';
   const color = (TAB_GROUP_COLORS as readonly string[]).includes(v.color as string) ? (v.color as TabGroupColor) : 'grey';
-  return { name, color, tabs };
+  return { name, color, note: cleanFolderNote(v.note), tabs };
 }
 
 function capturedTabFor(url: string, title: string): CapturedTab {
@@ -376,7 +382,7 @@ async function saveShare(id: string): Promise<ExternalAnswer> {
 
   // The Free limits: a 4th folder or more tabs than fit, and nothing is saved.
   if (await freeLimitsNow()) {
-    const folders = await db.folders.where('deletedAt').equals(0).count();
+    const folders = (await listPersonalFolders()).length;
     if (folders >= FREE_LIMITS.folders) {
       throw new CommandError(`Free has ${FREE_LIMITS.folders} folders.`, 'folder-limit', { limit: FREE_LIMITS.folders });
     }
@@ -395,6 +401,8 @@ async function saveShare(id: string): Promise<ExternalAnswer> {
     updatedAt: now,
     deletedAt: 0,
     source: 'import',
+    // The shared folder's note comes along (1.0).
+    ...(share.note ? { note: share.note, noteAt: now } : {}),
   };
   const result = await saveCapture(
     [{ name: '', focused: false, bounds: null, state: null, tabs: share.tabs.map((t) => capturedTabFor(t.url, t.title)) }],

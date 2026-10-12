@@ -72,6 +72,39 @@ export class FakeChrome {
   /** tabs.group throws (for example an organisation policy). */
   groupFails = false;
 
+  /** Every tabs.create call, as asked. */
+  createdTabs: Browser.tabs.CreateProperties[] = [];
+  /** action.setPopup, sidePanel.setPanelBehavior and sidePanel.open calls. */
+  popups: string[] = [];
+  panelBehaviors: boolean[] = [];
+  panelOpens: number[] = [];
+  /** sidePanel.open fails (no user gesture). */
+  panelFails = false;
+
+  /** Put a tab at this index in its window (the others shift). */
+  moveTo(tab: FakeTab, index: number): void {
+    const siblings = this.tabs.filter((t) => t.windowId === tab.windowId && t !== tab).sort((a, b) => a.index - b.index);
+    siblings.splice(Math.max(0, Math.min(index, siblings.length)), 0, tab);
+    siblings.forEach((t, i) => (t.index = i));
+  }
+
+  /** A tab group with these tabs (as Chrome makes them). */
+  makeGroup(tabIds: number[], props: { title?: string; color?: string; collapsed?: boolean } = {}): number {
+    const id = nextGroupId++;
+    const windowId = this.tab(tabIds[0]!)?.windowId ?? -1;
+    this.groups.push({ id, title: props.title ?? '', color: props.color ?? 'grey', collapsed: props.collapsed ?? false, windowId });
+    for (const tabId of tabIds) {
+      const tab = this.tab(tabId);
+      if (tab) tab.groupId = id;
+    }
+    return id;
+  }
+
+  /** Groups left without tabs go, as Chrome's do. */
+  private dropEmptyGroups(): void {
+    this.groups = this.groups.filter((g) => this.tabs.some((t) => t.groupId === g.id));
+  }
+
   openWindow(inputs: TabInput[], extra: Partial<FakeWindow> = {}): { windowId: number; tabIds: number[] } {
     const window: FakeWindow = {
       id: nextWindowId++,
@@ -150,6 +183,7 @@ export class FakeChrome {
     const tab = this.tab(id);
     if (!tab || this.refuseClose.has(id)) return;
     this.tabs = this.tabs.filter((t) => t.id !== id);
+    if (tab.groupId >= 0) this.dropEmptyGroups();
     this.tabs.filter((t) => t.windowId === tab.windowId).sort((a, b) => a.index - b.index).forEach((t, i) => (t.index = i));
     if (!this.tabs.some((t) => t.windowId === tab.windowId)) this.windows = this.windows.filter((w) => w.id !== tab.windowId);
   }
@@ -237,6 +271,8 @@ export class FakeChrome {
         active: !!data.active,
         pinned: !!data.pinned,
       });
+      if (data.index !== undefined) this.moveTo(tab, data.index);
+      this.createdTabs.push(data);
       return this.tabView(tab);
     }) as never);
     vi.spyOn(b.tabs, 'remove').mockImplementation((async (ids: number | number[]) => {
@@ -249,15 +285,44 @@ export class FakeChrome {
       tab.discarded = true;
       return this.tabView(tab);
     }) as never);
-    vi.spyOn(b.tabs, 'group').mockImplementation((async (options: { tabIds: number[]; createProperties?: { windowId?: number } }) => {
+    vi.spyOn(b.tabs, 'group').mockImplementation((async (options: { tabIds: number | number[]; groupId?: number; createProperties?: { windowId?: number } }) => {
       if (this.groupFails) throw new Error('Tab groups are blocked by policy');
-      const id = nextGroupId++;
-      this.groups.push({ id, title: '', color: 'grey', collapsed: false, windowId: options.createProperties?.windowId ?? -1 });
-      for (const tabId of options.tabIds) {
+      const tabIds = Array.isArray(options.tabIds) ? options.tabIds : [options.tabIds];
+      let id = options.groupId;
+      if (id !== undefined) {
+        if (!this.groups.some((g) => g.id === id)) throw new Error(`No group with id: ${id}.`);
+      } else {
+        id = nextGroupId++;
+        this.groups.push({ id, title: '', color: 'grey', collapsed: false, windowId: options.createProperties?.windowId ?? this.tab(tabIds[0]!)?.windowId ?? -1 });
+      }
+      for (const tabId of tabIds) {
         const tab = this.tab(tabId);
         if (tab) tab.groupId = id;
       }
+      this.dropEmptyGroups();
       return id;
+    }) as never);
+    vi.spyOn(b.tabs, 'ungroup').mockImplementation((async (ids: number | number[]) => {
+      for (const id of Array.isArray(ids) ? ids : [ids]) {
+        const tab = this.tab(id);
+        if (tab) tab.groupId = -1;
+      }
+      this.dropEmptyGroups();
+    }) as never);
+    vi.spyOn(b.tabGroups, 'get').mockImplementation((async (id: number) => {
+      const group = this.groups.find((g) => g.id === id);
+      if (!group) throw new Error(`No group with id: ${id}.`);
+      return { ...group };
+    }) as never);
+    vi.spyOn(b.action, 'setPopup').mockImplementation((async (details: { popup: string }) => {
+      this.popups.push(details.popup);
+    }) as never);
+    vi.spyOn(b.sidePanel, 'setPanelBehavior').mockImplementation((async (behavior: { openPanelOnActionClick?: boolean }) => {
+      this.panelBehaviors.push(!!behavior.openPanelOnActionClick);
+    }) as never);
+    vi.spyOn(b.sidePanel, 'open').mockImplementation((async (options: { windowId?: number }) => {
+      if (this.panelFails) throw new Error('`sidePanel.open()` may only be called in response to a user gesture.');
+      this.panelOpens.push(options.windowId ?? -1);
     }) as never);
     vi.spyOn(b.tabGroups, 'query').mockImplementation((async () => {
       if (this.groupsBlocked) throw new Error('Tab groups are blocked by policy');

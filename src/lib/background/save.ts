@@ -28,8 +28,10 @@ import {
 import { singleFlight } from './singleFlight';
 import { takeSnapshot } from './snapshots';
 import { restoreWindows } from './restore';
+import { addToWeeklyNumbers, countFold } from './weeklyNumbers';
+import { copiesOf, placeFoldedTabs } from './foldBack';
 import { ensureRoomFor } from './room';
-import type { RestoreTab, RestoreWindow } from './restorePlan';
+import { refuseToOpen, type RestoreTab, type RestoreWindow } from './restorePlan';
 import { rememberPendingTitles } from './titles';
 
 type SaveCommand = Extract<Command, { type: 'save' }>;
@@ -283,21 +285,39 @@ export async function recordUndo(input: {
   stillOpen: Set<number>;
   /** Tabs already folded that this action changed (moved into a folder, snoozed): Undo puts these back. */
   patches?: LastAction['patches'];
+  /** Tabs this action took out of the list (copies that moved into a team's fold): Undo puts them back (1.0). */
+  putBack?: LastAction['putBack'];
+  /** Tabs this action wrote outside its fold (new copies in a team's fold): Undo removes them (1.0). */
+  alsoRemove?: string[];
+  /** Saved tabs whose rows moved on (into a team's fold): Undo reopens them from these (1.0). */
+  reopenExtra?: NonNullable<LastAction['reopenOnly']>;
+  /** Folders this action made ("Fold into › New folder…"): Undo deletes them again (1.0). */
+  foldersMade?: string[];
+  /** What this action added to the weekly numbers (1.0). */
+  weekly?: LastAction['weekly'];
 }): Promise<string | null> {
   const { result, plan, close, stillOpen } = input;
   const reopenOnly: NonNullable<LastAction['reopenOnly']> = close
-    ? result.skippedTabs
-        .filter((s) => s.tab.sourceTabId === undefined || !stillOpen.has(s.tab.sourceTabId))
-        .map((s) => ({
-          url: s.tab.url,
-          title: s.tab.title,
-          pinned: s.tab.pinned,
-          sourceWindowId: s.sourceWindowId,
-          ...(s.incognito ? { incognito: true as const } : {}),
-        }))
+    ? [
+        ...result.skippedTabs
+          .filter((s) => s.tab.sourceTabId === undefined || !stillOpen.has(s.tab.sourceTabId))
+          .map((s) => ({
+            url: s.tab.url,
+            title: s.tab.title,
+            pinned: s.tab.pinned,
+            sourceWindowId: s.sourceWindowId,
+            ...(s.incognito ? { incognito: true as const } : {}),
+          })),
+        ...(input.reopenExtra ?? []),
+      ]
     : [];
   const patches = input.patches ?? [];
-  if (result.savedTabIds.length === 0 && reopenOnly.length === 0 && patches.length === 0) return null;
+  const putBack = input.putBack?.tabs.length ? input.putBack : undefined;
+  const alsoRemove = input.alsoRemove ?? [];
+  const foldersMade = input.foldersMade ?? [];
+  if (result.savedTabIds.length === 0 && reopenOnly.length === 0 && patches.length === 0 && !putBack && !alsoRemove.length && !foldersMade.length) {
+    return null;
+  }
   const actionId = crypto.randomUUID();
   const notClosedTabIds = [...stillOpen].map((id) => result.tabIdMap.get(id)).filter((id): id is string => !!id);
   const action: LastAction = {
@@ -319,6 +339,10 @@ export async function recordUndo(input: {
     ...(reopenOnly.length ? { reopenOnly } : {}),
     ...(notClosedTabIds.length ? { notClosedTabIds } : {}),
     ...(patches.length ? { patches } : {}),
+    ...(putBack ? { putBack } : {}),
+    ...(alsoRemove.length ? { alsoRemove } : {}),
+    ...(foldersMade.length ? { foldersMade } : {}),
+    ...(input.weekly && (input.weekly.folded || input.weekly.freedBytes) ? { weekly: input.weekly } : {}),
   };
   await lastAction.set(action);
   return actionId;
@@ -339,9 +363,14 @@ export async function recordChangeUndo(change: {
   siteKind?: LastAction['siteKind'];
   /** Tabs this change wrote (a tab moved into or out of a team folder gets a new copy): Undo removes them. */
   savedTabIds?: string[];
+  /** Open tabs this change closed ("Close the copies", 1.0): Undo reopens them where they were. */
+  reopenTabs?: LastAction['reopenTabs'];
+  /** Open tabs this change grouped ("Tidy into groups", 1.0): Undo ungroups them. */
+  ungroupTabIds?: number[];
 }): Promise<string | null> {
   const folderChange = !!change.folders?.length || !!change.foldersMade?.length || !!change.siteKind;
-  if (!change.patches?.length && !change.putBack?.tabs.length && !folderChange && !change.savedTabIds?.length) return null;
+  const openTabsChange = !!change.reopenTabs?.length || !!change.ungroupTabIds?.length;
+  if (!change.patches?.length && !change.putBack?.tabs.length && !folderChange && !change.savedTabIds?.length && !openTabsChange) return null;
   const now = change.now ?? Date.now();
   const action: LastAction = {
     id: crypto.randomUUID(),
@@ -364,6 +393,8 @@ export async function recordChangeUndo(change: {
     ...(change.folders?.length ? { folders: change.folders } : {}),
     ...(change.foldersMade?.length ? { foldersMade: change.foldersMade } : {}),
     ...(change.siteKind ? { siteKind: change.siteKind } : {}),
+    ...(change.reopenTabs?.length ? { reopenTabs: change.reopenTabs } : {}),
+    ...(change.ungroupTabIds?.length ? { ungroupTabIds: change.ungroupTabIds } : {}),
   };
   await lastAction.set(action);
   return action.id;
@@ -442,23 +473,46 @@ export function handleSave(command: SaveCommand): Promise<SaveOutcome> {
       await rememberPendingTitles(pending).catch(() => undefined);
     }
 
+    // Folding tabs ("Fold this tab"): a tab in a folder's group goes back into that folder (1.0).
+    const placed = command.close
+      ? await placeFoldedTabs({ plan, windows, groups: await getGroups(), result, existingCopies: await copiesOf(result), now })
+      : null;
+
     let closedTabs = 0;
     let failedToClose: TabRef[] = [];
     let freedBytes = 0;
     let newTabsLeftOpen = 0;
     const stillOpen = new Set<number>();
+    let weekly: LastAction['weekly'];
     if (command.close) {
       const outcome = await closeTabsSafely(plan.closeTabIds, plannedTabs(plan, windows));
       closedTabs = outcome.closed;
       newTabsLeftOpen = outcome.newTabsLeftOpen;
       for (const tab of outcome.failed) stillOpen.add(tab.id!);
-      freedBytes = estimateBytes(
-        plan.closeTabIds.filter((id) => byId.has(id) && !byId.get(id)!.discarded && !stillOpen.has(id)).length,
-      );
+      const freedIds = plan.closeTabIds.filter((id) => byId.has(id) && !byId.get(id)!.discarded && !stillOpen.has(id));
+      freedBytes = estimateBytes(freedIds.length);
       failedToClose = outcome.failed.map((t) => refusedRef(t, byId));
+      // The weekly summary: normal tabs only, never Incognito.
+      const incognitoFolded = plan.windows.filter((w) => w.incognito).reduce((n, w) => n + w.tabs.length, 0);
+      weekly = {
+        at: now,
+        folded: Math.max(0, result.savedTabIds.length + result.skippedDuplicates - incognitoFolded),
+        freedBytes: estimateBytes(freedIds.filter((id) => !byId.get(id)!.incognito).length),
+      };
     }
 
-    const actionId = await recordUndo({ result, plan, now, close: command.close, closedTabs, freedBytes, stillOpen });
+    const actionId = await recordUndo({
+      result,
+      plan,
+      now,
+      close: command.close,
+      closedTabs,
+      freedBytes,
+      stillOpen,
+      ...(placed ? { patches: placed.patches, putBack: placed.putBack, alsoRemove: placed.alsoRemove, reopenExtra: placed.reopenOnly } : {}),
+      weekly,
+    });
+    if (weekly) await countFold(weekly.folded, weekly.freedBytes, now);
 
     return {
       sessionId: result.sessionId || null,
@@ -533,9 +587,57 @@ export async function handleUndo(actionId: string): Promise<{ undone: boolean; r
   }
   if (action.createdSession) await deleteSessionsForever([action.sessionId]);
   else if (action.savedTabIds.length) await removeTabs(action.savedTabIds);
+  if (action.alsoRemove?.length) await removeTabs(action.alsoRemove);
   // Folders and site kinds first, so tabs put back into a folder find it there.
   if (action.folders?.length || action.foldersMade?.length || action.siteKind) await undoFolderChanges(action);
   if (action.patches?.length) await applyPatches(action.patches);
   if (action.putBack?.tabs.length) await putBackTabs(action.putBack);
+  if (action.reopenTabs?.length) await reopenClosedTabs(action.reopenTabs);
+  if (action.ungroupTabIds?.length) await ungroupTabs(action.ungroupTabIds);
+  if (action.weekly) await addToWeeklyNumbers({ folded: -action.weekly.folded, freedBytes: -action.weekly.freedBytes }, action.weekly.at);
   return { undone: true };
+}
+
+/**
+ * Undo of "Close the copies": each tab opens again in its window at its place, in the background,
+ * pinned and in its group as it was when that's still possible (a new window when its window is gone).
+ */
+async function reopenClosedTabs(tabs: NonNullable<LastAction['reopenTabs']>): Promise<void> {
+  const origin = ownOrigin();
+  const newWindows = new Map<string, number>();
+  const sorted = [...tabs].sort((a, b) => a.windowId - b.windowId || a.index - b.index);
+  for (const item of sorted) {
+    if (refuseToOpen(item.url, origin)) continue;
+    const incognito = item.incognito === true;
+    try {
+      let windowId: number | undefined = (await windowExists(item.windowId, incognito)) ? item.windowId : undefined;
+      if (windowId === undefined) {
+        const key = `${item.windowId}`;
+        windowId = newWindows.get(key);
+        if (windowId === undefined) {
+          const created = await browser.windows.create({ url: item.url, focused: false, incognito });
+          if (created?.id !== undefined) newWindows.set(key, created.id);
+          continue;
+        }
+      }
+      const created = await browser.tabs.create({ windowId, url: item.url, active: false, index: item.index, pinned: item.pinned });
+      if (created.id !== undefined && item.groupId !== undefined && item.groupId >= 0 && !item.pinned) {
+        await browser.tabs.group({ groupId: item.groupId, tabIds: [created.id] }).catch(() => undefined);
+      }
+    } catch {
+      // One that can't open doesn't stop the others.
+    }
+  }
+}
+
+/** Undo of "Tidy into groups": the tabs leave the groups it made (those still open). */
+async function ungroupTabs(tabIds: number[]): Promise<void> {
+  const open = new Set((await browser.tabs.query({})).map((t) => t.id));
+  const ids = tabIds.filter((id) => open.has(id));
+  if (ids.length === 0) return;
+  try {
+    await browser.tabs.ungroup(ids as [number, ...number[]]);
+  } catch {
+    for (const id of ids) await browser.tabs.ungroup(id).catch(() => undefined);
+  }
 }

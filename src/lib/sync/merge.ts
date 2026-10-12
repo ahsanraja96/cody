@@ -7,6 +7,7 @@ import {
   compareRecords,
   DELETED_FOLDER_TTL_MS,
   encodeFolderItem,
+  encodeNoteItem,
   isSyncable,
   MAX_SHARED_SITE_KINDS,
   pack,
@@ -22,6 +23,7 @@ import {
   type SharedFolders,
   type SyncFolder,
   type SyncLimits,
+  type SyncNote,
   type SyncRecord,
   type SyncSiteKind,
   type Tombstone,
@@ -67,7 +69,7 @@ export interface LocalFolders {
 
 export interface SyncPlanInput {
   local: LocalTab[];
-  remote: Pick<RemoteState, 'records' | 'tombstones' | 'floor'> & Partial<Pick<RemoteState, 'folders'>>;
+  remote: Pick<RemoteState, 'records' | 'tombstones' | 'floor'> & Partial<Pick<RemoteState, 'folders' | 'notes'>>;
   /** Shared tabs that were on this computer after the last run: sync id -> urlKey. */
   known: Record<string, string>;
   /** Tombstones this computer wrote (sync id -> time), so putting a tab back takes them back. */
@@ -114,6 +116,8 @@ export interface FolderMerge {
   shared: SharedFolders;
   /** Deleted folders (id → when), after the merge. */
   deleted: Map<string, number>;
+  /** What `tf.n` shares (1.0): the newest note per live folder, and recent removals. */
+  notes: SyncNote[];
 }
 
 export interface SyncPlan {
@@ -211,10 +215,36 @@ function toSyncFolder(folder: FolderRecord): SyncFolder {
     order: folder.order,
     updatedAt: toSyncTime(folder.updatedAt),
     deletedAt: folder.deletedAt ? Math.max(1000, toSyncTime(folder.deletedAt)) : 0,
+    ...(folder.starredAt && folder.starredAt > 0 ? { starredAt: Math.max(1000, toSyncTime(folder.starredAt)) } : {}),
   };
 }
 
-const folderText = (f: SyncFolder) => JSON.stringify([f.id, f.name, f.color, f.order, f.updatedAt, f.deletedAt]);
+const folderText = (f: SyncFolder) => JSON.stringify([f.id, f.name, f.color, f.order, f.updatedAt, f.deletedAt, f.starredAt ?? 0]);
+
+/**
+ * The same folder, but an older Tabfold (0.6, which doesn't know field [6]) wrote it back without
+ * its star: same change time, same everything else, no star.
+ */
+function lostItsStar(mine: SyncFolder, theirs: SyncFolder): boolean {
+  return (
+    !!mine.starredAt &&
+    !theirs.starredAt &&
+    folderText({ ...mine, starredAt: 0 }) === folderText({ ...theirs, starredAt: 0 })
+  );
+}
+
+const noteText = (n: SyncNote) => JSON.stringify([n.note, n.noteAt]);
+
+/** The newer of two notes for one folder (the latest change); on a tie, the same choice on every computer. */
+function pickNote(a: SyncNote, b: SyncNote): SyncNote {
+  if (a.noteAt !== b.noteAt) return a.noteAt > b.noteAt ? a : b;
+  return a.note >= b.note ? a : b;
+}
+
+function noteOf(folder: FolderRecord): SyncNote | null {
+  if (!folder.noteAt || folder.noteAt <= 0) return null;
+  return { folderId: folder.id, note: folder.note ?? '', noteAt: Math.max(1000, toSyncTime(folder.noteAt)) };
+}
 
 /** The newer folder (the latest change); on a tie, the same choice on every computer. */
 function pickFolder(a: SyncFolder, b: SyncFolder): SyncFolder {
@@ -234,9 +264,17 @@ function sortedJson(value: Record<string, unknown>): string {
 /**
  * Merge this computer's folders and site kinds with the shared `tf.f`: per folder and per site the
  * newest change wins. Deleted folders are shared for 30 days, then dropped everywhere. Folders last
- * changed before "Clear all data" (`floor`) are no longer shared nor brought in.
+ * changed before "Clear all data" (`floor`) are no longer shared nor brought in. A folder's star
+ * (1.0) is part of the folder; its note travels apart (`tf.n`, `remoteNotes`): the newest note wins
+ * per folder, and a removed note ('') is shared for 30 days.
  */
-export function mergeFolders(local: LocalFolders, remote: SharedFolders | null, now: number, floor = 0): FolderMerge {
+export function mergeFolders(
+  local: LocalFolders,
+  remote: SharedFolders | null,
+  now: number,
+  floor = 0,
+  remoteNotes: readonly SyncNote[] | null = null,
+): FolderMerge {
   const expired = (f: SyncFolder) => f.deletedAt > 0 && f.deletedAt < now - DELETED_FOLDER_TTL_MS;
   const cleared = (f: SyncFolder) => f.updatedAt <= floor;
   const localById = new Map(local.folders.map((f) => [f.id, f]));
@@ -253,6 +291,12 @@ export function mergeFolders(local: LocalFolders, remote: SharedFolders | null, 
     const usable = (f: SyncFolder | undefined) => (f && !expired(f) && !cleared(f) ? f : undefined);
     const a = usable(mine);
     const b = usable(theirs);
+    if (a && b && lostItsStar(a, b)) {
+      // Keep the star here, and share the copy as it is: the two versions never take turns rewriting it.
+      shared.push(b);
+      if (b.deletedAt) deleted.set(id, b.deletedAt);
+      continue;
+    }
     const winner = a && b ? pickFolder(a, b) : (a ?? b);
     if (!winner) {
       // Deleted more than 30 days ago: gone here too.
@@ -262,17 +306,41 @@ export function mergeFolders(local: LocalFolders, remote: SharedFolders | null, 
     shared.push(winner);
     if (winner.deletedAt) deleted.set(id, winner.deletedAt);
     if (winner === b && (!mine || folderText(mine) !== folderText(winner))) {
+      const { starredAt: _star, ...base } = (here ?? { createdAt: winner.updatedAt }) as FolderRecord;
       write.push({
-        ...(here ?? { createdAt: winner.updatedAt }),
+        ...base,
         id,
         name: winner.name,
         color: winner.color,
         order: winner.order,
         updatedAt: winner.updatedAt,
         deletedAt: winner.deletedAt,
+        ...(winner.starredAt ? { starredAt: winner.starredAt } : {}),
       } as FolderRecord);
     }
   }
+
+  // Notes: the newest per folder. One that came from elsewhere is written to its folder here.
+  const usableNote = (n: SyncNote | null | undefined) => (n && n.noteAt > floor ? n : undefined);
+  const theirNotes = new Map((remoteNotes ?? []).map((n) => [n.folderId, n]));
+  const sharedIds = new Map(shared.map((f) => [f.id, f]));
+  const writeById = new Map(write.map((f) => [f.id, f]));
+  const notes: SyncNote[] = [];
+  for (const id of new Set([...local.folders.filter((f) => f.noteAt).map((f) => f.id), ...theirNotes.keys()])) {
+    const here = localById.get(id);
+    const mine = usableNote(here ? noteOf(here) : null);
+    const theirs = usableNote(theirNotes.get(id));
+    const winner = mine && theirs ? pickNote(mine, theirs) : (mine ?? theirs);
+    if (!winner) continue;
+    const folder = sharedIds.get(id);
+    // Shared while its folder is live; a removal only for 30 days.
+    if (folder && !folder.deletedAt && !(winner.note === '' && winner.noteAt < now - DELETED_FOLDER_TTL_MS)) notes.push(winner);
+    if (winner === theirs && (!mine || noteText(mine) !== noteText(winner))) {
+      const base = writeById.get(id) ?? here;
+      if (base) writeById.set(id, { ...base, note: winner.note, noteAt: winner.noteAt });
+    }
+  }
+  write.splice(0, write.length, ...writeById.values());
   // Deleted here, never shared (or no longer): its tabs still leave it.
   for (const folder of local.folders) if (folder.deletedAt && !deleted.has(folder.id)) deleted.set(folder.id, toSyncTime(folder.deletedAt));
 
@@ -303,7 +371,7 @@ export function mergeFolders(local: LocalFolders, remote: SharedFolders | null, 
     .sort((a, b) => b.at - a.at || (a.host < b.host ? -1 : a.host > b.host ? 1 : 0))
     .slice(0, MAX_SHARED_SITE_KINDS);
 
-  return { write, drop, kinds, removals, kindsChanged, shared: { folders: shared, kinds: sharedKinds }, deleted };
+  return { write, drop, kinds, removals, kindsChanged, shared: { folders: shared, kinds: sharedKinds }, deleted, notes };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -342,7 +410,7 @@ export function planSync(input: SyncPlanInput): SyncPlan {
   const room = input.room ?? Number.POSITIVE_INFINITY;
 
   // Folders first: a tab in a folder deleted anywhere goes back to its kind of site.
-  const folders = input.folders ? mergeFolders(input.folders, input.remote.folders ?? null, now, floor) : null;
+  const folders = input.folders ? mergeFolders(input.folders, input.remote.folders ?? null, now, floor, input.remote.notes ?? null) : null;
   const deletedFolders = folders?.deleted ?? new Map<string, number>();
 
   // This computer's folded tabs, by sync id and by address.
@@ -481,7 +549,8 @@ export function planSync(input: SyncPlanInput): SyncPlan {
   for (const view of live) offer(view.record, view.key);
   for (const record of waiting) offer(record, urlKey(record.url));
   const folderItem = folders ? encodeFolderItem(folders.shared, limits) : null;
-  const packed = pack([...winners.values()], tombstones, { floor, budgetFactor: input.budgetFactor, limits, folderItem });
+  const noteItem = folders ? encodeNoteItem(folders.notes, limits) : null;
+  const packed = pack([...winners.values()], tombstones, { floor, budgetFactor: input.budgetFactor, limits, folderItem, noteItem });
 
   const known: Record<string, string> = {};
   const sharedKeys = new Set<string>();
