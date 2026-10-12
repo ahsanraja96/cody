@@ -27,6 +27,18 @@ describe('findOpenCopies', () => {
     expect(copies).toEqual({ pages: 0, extra: 0, groups: [] });
   });
 
+  it('keeps the copy the person looked at last, not one that only opened in the background since', () => {
+    const tabs = [
+      { id: 1, url: 'https://a.com/x', lastAccessed: 100 },
+      { id: 2, url: 'https://a.com/x', lastAccessed: 200 },
+      { id: 3, url: 'https://a.com/x', lastAccessed: 300 },
+    ];
+    // Copy 2 was looked at; copy 3 just opened in the background (Chrome stamps it newest).
+    expect(findOpenCopies(tabs, { 2: 150 }).groups[0]).toMatchObject({ keepTabId: 2, closeTabIds: [3, 1] });
+    // Without anything looked at, Chrome's lastAccessed decides.
+    expect(findOpenCopies(tabs).groups[0]?.keepTabId).toBe(3);
+  });
+
   it('never counts an Incognito tab as a copy of a normal one', () => {
     expect(findOpenCopies([{ id: 1, url: 'https://a.com/' }, { id: 2, url: 'https://a.com/', incognito: true }]).pages).toBe(0);
   });

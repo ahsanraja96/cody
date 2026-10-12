@@ -2,7 +2,7 @@ import type { FolderRecord } from './types';
 
 /**
  * Starred folders and "Fold into" order (1.0), for the worker and the pages alike (pure; no React,
- * no storage). `src/ui/hooks.ts` has the same `foldIntoOrder` for the screens.
+ * no storage). `src/ui/hooks.ts` re-exports it for the screens, so both use the same order.
  */
 
 /** Is this folder starred for this person: a personal folder's `starredAt`, or a team folder's own star? */

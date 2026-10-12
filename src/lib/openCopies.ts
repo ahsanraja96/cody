@@ -32,11 +32,12 @@ export interface OpenCopies {
 
 /**
  * Web pages open in more than one tab (the same address, ignoring a trailing slash; Incognito and
- * normal tabs never count as copies of each other). The copy that stays is the one looked at last
- * (the active tab first); pinned tabs and tabs playing sound are never closed. Pure: the screens
- * count with it and the worker closes with it.
+ * normal tabs never count as copies of each other). The copy that stays is the one looked at last:
+ * the active tab first, then the latest in `lookedAt` (tab id → when the person last activated it;
+ * a copy never looked at counts as oldest), then Chrome's `lastAccessed`. Pinned tabs and tabs
+ * playing sound are never closed. Pure: the screens count with it and the worker closes with it.
  */
-export function findOpenCopies(tabs: readonly OpenTabLike[]): OpenCopies {
+export function findOpenCopies(tabs: readonly OpenTabLike[], lookedAt: Readonly<Record<string, number>> = {}): OpenCopies {
   const byPage = new Map<string, OpenTabLike[]>();
   for (const tab of tabs) {
     const url = tab.url || tab.pendingUrl || '';
@@ -52,6 +53,7 @@ export function findOpenCopies(tabs: readonly OpenTabLike[]): OpenCopies {
     const ranked = [...list].sort(
       (a, b) =>
         Number(!!b.active) - Number(!!a.active) ||
+        (lookedAt[String(b.id)] ?? 0) - (lookedAt[String(a.id)] ?? 0) ||
         (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0) ||
         (a.id ?? 0) - (b.id ?? 0),
     );

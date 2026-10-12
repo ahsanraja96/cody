@@ -9,6 +9,7 @@ import { weekKey } from '../weekly';
 import { scheduleWindowCap } from './automation';
 import { getNormalWindows, sleep } from './browserState';
 import { forgetGroupFolder, rememberTidyGroups } from './foldBack';
+import { forgetTabLookedAt, noteTabLookedAt, replaceTabLookedAt, tabsLookedAt } from './lookedAt';
 import { forgetOpenedByTabfold, replaceOpenedByTabfold } from './openedByTabfold';
 import { noteClosingByTabfold, recordChangeUndo, stillOpen } from './save';
 import { scheduleNamedWindowsRefresh, setWindowName } from './windowNames';
@@ -50,7 +51,7 @@ async function openWindow(windowId: number): Promise<Browser.windows.Window> {
 export async function closeCopies(windowId?: number): Promise<{ closed: number; actionId: string | null }> {
   const windows = windowId !== undefined ? [await openWindow(windowId)] : await getNormalWindows();
   const tabs = windows.flatMap((w) => w.tabs ?? []);
-  const copies = findOpenCopies(tabs);
+  const copies = findOpenCopies(tabs, await tabsLookedAt());
   const ids = copies.groups.flatMap((g) => g.closeTabIds);
   if (ids.length === 0) return { closed: 0, actionId: null };
   const byId = new Map(tabs.map((t) => [t.id!, t]));
@@ -159,10 +160,18 @@ export function setupWindows(): void {
   browser.tabs.onRemoved.addListener((id, info) => {
     if (!info.isWindowClosing) scheduleNamedWindowsRefresh();
     void forgetOpenedByTabfold(id);
+    void forgetTabLookedAt(id);
   });
-  // A tab Tabfold opened counts toward a window's cap once the person looks at it.
-  browser.tabs.onActivated.addListener(({ tabId }) => void forgetOpenedByTabfold(tabId));
-  browser.tabs.onReplaced.addListener((added, removed) => void replaceOpenedByTabfold(added, removed));
+  // A tab Tabfold opened counts toward a window's cap once the person looks at it; "Close the
+  // copies" keeps the copy looked at last.
+  browser.tabs.onActivated.addListener(({ tabId }) => {
+    void forgetOpenedByTabfold(tabId);
+    void noteTabLookedAt(tabId);
+  });
+  browser.tabs.onReplaced.addListener((added, removed) => {
+    void replaceOpenedByTabfold(added, removed);
+    void replaceTabLookedAt(added, removed);
+  });
   browser.tabs.onUpdated.addListener((_id, change) => {
     if (change.url) scheduleNamedWindowsRefresh();
   });

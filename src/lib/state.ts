@@ -541,9 +541,22 @@ export const openedByTabfold = {
   set: (value: number[]) => browser.storage.session.set({ [OPENED_BY_TABFOLD]: value }),
 };
 
+/**
+ * When the person last looked at each open tab (activated it), by tab id: "Close the copies" keeps
+ * the copy looked at last. Chrome's own `lastAccessed` also moves when a tab opens in the background,
+ * so it can't tell a copy you read from one that just opened. Session storage (tab ids end with the
+ * browser session).
+ */
+const TAB_LOOKED_AT = 'tabLookedAt';
+export const tabLookedAt = {
+  get: async (): Promise<Record<string, number>> =>
+    ((await browser.storage.session.get(TAB_LOOKED_AT))[TAB_LOOKED_AT] as Record<string, number> | undefined) ?? {},
+  set: (value: Record<string, number>) => browser.storage.session.set({ [TAB_LOOKED_AT]: value }),
+};
+
 /** What 1.0 keeps on this computer outside IndexedDB, in local and session storage. */
 export const LOCAL_1_0_KEYS = [NAMED_WINDOWS, WEEKLY_STATS, WEEKLY_SUMMARY_SEEN, RECENT_FOLDERS, STARRED_TEAM_FOLDERS] as const;
-export const SESSION_1_0_KEYS = [WINDOW_NAMES, GROUP_FOLDERS, PENDING_FOLD_INTO, TIDY_GROUPS, OPENED_BY_TABFOLD, 'foldIntoMenu', 'foldIntoMenuShown'] as const;
+export const SESSION_1_0_KEYS = [WINDOW_NAMES, GROUP_FOLDERS, PENDING_FOLD_INTO, TIDY_GROUPS, OPENED_BY_TABFOLD, TAB_LOOKED_AT, 'foldIntoMenu', 'foldIntoMenuShown'] as const;
 
 /**
  * "Clear everything": the window names, the weekly numbers, recently used folders, team folders'
