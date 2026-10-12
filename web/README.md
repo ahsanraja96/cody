@@ -1,16 +1,19 @@
 # Tabfold's public site
 
-A few static files, with no build step: the home page (`index.html`) and the page people see when
-someone shares a folder with them (`s.html`, at `/s/<id>`). The shared folder page asks the Tabfold
-server for the folder (`GET <API_URL>/public/shares/<id>`) and shows its name and pages.
+A few static files, with no build step: the home page (`index.html`), the page people see when
+someone shares a folder with them (`s.html`, at `/s/<id>`), and the privacy policy and terms
+(`/privacy` and `/terms`, which the Chrome Web Store listing and Tabfold's settings link to). The
+shared folder page asks the Tabfold server for the folder (`GET <API_URL>/public/shares/<id>`) and
+shows its name, its note (when it has one) and its pages.
 
 | File | What it is |
 | --- | --- |
 | `index.html`, `home.js` | The home page: what Tabfold is, and a link to the Chrome Web Store. |
-| `s.html`, `s.js` | A shared folder: Open all, Copy links, the pages, and Save to my Tabfold. |
+| `s.html`, `s.js` | A shared folder: its name and note, Open all, Copy links, the pages, and Save to my Tabfold. |
+| `privacy.html`, `terms.html` | The privacy policy and terms. Fill in the placeholders first (below). |
 | `style.css`, `favicon.svg` | Looks, light and dark (it follows the visitor's system). |
 | `config.js` | The three settings below. Edit it before you deploy. |
-| `_redirects` | Sends every `/s/<id>` to `s.html` (Netlify reads it). |
+| `_redirects` | Sends every `/s/<id>` to `s.html`, and `/privacy` and `/terms` to their pages (Netlify reads it). |
 | `_headers` | Security headers, and keeps shared folders out of search engines (Netlify reads it). |
 
 ## Settings (`config.js`)
@@ -22,6 +25,15 @@ server for the folder (`GET <API_URL>/public/shares/<id>`) and shows its name an
 | `STORE_URL` | Tabfold's page on the Chrome Web Store. |
 
 Nothing in `config.js` is secret: anyone can read it.
+
+## Before you publish: the privacy policy and terms
+
+`privacy.html` and `terms.html` have placeholders, highlighted on the page, for you to replace with
+your own details: `[Company or owner name]`, `[Contact email]`, `[Effective date]`,
+`[Country/State for governing law]` (terms) and `[Server region]` (privacy: the region of your
+Supabase project, **Project Settings → General**). Search the two files for `class="placeholder"`,
+replace each `<span class="placeholder">[…]</span>` with plain text, and read both pages through:
+they describe what Tabfold 1.0 does, and they're plain-language drafts, not legal advice.
 
 ## Deploy to Netlify
 

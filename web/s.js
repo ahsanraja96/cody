@@ -105,7 +105,13 @@
     return svg;
   }
 
-  /** The server's answer, checked: a name, a known colour, and pages with http(s) addresses. */
+  /** A folder's note: one line, at most 140 characters (the server already sends it so). */
+  function readNote(value) {
+    if (typeof value !== 'string') return '';
+    return Array.from(value.replace(/\s+/g, ' ').trim()).slice(0, 140).join('').trim();
+  }
+
+  /** The server's answer, checked: a name, a known colour, pages with http(s) addresses, and the note. */
   function readShare(json) {
     if (!json || typeof json !== 'object' || typeof json.name !== 'string' || !Array.isArray(json.tabs)) return null;
     var tabs = [];
@@ -121,12 +127,16 @@
       color: COLORS.indexOf(json.color) >= 0 ? json.color : 'grey',
       tabs: tabs,
       updatedAt: json.updatedAt,
+      note: readNote(json.note),
     };
   }
 
   function render() {
     document.title = share.name + ' · Tabfold';
     $('name').textContent = share.name;
+    // Under the name, only when the folder has one. Text only, like everything else here.
+    $('note').textContent = share.note;
+    $('note').hidden = !share.note;
     $('folder-icon').className = 'folder-icon cg-' + share.color;
     var count = share.tabs.length;
     $('meta').textContent = [plural(count, 'page', 'pages'), updated(share.updatedAt)].filter(Boolean).join(' · ');

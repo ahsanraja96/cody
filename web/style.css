@@ -1,4 +1,5 @@
-/* Tabfold's public pages (the Mx-Share board's "What people see"). Light and dark follow the system. */
+/* Tabfold's public pages (the Mx-Share board's "What people see"; 1.0: a folder's note, the privacy
+   policy and terms). Light and dark follow the system. */
 
 :root {
   color-scheme: light dark;
@@ -18,6 +19,8 @@
   --red: #c42f2a;
   --skeleton: #ededf0;
   --shadow: 0 1px 2px rgba(16, 16, 20, 0.04), 0 8px 24px rgba(16, 16, 20, 0.08);
+  --mark: #fdf0c4;
+  --mark-text: #6b4a00;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -37,6 +40,8 @@
     --red: #f27a75;
     --skeleton: #26262b;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.4);
+    --mark: #3d3214;
+    --mark-text: #f5d77a;
   }
 }
 
@@ -188,10 +193,22 @@ svg {
   color: var(--cg);
 }
 
+.note {
+  margin: 6px 0 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
 .meta {
   margin: 4px 0 14px;
   font-size: 12px;
   color: var(--text-3);
+}
+
+.note + .meta {
+  margin-top: 6px;
 }
 
 .actions {
@@ -414,6 +431,169 @@ svg {
   font-weight: 600;
 }
 
+/* ---- The footer: the privacy policy and terms ---- */
+
+.site-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 32px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.site-foot a {
+  color: var(--text-2);
+  text-decoration: none;
+}
+
+.site-foot a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.sheet > .card + .site-foot,
+.sheet > .notice + .site-foot {
+  justify-content: center;
+  margin-top: 20px;
+}
+
+/* ---- The privacy policy and terms ---- */
+
+.doc {
+  max-width: 720px;
+}
+
+.doc h1 {
+  margin: 0 0 6px;
+  font-size: 30px;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.doc .dated {
+  margin: 0 0 24px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.doc h2 {
+  margin: 36px 0 8px;
+  font-size: 18px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.doc h3 {
+  margin: 22px 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.doc p,
+.doc li {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+
+.doc p {
+  margin: 0 0 12px;
+}
+
+.doc ul {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+
+.doc li {
+  margin: 0 0 6px;
+}
+
+.doc b,
+.doc strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.doc code {
+  font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--hover);
+  color: var(--text);
+}
+
+.doc .summary {
+  margin: 0 0 8px;
+  padding: 16px 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.doc .summary h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.doc .summary ul {
+  margin: 0;
+}
+
+.doc .summary li:last-child {
+  margin-bottom: 0;
+}
+
+.doc .table-wrap {
+  margin: 4px 0 16px;
+  overflow-x: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.doc table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.doc th,
+.doc td {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  color: var(--text-2);
+}
+
+.doc thead th {
+  border-top: 0;
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.doc td:first-child {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* What the owner fills in before publishing: hard to miss. */
+.placeholder {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--mark);
+  color: var(--mark-text);
+  font-weight: 600;
+}
+
 /* ---- Phones ---- */
 
 @media (max-width: 600px) {
@@ -453,6 +633,14 @@ svg {
 
   .home h1 {
     font-size: 26px;
+  }
+
+  .doc h1 {
+    font-size: 26px;
+  }
+
+  .doc td:first-child {
+    white-space: normal;
   }
 
   .brand {
