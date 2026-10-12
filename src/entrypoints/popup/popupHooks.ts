@@ -146,7 +146,10 @@ export function useFold() {
   }
 
   /** Fold every window, or one (`windowId`); `total` is how many tabs that should fold, for the progress shown first. */
-  const start = async (options: { windowId?: number; keepWindowOpen?: boolean; tabIds?: number[]; intoFolderId?: string }, total: number) => {
+  const start = async (
+    options: { windowId?: number; keepWindowOpen?: boolean; tabIds?: number[]; intoFolderId?: string; newFolderName?: string },
+    total: number,
+  ) => {
     const startedAt = Date.now();
     const pending: ActiveFold = {
       foldId: `local-${startedAt}`,

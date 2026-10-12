@@ -354,7 +354,7 @@ function Preview({ result, tabs, folders, onClose }: { result: OrganiseResult; t
       <div className="mx-6 flex items-center gap-2 rounded-control bg-bg-subtle px-3 py-2 text-small text-text-2">
         <ShieldCheck size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-text-3" />
         <span>
-          Only titles and addresses were sent, never page content.
+          Only titles and sites were sent, never page content.
           {result.notSent > 0 && ` ${count(result.notSent, 'older or Incognito tab')} ${result.notSent === 1 ? 'wasn’t' : 'weren’t'} sent.`}
         </span>
       </div>
@@ -578,7 +578,7 @@ function Teaser({ onClose }: { onClose: () => void }) {
         )}
       </div>
       <p className="m-0 text-meta text-text-3">
-        {offerTrial ? 'No card needed. ' : ''}Only titles and addresses are sent, never page content.
+        {offerTrial ? 'No card needed. ' : ''}Only titles and sites are sent, never page content.
       </p>
     </div>
   );

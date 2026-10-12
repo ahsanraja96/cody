@@ -7,6 +7,7 @@ import { personalFolders, teamFolders } from '@/lib/teams';
 import type { FolderRecord, TabRecord } from '@/lib/types';
 import { AvatarStack } from '@/ui/components/Avatars';
 import { ColorDot, FolderIcon } from '@/ui/components/FolderIcon';
+import { StarMark } from '@/ui/components/Star';
 import { cx } from '@/ui/cx';
 import { nextFolderColor, type TabGroup } from '@/ui/folders';
 import { hasFreeLimits, type TeamView } from '@/ui/hooks';
@@ -210,6 +211,7 @@ export function Sidebar({
   team,
   target,
   onJump,
+  isStarred,
 }: {
   snoozed: number;
   folders: readonly FolderRecord[];
@@ -223,6 +225,8 @@ export function Sidebar({
   team?: TeamView;
   target: DropTarget;
   onJump: (id: string) => void;
+  /** Starred folders get a small filled star (1.0); they come first already. */
+  isStarred?: (folder: FolderRecord) => boolean;
 }) {
   const creating = useLibraryUi((s) => s.creating);
   const setCreating = useLibraryUi((s) => s.setCreating);
@@ -286,7 +290,14 @@ export function Sidebar({
             active={group.id === current}
             icon={<FolderIcon color={group.color} size={15} />}
             n={group.items.length}
-            extra={liveFolders[folder.id] ? <span aria-label="Live" role="img" className="size-1.5 shrink-0 rounded-full bg-green" /> : undefined}
+            extra={
+              liveFolders[folder.id] || isStarred?.(folder) ? (
+                <>
+                  {liveFolders[folder.id] && <span aria-label="Live" role="img" className="size-1.5 shrink-0 rounded-full bg-green" />}
+                  {isStarred?.(folder) && <StarMark size={10} />}
+                </>
+              ) : undefined
+            }
             target={target}
             onJump={onJump}
             onRename={() => setRenaming({ id: folder.id, where: 'side' })}
@@ -332,7 +343,14 @@ export function Sidebar({
                 active={group.id === current}
                 icon={<FolderIcon color={group.color} size={15} />}
                 n={group.items.length}
-                extra={liveFolders[folder.id] ? <span aria-label="Live" role="img" className="size-1.5 shrink-0 rounded-full bg-green" /> : undefined}
+                extra={
+              liveFolders[folder.id] || isStarred?.(folder) ? (
+                <>
+                  {liveFolders[folder.id] && <span aria-label="Live" role="img" className="size-1.5 shrink-0 rounded-full bg-green" />}
+                  {isStarred?.(folder) && <StarMark size={10} />}
+                </>
+              ) : undefined
+            }
                 target={target}
                 onJump={onJump}
                 onRename={() => setRenaming({ id: folder.id, where: 'side' })}

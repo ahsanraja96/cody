@@ -224,6 +224,7 @@ export function useOpenWindows(
         change.audible !== undefined ||
         change.pinned !== undefined ||
         change.favIconUrl !== undefined ||
+        change.groupId !== undefined ||
         change.status === 'complete'
       ) {
         schedule();
@@ -239,6 +240,7 @@ export function useOpenWindows(
       browser.tabs.onHighlighted,
       browser.windows.onCreated,
       browser.windows.onRemoved,
+      browser.windows.onFocusChanged,
     ] as Array<{ addListener: (fn: () => void) => void; removeListener: (fn: () => void) => void }>;
     for (const event of events) event.addListener(schedule);
     browser.tabs.onUpdated.addListener(onUpdated);
@@ -599,7 +601,8 @@ export function useStarredTeamFolders(): Record<string, number> {
 
 /** Is this folder starred for this person (a personal folder's `starredAt`, or a team folder's own star)? */
 export function isStarred(folder: FolderRecord, teamStars: Readonly<Record<string, number>>): boolean {
-  return folder.teamId ? !!teamStars[folder.id] : !!folder.starredAt;
+  // The worker's own rule (src/lib/folderOrder.ts), so the screens and the right-click menu agree.
+  return folderStarred(folder, teamStars);
 }
 
 /** Last week's summary to show now ("Last week you folded 340 tabs…"), or null. */
@@ -628,19 +631,70 @@ export function usePendingFoldInto(): PendingFoldInto | undefined {
 
 /**
  * The folders "Fold into" offers, in order: starred first, then used lately (newest first), then
- * the rest by their order. Personal and team folders alike (a team folder shares what goes in).
+ * the rest by their order. The worker's own order (src/lib/folderOrder.ts), re-exported.
  */
-export function foldIntoOrder(
-  folders: readonly FolderRecord[],
-  teamStars: Readonly<Record<string, number>>,
-  recent: Readonly<Record<string, number>>,
-): FolderRecord[] {
-  const live = folders.filter((f) => !f.deletedAt);
-  const star = (f: FolderRecord) => (f.teamId ? (teamStars[f.id] ?? 0) : (f.starredAt ?? 0));
-  return [...live].sort(
-    (a, b) =>
-      Number(star(b) > 0) - Number(star(a) > 0) ||
-      (recent[b.id] ?? 0) - (recent[a.id] ?? 0) ||
-      a.order - b.order,
-  );
+export { foldIntoOrder } from '@/lib/folderOrder';
+import { folderStarred } from '@/lib/folderOrder';
+
+// ---- 1.0 screens (UI) ---------------------------------------------------------------------------
+
+/**
+ * Chrome's tab groups (every window), by group id, kept fresh from the tabGroups events: the side
+ * panel's coloured group labels and the fold-back hint ("Its “Client sites” group folds back…").
+ */
+export function useTabGroups(): ReadonlyMap<number, Browser.tabGroups.TabGroup> {
+  const [groups, setGroups] = useState<ReadonlyMap<number, Browser.tabGroups.TabGroup>>(() => new Map());
+  useEffect(() => {
+    const api = browser.tabGroups;
+    if (!api) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        api
+          .query({})
+          .then((list) => alive && setGroups(new Map(list.map((g) => [g.id, g]))))
+          .catch(() => undefined);
+      }, 60);
+    };
+    refresh();
+    const events = [api.onCreated, api.onUpdated, api.onRemoved, api.onMoved] as Array<{
+      addListener: (fn: () => void) => void;
+      removeListener: (fn: () => void) => void;
+    }>;
+    for (const event of events) event.addListener(refresh);
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+      for (const event of events) event.removeListener(refresh);
+    };
+  }, []);
+  return groups;
+}
+
+import { pendingFoldAsk as pendingFoldAskState } from '@/lib/state';
+
+/**
+ * The fold shortcut opened Tabfold asking which windows (`pendingFoldAsk`, session storage): the
+ * side panel follows it live, as it may already be open when the shortcut is pressed.
+ */
+export function usePendingFoldAsk(): { at: number } | undefined {
+  const [value, setValue] = useState<{ at: number }>();
+  useEffect(() => {
+    let alive = true;
+    pendingFoldAskState
+      .get()
+      .then((v) => alive && setValue(v))
+      .catch(() => undefined);
+    const listener = (changes: Record<string, { newValue?: unknown }>, area: string) => {
+      if (area === 'session' && 'pendingFoldAsk' in changes) setValue(changes.pendingFoldAsk?.newValue as { at: number } | undefined);
+    };
+    browser.storage.onChanged.addListener(listener);
+    return () => {
+      alive = false;
+      browser.storage.onChanged.removeListener(listener);
+    };
+  }, []);
+  return value;
 }

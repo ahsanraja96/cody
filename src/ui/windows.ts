@@ -7,6 +7,8 @@ export interface WindowInfo {
   id: number;
   /** "This window", "Window 2", "Incognito window", or the name the window was given. */
   name: string;
+  /** The name the person gave it (1.0, Rename window), or ''. */
+  given: string;
   /** The window Tabfold was opened from. */
   current: boolean;
   incognito: boolean;
@@ -42,20 +44,19 @@ export function describeWindows(
   let incognitoNumber = 0;
   return ordered.map((window) => {
     const isCurrent = window === current;
+    // Windows are numbered by their place, named or not ("Client work" is window 2, so the next is "Window 3").
+    if (!isCurrent && window.incognito) incognitoNumber += 1;
+    else if (!isCurrent) number += 1;
     let name: string;
     if (window.name) name = window.name;
     else if (isCurrent) name = 'This window';
-    else if (window.incognito) {
-      incognitoNumber += 1;
-      name = incognitoCount > 1 ? `Incognito window ${incognitoNumber}` : 'Incognito window';
-    } else {
-      number += 1;
-      name = `Window ${number}`;
-    }
+    else if (window.incognito) name = incognitoCount > 1 ? `Incognito window ${incognitoNumber}` : 'Incognito window';
+    else name = `Window ${number}`;
     const folds = !window.incognito || options.foldsIncognito;
     return {
       id: window.id,
       name,
+      given: window.name,
       current: isCurrent,
       incognito: window.incognito,
       tabs: window.tabs,

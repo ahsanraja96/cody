@@ -549,7 +549,7 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
           </Feature>
           <Feature>A weekly tidy-up</Feature>
           <Feature>Smart names · Copy as context for AI</Feature>
-          <Feature shield>Only titles and addresses are sent</Feature>
+          <Feature shield>Only titles and sites are sent</Feature>
         </PlanCard>
 
         <PlanCard

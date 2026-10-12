@@ -23,6 +23,9 @@ import { goToPlans } from './router';
  */
 
 const DAY_CHOICES = [1, 2, 3, 7, 14, 30];
+/** "A window has more than [25] tabs": the cap's range. */
+const MIN_CAP = 2;
+const MAX_CAP = 500;
 const MINUTE_CHOICES = [15, 30, 60, 120, 240];
 const WEEKDAYS = [1, 2, 3, 4, 5];
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -43,9 +46,12 @@ function daysText(weekdays: number[]): string {
   return set.map((d) => DAY_NAMES[d]).join(', ');
 }
 
-/** Free can run this rule: "not looked at for N days", into their kind of site. */
+/**
+ * Free can run this rule: "not looked at for N days" or (1.0) "a window has more than N tabs", into
+ * their kind of site.
+ */
 export function freeRule(rule: Pick<AutoFoldRule, 'when' | 'into'>): boolean {
-  return rule.when.type === 'idle' && rule.into.type === 'site';
+  return (rule.when.type === 'idle' || rule.when.type === 'window-cap') && rule.into.type === 'site';
 }
 
 export function describeRule(rule: AutoFoldRule, folders: readonly FolderRecord[]): { when: string; which: string; into: ReactNode } {
@@ -79,7 +85,8 @@ export function describeRule(rule: AutoFoldRule, folders: readonly FolderRecord[
       };
     }
     case 'window-cap':
-      return { when: `A window has more than ${count(rule.when.max, 'tab')}`, which: 'the ones I haven’t looked at longest', into };
+      // Which tabs goes on the line under it (Fi-Settings): "Folds the ones you haven’t looked at longest".
+      return { when: `A window has more than ${count(rule.when.max, 'tab')}`, which: '', into };
   }
 }
 
@@ -159,18 +166,32 @@ export function AutoFoldSection({
             const pro = free && !freeRule(rule);
             const last = runs[rule.id] ?? (notice && notice.ruleId === rule.id ? { at: notice.at, folded: notice.folded } : undefined);
             const ran = last ? `Last ran ${foldTime(last.at).replace(/^(Today|Yesterday)/, (w) => w.toLowerCase())} · folded ${count(last.folded, 'tab')}` : null;
+            // Free runs one rule: the others wait switched off (Fi-Settings).
+            const waiting = free && !pro && !rule.enabled && rules.some((r) => r.enabled && r.id !== rule.id && freeRule(r));
+            const line = [rule.when.type === 'window-cap' ? 'Folds the ones you haven’t looked at longest' : null, waiting ? null : ran]
+              .filter(Boolean)
+              .join(' · ');
             return (
               <li key={rule.id} className="group/rule flex items-start gap-3.5 border-t border-border py-3.5 first:border-t-0 pl-1">
                 <Zap size={16} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0 text-accent-text" />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <b className="font-semibold">{d.when}</b>
-                    <span className="text-text-2">{d.which}</span>
+                    {d.which && <span className="text-text-2">{d.which}</span>}
                     <ArrowRight size={13} strokeWidth={1.75} aria-hidden className="text-text-3" />
                     <span className="inline-flex items-center gap-1.5">{d.into}</span>
                     {pro && <ProTag />}
                   </div>
-                  {ran && <div className="mt-0.5 text-small text-text-3">{ran}</div>}
+                  {waiting ? (
+                    <div className="mt-0.5 text-small text-text-3">
+                      Off: Free runs one rule at a time ·{' '}
+                      <button type="button" onClick={goToPlans} className="font-semibold text-accent-text hover:underline">
+                        Upgrade
+                      </button>
+                    </div>
+                  ) : (
+                    line && <div className="mt-0.5 text-small text-text-3">{line}</div>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -182,7 +203,7 @@ export function AutoFoldSection({
                   <Trash2 size={14} strokeWidth={1.75} aria-hidden />
                 </button>
                 <span className="mt-px">
-                  <Switch checked={rule.enabled && !pro} onChange={(on) => toggle(rule, on)} label={`${d.when}, ${d.which}`} />
+                  <Switch checked={rule.enabled && !pro} onChange={(on) => toggle(rule, on)} label={d.which ? `${d.when}, ${d.which}` : d.when} />
                 </span>
               </li>
             );
@@ -226,6 +247,7 @@ function RuleDialog({
 }) {
   const [kind, setKind] = useState<AutoFoldWhen['type']>('idle');
   const [days, setDays] = useState(3);
+  const [max, setMax] = useState('25');
   const [time, setTime] = useState('18:00');
   const [weekdays, setWeekdays] = useState<number[]>(WEEKDAYS);
   const [minutes, setMinutes] = useState(60);
@@ -237,8 +259,10 @@ function RuleDialog({
     .split(/[\s,]+/)
     .map((h) => normalizeDomain(h))
     .filter((h): h is string => !!h);
-  const needsPro = free && (kind !== 'idle' || into !== 'site');
-  const valid = kind !== 'site-idle' || hostList.length > 0;
+  const needsPro = free && ((kind !== 'idle' && kind !== 'window-cap') || into !== 'site');
+  const cap = Math.round(Number(max));
+  const capValid = Number.isFinite(cap) && cap >= MIN_CAP && cap <= MAX_CAP;
+  const valid = (kind !== 'site-idle' || hostList.length > 0) && (kind !== 'window-cap' || capValid);
 
   const save = () => {
     if (needsPro) {
@@ -251,7 +275,8 @@ function RuleDialog({
     else if (kind === 'time') {
       const [h, m] = time.split(':').map(Number);
       when = { type: 'time', hour: h ?? 18, minute: m ?? 0, weekdays: weekdays.length ? weekdays : [0, 1, 2, 3, 4, 5, 6] };
-    } else when = { type: 'site-idle', hosts: [...new Set(hostList)], minutes };
+    } else if (kind === 'window-cap') when = { type: 'window-cap', max: cap };
+    else when = { type: 'site-idle', hosts: [...new Set(hostList)], minutes };
     onSave(when, into === 'site' ? { type: 'site' } : { type: 'folder', folderId: into });
     onClose();
   };
@@ -279,6 +304,7 @@ function RuleDialog({
         <Field label="When" id={ids.when}>
           <select id={ids.when} value={kind} onChange={(e) => setKind(e.target.value as AutoFoldWhen['type'])} className={SELECT} style={CHEVRON}>
             <option value="idle">Not looked at for</option>
+            <option value="window-cap">A window has more than</option>
             <option value="time">Every day at{free ? ' (Pro)' : ''}</option>
             <option value="site-idle">A site is idle for{free ? ' (Pro)' : ''}</option>
           </select>
@@ -290,6 +316,24 @@ function RuleDialog({
                 </option>
               ))}
             </select>
+          )}
+          {kind === 'window-cap' && (
+            <span className="flex shrink-0 items-center gap-2">
+              <input
+                aria-label="Number of tabs"
+                type="number"
+                inputMode="numeric"
+                min={MIN_CAP}
+                max={MAX_CAP}
+                value={max}
+                onChange={(e) => setMax(e.target.value)}
+                className={cx(
+                  'h-8 w-14 rounded-control border bg-surface px-2.5 text-text outline-none focus:border-accent focus:shadow-[0_0_0_3px_var(--tf-accent-soft)] [&::-webkit-inner-spin-button]:appearance-none',
+                  capValid ? 'border-border-strong' : 'border-red',
+                )}
+              />
+              <span className="text-text-2">tabs</span>
+            </span>
           )}
           {kind === 'time' && (
             <input
@@ -345,7 +389,9 @@ function RuleDialog({
             />
           ) : (
             <select id={ids.which} disabled value="all" className={SELECT} style={CHEVRON}>
-              <option value="all">{kind === 'time' ? 'Everything open' : 'All sites'}</option>
+              <option value="all">
+                {kind === 'time' ? 'Everything open' : kind === 'window-cap' ? 'The ones I haven’t looked at longest' : 'All sites'}
+              </option>
             </select>
           )}
         </Field>
@@ -361,10 +407,16 @@ function RuleDialog({
           </select>
         </Field>
       </div>
-      {needsPro && (
-        <p role="status" className="mt-3.5 mb-0 flex items-center gap-2 rounded-control bg-accent-soft px-3 py-2 text-small text-text-2">
-          <Sparkles size={14} strokeWidth={1.75} aria-hidden className="shrink-0 text-accent-text" />
-          Free has one rule: tabs you haven’t looked at for a few days. Times of day, sites and folders are part of Pro.
+      {kind === 'window-cap' && (
+        <p className="mt-3.5 mb-0 text-small text-text-3">
+          Whenever a window goes over {capValid ? cap : 25} tabs, Tabfold folds the ones you haven’t looked at longest until it’s back to{' '}
+          {capValid ? cap : 25}. Pinned and playing tabs stay.
+        </p>
+      )}
+      {(needsPro || (free && kind === 'window-cap')) && (
+        <p role="status" className="mt-3.5 mb-0 flex items-start gap-2 rounded-control bg-accent-soft px-3 py-2 text-small text-text-2">
+          <Sparkles size={14} strokeWidth={1.75} aria-hidden className="mt-0.5 shrink-0 text-accent-text" />
+          Free has one rule: tabs you haven’t looked at for a few days, or a cap on a window’s tabs. Times of day, sites and folders are part of Pro.
         </p>
       )}
     </SmallDialog>

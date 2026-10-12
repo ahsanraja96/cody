@@ -9,6 +9,7 @@ import { displayHost } from '@/lib/urls';
 import { IncognitoMark } from './IncognitoMark';
 import { cx } from '../cx';
 import { Favicon } from './Favicon';
+import { StarMark } from './Star';
 import './FoldedList.css';
 
 /**
@@ -154,12 +155,18 @@ export interface OpenableGroup {
   name: string;
   color: TabGroupColor;
   items: TabRecord[];
+  /** A folder's group (1.0): passed to `open-tabs` so the group folds back into it. */
+  folderId?: string;
 }
 
 interface ListGroup extends OpenableGroup {
   id: string;
   folder: boolean;
   items: ListedTab[];
+  /** A starred folder (1.0): a small star after its name. */
+  starred?: boolean;
+  /** Opened from this folder ("Open all"): its group folds back into it. */
+  folderId?: string;
 }
 
 export interface FoldedListProps {
@@ -175,6 +182,8 @@ export interface FoldedListProps {
   live?: boolean;
   onOpen: (tab: TabRecord, background: boolean) => void;
   onOpenAll: (group: OpenableGroup) => void;
+  /** Is this folder starred (1.0)? Pass the folders starred first, too. */
+  isStarred?: (folder: FolderRecord) => boolean;
 }
 
 interface ListedTab extends TabRecord {
@@ -183,7 +192,7 @@ interface ListedTab extends TabRecord {
 
 const NO_FOLDERS: FolderRecord[] = [];
 
-export function FoldedList({ tabs, folders = NO_FOLDERS, siteKinds, removal, newSince, live = false, onOpen, onOpenAll }: FoldedListProps) {
+export function FoldedList({ tabs, folders = NO_FOLDERS, siteKinds, removal, newSince, live = false, onOpen, onOpenAll, isStarred }: FoldedListProps) {
   const { groups, folderCount } = useMemo(() => {
     const { removed } = removal;
     const items: ListedTab[] = removed.size ? tabs.filter((t) => !removed.has(t.id)) : [...tabs];
@@ -193,10 +202,18 @@ export function FoldedList({ tabs, folders = NO_FOLDERS, siteKinds, removal, new
     const grouped = groupTabs(items, folders, siteKinds);
     const inFolders: ListGroup[] = grouped.folders
       .filter((g) => g.items.length > 0)
-      .map((g) => ({ id: g.id, name: g.name, color: g.color, folder: true, items: g.items as ListedTab[] }));
+      .map((g) => ({
+        id: g.id,
+        name: g.name,
+        color: g.color,
+        folder: true,
+        items: g.items as ListedTab[],
+        starred: !!g.folder && !!isStarred?.(g.folder),
+        folderId: g.folder?.id,
+      }));
     const bySite: ListGroup[] = grouped.sites.map((g) => ({ id: g.id, name: g.name, color: g.color, folder: false, items: g.items as ListedTab[] }));
     return { groups: [...inFolders, ...bySite], folderCount: inFolders.length };
-  }, [tabs, folders, siteKinds, removal]);
+  }, [tabs, folders, siteKinds, removal, isStarred]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [shown, setShown] = useState<Record<string, number>>({});
   const now = Date.now();
@@ -226,7 +243,7 @@ export function FoldedList({ tabs, folders = NO_FOLDERS, siteKinds, removal, new
               onToggle={() => setExpanded((e) => ({ ...e, [id]: !isOpen }))}
               onMore={(count) => setShown((s) => ({ ...s, [id]: (s[id] ?? FIRST_ROWS) + count }))}
               onOpen={onOpen}
-              onOpenAll={() => onOpenAll({ name: group.name, color: group.color, items: real })}
+              onOpenAll={() => onOpenAll({ name: group.name, color: group.color, items: real, folderId: group.folderId })}
             />
           </div>
         );
@@ -289,6 +306,7 @@ function FoldedGroup({
           <span dir="auto" className="truncate font-semibold">
             {name}
           </span>
+          {group.starred && <StarMark size={11} />}
           <span className="tabular-nums flex-none text-text-3">· {count.toLocaleString()}</span>
           {fresh > 0 && <NewBadge count={fresh} receiving={receiving} />}
         </button>
@@ -301,7 +319,11 @@ function FoldedGroup({
           <button
             type="button"
             onClick={onOpenAll}
-            title={`Opens all ${count} tabs. They stay in the list.`}
+            title={
+              group.folder
+                ? `Opens all ${count} tabs as a “${name}” tab group. They stay in the folder.`
+                : `Opens all ${count} tabs. They stay in the list.`
+            }
             className="hidden h-6 flex-none items-center rounded-md border border-border-strong bg-surface px-2 text-small font-semibold text-text group-focus-within/fold:inline-flex group-hover/fold:inline-flex hover:bg-hover"
           >
             Open all
