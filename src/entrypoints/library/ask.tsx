@@ -60,7 +60,7 @@ export function AskChip({ proAi, busy, onAsk }: { proAi: boolean; busy: boolean;
       type="button"
       onClick={proAi ? onAsk : goToPlans}
       disabled={busy}
-      title={proAi ? 'Find tabs by what they’re about (Shift+Enter). Only titles and addresses are sent.' : 'Ask your tabs is part of Pro AI'}
+      title={proAi ? 'Find tabs by what they’re about (Shift+Enter). Only titles and sites are sent.' : 'Ask your tabs is part of Pro AI'}
       className={cx(
         'inline-flex h-6 shrink-0 items-center gap-1 rounded-md bg-accent-soft px-2 text-meta font-semibold text-accent-text hover:brightness-95',
         busy && 'opacity-70',
@@ -92,7 +92,7 @@ export function BestMatches({ ask, tabs, folders }: { ask: AskState; tabs: TabRe
       {ask.status === 'loading' && (
         <p role="status" className="m-0 flex items-center gap-2 px-2 py-2 text-small text-text-3">
           <LoaderCircle size={14} aria-hidden className="tf-spin" />
-          Asking your tabs… Only titles and addresses are sent.
+          Asking your tabs… Only titles and sites are sent.
         </p>
       )}
       {ask.status === 'error' && (
