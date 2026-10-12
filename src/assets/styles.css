@@ -280,3 +280,22 @@ html {
 body:has(dialog[open][data-toasts]) .tf-toasts-page {
   visibility: hidden;
 }
+
+/* 1.0: a starred folder's small filled star (Fi-* boards). */
+:root {
+  --tf-star: #c98500;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --tf-star: #f2c14e;
+  }
+}
+
+:root[data-theme='dark'] {
+  --tf-star: #f2c14e;
+}
+
+@theme inline {
+  --color-star: var(--tf-star);
+}

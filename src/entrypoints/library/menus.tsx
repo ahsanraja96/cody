@@ -1,4 +1,4 @@
-import { ArrowRight, Clock, ClipboardCopy, ExternalLink, FolderPlus, Layers, Link, Pencil, Radio, Trash2, Undo2, Folder } from 'lucide-react';
+import { ArrowRight, Clock, ClipboardCopy, ExternalLink, FolderPlus, Layers, Link, Pencil, Radio, Star, StarOff, StickyNote, Trash2, Undo2, Folder } from 'lucide-react';
 import { CATEGORIES, categorize, type SiteKinds } from '@/lib/categories';
 import type { PlanState } from '@/lib/pro/types';
 import type { LiveFolder } from '@/lib/state';
@@ -7,6 +7,7 @@ import { ColorDot, FolderIcon } from '@/ui/components/FolderIcon';
 import type { MenuEntry } from '@/ui/components/Menu';
 import { ProTag } from '@/ui/components/ProBits';
 import { cx } from '@/ui/cx';
+import { starFolder } from '@/ui/components/NoteField';
 import { personalFolders, teamFolders } from '@/lib/teams';
 import { FOLDER_COLORS, type TabGroup } from '@/ui/folders';
 import { hasFreeLimits } from '@/ui/hooks';
@@ -32,6 +33,8 @@ export interface MenuContext {
   liveFolders: Record<string, LiveFolder>;
   /** Pro AI: Copy as context works (others see a Pro AI tag that opens the plans). */
   canCopyContext: boolean;
+  /** Is this folder starred for this person (1.0)? */
+  isStarred?: (folder: FolderRecord) => boolean;
 }
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -177,7 +180,17 @@ export function folderMenu(group: TabGroup, ctx: MenuContext): MenuEntry[] {
   const live = !!ctx.liveFolders[folder.id];
   // A team folder's link is the owner's to share (Mx-Plans: "Owner controls: members, sharing").
   const shareable = !folder.teamId || ctx.plan.team?.role === 'owner';
+  const starred = !!ctx.isStarred?.(folder);
   return [
+    // 1.0 (Fi-Fold-States): Star / Unstar, Add a note / Edit the note.
+    { key: 'star', label: starred ? 'Unstar' : 'Star', icon: starred ? <StarOff {...ICON} /> : <Star {...ICON} />, onSelect: () => void starFolder(folder, !starred) },
+    {
+      key: 'note',
+      label: folder.note ? 'Edit the note' : 'Add a note',
+      icon: <StickyNote {...ICON} />,
+      onSelect: () => useLibraryUi.getState().setEditingNote(folder.id),
+    },
+    { type: 'separator', key: 's0' },
     { key: 'rename', label: 'Rename', icon: <Pencil {...ICON} />, onSelect: () => useLibraryUi.getState().setRenaming({ id: folder.id, where: 'list' }) },
     swatches(folder),
     { type: 'separator', key: 's1' },
@@ -194,7 +207,7 @@ export function folderMenu(group: TabGroup, ctx: MenuContext): MenuEntry[] {
       label: 'Open all (a copy) as a tab group',
       icon: <Layers {...ICON} />,
       disabled: n === 0,
-      onSelect: () => void openGroup(group.items, folder),
+      onSelect: () => void openGroup(group.items, folder, folder.id),
     },
     {
       key: 'share',

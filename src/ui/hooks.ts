@@ -224,6 +224,7 @@ export function useOpenWindows(
         change.audible !== undefined ||
         change.pinned !== undefined ||
         change.favIconUrl !== undefined ||
+        change.groupId !== undefined ||
         change.status === 'complete'
       ) {
         schedule();
@@ -239,6 +240,7 @@ export function useOpenWindows(
       browser.tabs.onHighlighted,
       browser.windows.onCreated,
       browser.windows.onRemoved,
+      browser.windows.onFocusChanged,
     ] as Array<{ addListener: (fn: () => void) => void; removeListener: (fn: () => void) => void }>;
     for (const event of events) event.addListener(schedule);
     browser.tabs.onUpdated.addListener(onUpdated);
@@ -643,4 +645,67 @@ export function foldIntoOrder(
       (recent[b.id] ?? 0) - (recent[a.id] ?? 0) ||
       a.order - b.order,
   );
+}
+
+// ---- 1.0 screens (UI) ---------------------------------------------------------------------------
+
+/**
+ * Chrome's tab groups (every window), by group id, kept fresh from the tabGroups events: the side
+ * panel's coloured group labels and the fold-back hint ("Its “Client sites” group folds back…").
+ */
+export function useTabGroups(): ReadonlyMap<number, Browser.tabGroups.TabGroup> {
+  const [groups, setGroups] = useState<ReadonlyMap<number, Browser.tabGroups.TabGroup>>(() => new Map());
+  useEffect(() => {
+    const api = browser.tabGroups;
+    if (!api) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        api
+          .query({})
+          .then((list) => alive && setGroups(new Map(list.map((g) => [g.id, g]))))
+          .catch(() => undefined);
+      }, 60);
+    };
+    refresh();
+    const events = [api.onCreated, api.onUpdated, api.onRemoved, api.onMoved] as Array<{
+      addListener: (fn: () => void) => void;
+      removeListener: (fn: () => void) => void;
+    }>;
+    for (const event of events) event.addListener(refresh);
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+      for (const event of events) event.removeListener(refresh);
+    };
+  }, []);
+  return groups;
+}
+
+import { pendingFoldAsk as pendingFoldAskState } from '@/lib/state';
+
+/**
+ * The fold shortcut opened Tabfold asking which windows (`pendingFoldAsk`, session storage): the
+ * side panel follows it live, as it may already be open when the shortcut is pressed.
+ */
+export function usePendingFoldAsk(): { at: number } | undefined {
+  const [value, setValue] = useState<{ at: number }>();
+  useEffect(() => {
+    let alive = true;
+    pendingFoldAskState
+      .get()
+      .then((v) => alive && setValue(v))
+      .catch(() => undefined);
+    const listener = (changes: Record<string, { newValue?: unknown }>, area: string) => {
+      if (area === 'session' && 'pendingFoldAsk' in changes) setValue(changes.pendingFoldAsk?.newValue as { at: number } | undefined);
+    };
+    browser.storage.onChanged.addListener(listener);
+    return () => {
+      alive = false;
+      browser.storage.onChanged.removeListener(listener);
+    };
+  }, []);
+  return value;
 }

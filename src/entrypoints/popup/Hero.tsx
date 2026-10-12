@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useRef, useState, type ReactNode } from 'react';
-import { AppWindow, Archive, CircleAlert, Layers, MemoryStick, RotateCcw, X, type LucideIcon } from 'lucide-react';
+import { AppWindow, Archive, ChevronDown, CircleAlert, Folder, Layers, MemoryStick, RotateCcw, X, type LucideIcon } from 'lucide-react';
 import { send } from '@/lib/messages';
 import type { ActiveFold } from '@/lib/state';
 import { Favicon } from '@/ui/components/Favicon';
@@ -42,6 +42,7 @@ export function FoldButton({
   onFold,
   noted = true,
   asks,
+  menu,
   className,
 }: {
   count: number;
@@ -53,6 +54,8 @@ export function FoldButton({
   noted?: boolean;
   /** Pressing it asks which windows: the label doesn't promise a number yet. */
   asks?: { windows: number };
+  /** The ▾ half (1.0, Fi-Fold-States): "Fold into a folder". */
+  menu?: FoldMenuButton;
   className?: string;
 }) {
   const describedBy = noted ? 'fold-note' : undefined;
@@ -72,7 +75,7 @@ export function FoldButton({
       </button>
     );
   }
-  return (
+  const main = (
     <button
       type="button"
       onClick={onFold}
@@ -81,8 +84,9 @@ export function FoldButton({
       aria-haspopup={asks ? 'true' : undefined}
       aria-describedby={describedBy}
       className={cx(
-        'relative flex h-11 w-full items-center justify-center gap-2 rounded-control bg-accent px-4 font-semibold text-on-accent transition-colors hover:bg-accent-hover',
-        className,
+        'relative flex h-11 w-full min-w-0 items-center justify-center gap-2 bg-accent px-4 font-semibold text-on-accent transition-colors hover:bg-accent-hover',
+        menu ? 'flex-1 rounded-l-control' : 'rounded-control',
+        !menu && className,
       )}
     >
       <Archive size={16} strokeWidth={1.75} aria-hidden />
@@ -97,6 +101,33 @@ export function FoldButton({
       )}
     </button>
   );
+  if (!menu) return main;
+  return (
+    <div className={cx('flex h-11', className)}>
+      {main}
+      <button
+        type="button"
+        aria-label="Fold into a folder"
+        title="Fold into a folder"
+        aria-haspopup="menu"
+        aria-expanded={menu.open}
+        disabled={!ready}
+        onClick={(e) => menu.onOpen(e.currentTarget)}
+        className={cx(
+          'flex w-10 flex-none items-center justify-center rounded-r-control border-l border-white/30 text-on-accent transition-colors hover:bg-accent-hover',
+          menu.open ? 'bg-accent-hover shadow-[inset_0_0_0_2px_rgba(255,255,255,.35)]' : 'bg-accent',
+        )}
+      >
+        <ChevronDown size={16} strokeWidth={2} aria-hidden />
+      </button>
+    </div>
+  );
+}
+
+/** The Fold button's ▾ half. */
+export interface FoldMenuButton {
+  open: boolean;
+  onOpen: (button: HTMLElement) => void;
 }
 
 function FoldNote({ children }: { children: ReactNode }) {
@@ -177,6 +208,8 @@ export function Hero({
   currentWindowId,
   milestone,
   limit,
+  foldMenu,
+  weekly,
 }: {
   view: FoldView;
   stats: OpenTabStats;
@@ -189,6 +222,10 @@ export function Hero({
   /** The occasional "You've freed 12.4 GB this month" card after a fold (Pro-Popup-Milestone). */
   milestone?: ReactNode;
   limit?: HeroLimit | null;
+  /** The Fold button's ▾ ("Fold into a folder"). */
+  foldMenu?: FoldMenuButton;
+  /** Mondays: the weekly summary line, in place of the hint under Fold (Fi-Popup). */
+  weekly?: ReactNode;
 }) {
   // The last "freed so far" shown, so the finished number rolls up from it.
   const freedSoFar = useRef(0);
@@ -227,6 +264,7 @@ export function Hero({
               onFold={onFold}
               noted={!!stayedLine(view.fold) && !milestone}
               asks={asks}
+              menu={foldCount > 0 ? foldMenu : undefined}
             />
           )
         }
@@ -267,9 +305,20 @@ export function Hero({
         </>
       ) : (
         <>
-          <FoldButton className="mt-4" count={foldCount} ready={ready} shortcut={shortcut} onFold={onFold} asks={asks} />
+          <FoldButton
+            className="mt-4"
+            count={foldCount}
+            ready={ready}
+            shortcut={shortcut}
+            onFold={onFold}
+            asks={asks}
+            noted={!weekly || !!(limit?.near && !(ready && foldCount === 0))}
+            menu={ready && foldCount === 0 ? undefined : foldMenu}
+          />
           {limit?.near && !(ready && foldCount === 0) ? (
             <SpacesLeft id="fold-note" room={limit.room} onUpgrade={limit.onUpgrade} />
+          ) : weekly ? (
+            <div className="mt-2">{weekly}</div>
           ) : (
             <FoldNote>
               {ready && foldCount === 0
@@ -309,7 +358,7 @@ const Choice = forwardRef<
   );
 });
 
-function FoldAsk({ thisCount, allCount, windowCount, allNamed, onThis, onAll, onCancel, onFocusChange }: FoldAskProps) {
+export function FoldAsk({ thisCount, allCount, windowCount, allNamed, onThis, onAll, onCancel, onFocusChange }: FoldAskProps) {
   const thisRef = useRef<HTMLButtonElement>(null);
   const allRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -501,6 +550,7 @@ function Folded({
         label={`Memory: ${plural(freedSlots, 'tab')} freed, ${plural(stats.tabs.length, 'tab')} still open`}
       />
       {milestone}
+      {outcome && <IntoFolderLine outcome={outcome} />}
       {!milestone && memory?.freeAfter != null && (
         <p className="mt-3 flex items-center gap-2 text-small text-text-2 tabular-nums">
           <MemoryStick size={14} strokeWidth={1.75} aria-hidden className="flex-none text-text-3" />
@@ -515,6 +565,23 @@ function Folded({
       {button}
       {note && !milestone && <FoldNote>{note}</FoldNote>}
     </section>
+  );
+}
+
+/** 1.0: "Folded 12 tabs into Client sites", or "5 went back into Client sites" (Fi-Fold-States). */
+function IntoFolderLine({ outcome }: { outcome: NonNullable<ActiveFold['outcome']> }) {
+  const back = (outcome.backIntoFolders ?? []).filter((b) => b.tabs > 0);
+  if (!outcome.intoFolder && back.length === 0) return null;
+  const text = outcome.intoFolder
+    ? `Into ${outcome.intoFolder.name}`
+    : back.map((b) => `${b.tabs.toLocaleString()} went back into ${b.name}`).join(' · ');
+  return (
+    <p className="mt-3 flex items-center gap-2 text-small text-text-2">
+      <Folder size={14} strokeWidth={1.75} aria-hidden className="flex-none text-text-3" />
+      <span dir="auto" className="min-w-0 truncate">
+        {text}
+      </span>
+    </p>
   );
 }
 

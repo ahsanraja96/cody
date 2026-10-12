@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { browser } from 'wxt/browser';
 import { Copy, Info, LoaderCircle, Trash2, TriangleAlert, X } from 'lucide-react';
+import { defaultSessionName } from '@/lib/format';
 import { send, type RestoreFailure } from '@/lib/messages';
 import type { SessionRecord, TabRecord } from '@/lib/types';
 import { IncognitoMark } from '@/ui/components/IncognitoMark';
@@ -33,6 +34,13 @@ function failureText(failed: RestoreFailure[]): string {
   if (files) parts.push(`${count(files, 'local file')} need file access, which is off for Tabfold`);
   if (other) parts.push(`${count(other, 'page')} didn’t open`);
   return parts.join(' · ');
+}
+
+/** The name a fold was given (a named window's, 1.0), not the "Oct 10 · 14:32" every fold gets. */
+function givenName(fold: SessionRecord): string {
+  const name = fold.name?.trim() ?? '';
+  if (!name || name === defaultSessionName(fold.createdAt) || /^[A-Z][a-z]{2} \d{1,2} · \d{2}:\d{2}$/.test(name)) return '';
+  return name;
 }
 
 /**
@@ -101,8 +109,9 @@ export function RecentFolds({ folds, tabs }: { folds: SessionRecord[]; tabs: Tab
         {folds.map((fold) => {
           const running = active?.sessionId === fold.id ? active : undefined;
           const working = busy === fold.id || !!running;
-          // A smart name (Pro AI) is the title; the time moves to the second line.
-          const smart = fold.smartName?.trim();
+          // A smart name (Pro AI), or the name of the window it was folded from (1.0, "Client work"), is
+          // the title; the time moves to the second line.
+          const smart = fold.smartName?.trim() || givenName(fold);
           const when = foldTime(fold.createdAt);
           const label = smart ? `“${smart}” (${when})` : when;
           return (

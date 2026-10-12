@@ -92,3 +92,22 @@ export function kindOf(tab: Pick<TabRecord, 'url'>, siteKinds: SiteKinds = {}): 
 export function kindName(kind: CategoryId): string {
   return category(kind).name;
 }
+
+/**
+ * Starred folders first (1.0), each part in the folders' own order. `teamStars`: team folders this
+ * person starred (a personal folder carries `starredAt`).
+ */
+export function starredFirst<T extends Pick<FolderRecord, 'id' | 'teamId' | 'starredAt'>>(
+  folders: readonly T[],
+  teamStars: Readonly<Record<string, number>>,
+): T[] {
+  const starred = (f: T) => (f.teamId ? !!teamStars[f.id] : !!f.starredAt);
+  return [...folders.filter(starred), ...folders.filter((f) => !starred(f))];
+}
+
+/** Tabs in each folder (snoozed ones wait in Snoozed), by folder id. */
+export function folderCounts(tabs: readonly TabRecord[] | undefined): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const t of tabs ?? []) if (t.folderId && !isSnoozed(t)) map.set(t.folderId, (map.get(t.folderId) ?? 0) + 1);
+  return map;
+}

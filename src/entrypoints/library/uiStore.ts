@@ -46,6 +46,9 @@ interface LibraryUi {
   /** Folder or group to scroll to and open ("Move to › Client sites" then jump). */
   jumpTo: string | null;
   setJumpTo: (id: string | null) => void;
+  /** The folder whose note is being edited in place (1.0: click the note, or ⋯ › Add a note). */
+  editingNote: string | null;
+  setEditingNote: (id: string | null) => void;
 }
 
 export const useLibraryUi = create<LibraryUi>((set) => ({
@@ -64,6 +67,8 @@ export const useLibraryUi = create<LibraryUi>((set) => ({
   setFocusInvite: (focusInvite) => set({ focusInvite }),
   jumpTo: null,
   setJumpTo: (jumpTo) => set({ jumpTo }),
+  editingNote: null,
+  setEditingNote: (editingNote) => set({ editingNote }),
 }));
 
 export function openDialog(dialog: LibraryDialog): void {

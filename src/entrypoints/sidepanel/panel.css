@@ -1,0 +1,15 @@
+/*
+ * Chrome's side panel is about 320 to 600 px wide and the window's full height: the page fills it,
+ * the header, search and footer stay put and only the middle scrolls.
+ */
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+#root {
+  position: fixed;
+  inset: 0;
+}

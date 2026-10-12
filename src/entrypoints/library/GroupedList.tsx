@@ -12,6 +12,8 @@ import { Chip } from '@/ui/components/ProBits';
 import { Favicon } from '@/ui/components/Favicon';
 import { ColorDot, FolderIcon } from '@/ui/components/FolderIcon';
 import { IncognitoMark } from '@/ui/components/IncognitoMark';
+import { NoteField } from '@/ui/components/NoteField';
+import { StarMark } from '@/ui/components/Star';
 import { anchorBelow, Menu, type MenuAnchor, type MenuEntry } from '@/ui/components/Menu';
 import { cx } from '@/ui/cx';
 import { groupTabs, type TabGroup } from '@/ui/folders';
@@ -27,13 +29,15 @@ import { openDialog, TAB_DRAG_TYPE, useDrag, useLibraryUi } from './uiStore';
 /** Rows a group shows before "Show N more". */
 const FIRST_ROWS = 6;
 
-const SIZE = { head: 48, row: 34, more: 32, end: 8, label: 36, live: 30, empty: 34, activity: 30 } as const;
+const SIZE = { head: 48, row: 34, more: 32, end: 8, label: 36, live: 30, empty: 34, activity: 30, note: 24, noteEditing: 62 } as const;
 
 type Item =
   | { type: 'snooze-head'; key: string; n: number; expanded: boolean; first: boolean }
   | { type: 'snoozed'; key: string; tab: TabRecord }
   | { type: 'head'; key: string; group: TabGroup; live: TabRecord[]; first: boolean; expanded: boolean }
   | { type: 'live-line'; key: string; group: TabGroup }
+  /** A folder's one-line note under its header (1.0), or the field editing it. */
+  | { type: 'note'; key: string; group: TabGroup; editing: boolean }
   | { type: 'empty'; key: string; group: TabGroup }
   | { type: 'label'; key: string }
   /** "Team · Truewidgets" above the team's folders (Mx-Share). */
@@ -69,6 +73,8 @@ function sizeOf(item: Item): number {
       return SIZE.activity;
     case 'live-line':
       return SIZE.live;
+    case 'note':
+      return item.editing ? SIZE.noteEditing : SIZE.note;
     case 'empty':
       return SIZE.empty;
   }
@@ -105,6 +111,7 @@ export function GroupedList({
   windowLabel,
   scrollRef,
   canCopyContext = false,
+  isStarred,
 }: {
   tabs: TabRecord[];
   folders: FolderRecord[];
@@ -115,6 +122,8 @@ export function GroupedList({
   windowLabel: (windowId: number) => string;
   scrollRef: RefObject<HTMLElement | null>;
   canCopyContext?: boolean;
+  /** Is this folder starred (1.0)? Pass the folders starred first, too. */
+  isStarred?: (folder: FolderRecord) => boolean;
 }) {
   const removals = useRemovals((s) => s.removals);
   const team = useTeam(plan);
@@ -136,9 +145,10 @@ export function GroupedList({
   const real = counted ?? shown;
 
   const ctx: MenuContext = useMemo(
-    () => ({ folders, siteKinds, plan, liveFolders, canCopyContext }),
-    [folders, siteKinds, plan, liveFolders, canCopyContext],
+    () => ({ folders, siteKinds, plan, liveFolders, canCopyContext, isStarred }),
+    [folders, siteKinds, plan, liveFolders, canCopyContext, isStarred],
   );
+  const editingNote = useLibraryUi((s) => s.editingNote);
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 
@@ -170,6 +180,8 @@ export function GroupedList({
         first: !previous || previous.type === 'label' || previous.type === 'team-label',
         expanded: isOpen,
       });
+      const editing = !!group.folder && editingNote === group.folder.id;
+      if (group.folder && (group.folder.note?.trim() || editing)) out.push({ type: 'note', key: `o:${id}`, group, editing });
       if (!isOpen) return;
       if (group.folder && liveFolders[group.folder.id]) out.push({ type: 'live-line', key: `l:${id}`, group });
       if (group.folder?.teamId && latestActivity(live)) out.push({ type: 'activity', key: `a:${id}`, group, tabs: live });
@@ -195,7 +207,7 @@ export function GroupedList({
     if ((shown.folders.length || hasTeam) && shown.sites.length) out.push({ type: 'label', key: 'label' });
     shown.sites.forEach((group, index) => push(group, index < (shown.folders.length || hasTeam ? 1 : 2)));
     return { items: out, heads: headIndex, order: ids };
-  }, [shown, liveIds, expanded, showAll, removals, liveFolders, hasTeam]);
+  }, [shown, liveIds, expanded, showAll, removals, liveFolders, hasTeam, editingNote]);
 
   const listRef = useRef<HTMLDivElement>(null);
   const [listTop, setListTop] = useState(0);
@@ -288,6 +300,7 @@ export function GroupedList({
         team={team}
         target={target}
         onJump={jump}
+        isStarred={isStarred}
       />
 
       <div ref={listRef} className="relative col-start-2 row-start-2" style={{ height: virtualizer.getTotalSize() }}>
@@ -305,6 +318,7 @@ export function GroupedList({
               {item.type === 'head' ? (
                 <GroupHead
                   item={item}
+                  starred={!!item.group.folder && !!isStarred?.(item.group.folder)}
                   menuOpen={menuOpen}
                   live={item.group.folder ? liveFolders[item.group.folder.id] : undefined}
                   windowLabel={windowLabel}
@@ -341,6 +355,8 @@ export function GroupedList({
                 <ActivityLine tabs={item.tabs} team={team} now={now} />
               ) : item.type === 'live-line' ? (
                 <LiveLine group={item.group} />
+              ) : item.type === 'note' ? (
+                <NoteLine group={item.group} editing={item.editing} />
               ) : item.type === 'empty' ? (
                 <div className="flex h-[34px] items-center pr-2 pl-[62px] text-small text-text-3">
                   No tabs yet. Drag tabs here, or use a tab’s ⋯ › Move to.
@@ -452,6 +468,29 @@ function ActivityLine({ tabs, team, now }: { tabs: TabRecord[]; team: TeamView; 
   );
 }
 
+/** A folder's note under its header (Fi-List): click it to edit it in place. */
+function NoteLine({ group, editing }: { group: TabGroup; editing: boolean }) {
+  const folder = group.folder!;
+  const setEditing = useLibraryUi((s) => s.setEditingNote);
+  if (editing) {
+    return <NoteField folder={folder} onDone={() => setEditing(null)} className="mr-2 ml-[60px] max-w-[520px]" />;
+  }
+  return (
+    <div className="flex h-6 items-start pr-2 pl-[60px]">
+      <button
+        type="button"
+        dir="auto"
+        title="Click to edit the note"
+        aria-label={`Note: ${folder.note}. Edit the note`}
+        onClick={() => setEditing(folder.id)}
+        className="-mt-1.5 max-w-full cursor-text truncate text-left text-small text-text-3 hover:text-text-2"
+      >
+        {folder.note}
+      </button>
+    </div>
+  );
+}
+
 /** Under a live folder's header (Mx-Live): a quiet line instead of the board's tab-strip picture. */
 function LiveLine({ group }: { group: TabGroup }) {
   return (
@@ -467,6 +506,7 @@ function LiveLine({ group }: { group: TabGroup }) {
 
 function GroupHead({
   item,
+  starred,
   menuOpen,
   live,
   windowLabel,
@@ -476,6 +516,8 @@ function GroupHead({
   onMenu,
 }: {
   item: Extract<Item, { type: 'head' }>;
+  /** A starred folder: a small star after its name (1.0). */
+  starred: boolean;
   menuOpen: boolean;
   live: LiveFolder | undefined;
   windowLabel: (windowId: number) => string;
@@ -540,6 +582,7 @@ function GroupHead({
               <span dir="auto" className="truncate">
                 {group.name}
               </span>
+              {folder && starred && <StarMark size={12} />}
               <span className="shrink-0 font-normal text-text-3">{count(n, 'tab')}</span>
               {team && (
                 <Chip tone="neutral">
@@ -574,9 +617,13 @@ function GroupHead({
               ) : (
                 <button
                   type="button"
-                  title={`Opens all ${count(n, 'tab')} in this window. They stay in the list.`}
+                  title={
+                    folder
+                      ? `Opens all ${count(n, 'tab')} as a “${group.name}” tab group. They stay in the folder.`
+                      : `Opens all ${count(n, 'tab')} in this window. They stay in the list.`
+                  }
                   disabled={n === 0}
-                  onClick={() => void openGroup(tabs, group)}
+                  onClick={() => void openGroup(tabs, group, folder?.id)}
                   className={cx(SECONDARY_SM, 'disabled:cursor-default disabled:text-text-3')}
                 >
                   Open all

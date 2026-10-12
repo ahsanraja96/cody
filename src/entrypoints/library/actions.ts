@@ -34,8 +34,11 @@ export async function openFolded(tab: TabRecord, active: boolean): Promise<void>
   }
 }
 
-/** "Open all" on a group: the tabs open as one Chrome tab group in this window and stay in the list. */
-export async function openGroup(tabs: TabRecord[], category: { name: string; color: TabGroupColor }): Promise<void> {
+/**
+ * "Open all" on a group: the tabs open as one Chrome tab group in this window and stay in the list.
+ * With `folderId` (1.0), the group folds back into that folder.
+ */
+export async function openGroup(tabs: TabRecord[], category: { name: string; color: TabGroupColor }, folderId?: string): Promise<void> {
   try {
     const current = await browser.windows.getCurrent().catch(() => undefined);
     const { opened, reason } = await send({
@@ -43,6 +46,7 @@ export async function openGroup(tabs: TabRecord[], category: { name: string; col
       tabRecordIds: tabs.map((t) => t.id),
       asGroup: { name: category.name, color: category.color },
       windowId: current?.id,
+      ...(folderId ? { folderId } : {}),
     });
     if (reason) toast(opened ? `Opened ${opened} of ${tabs.length} tabs. ${reason}` : reason, { tone: 'error' });
     else toast(opened === tabs.length ? `Opened ${count(opened, 'tab')}. They stay in the list.` : `Opened ${opened} of ${tabs.length} tabs.`);

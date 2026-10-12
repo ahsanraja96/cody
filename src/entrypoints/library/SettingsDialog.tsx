@@ -19,6 +19,8 @@ import { BackupDialog } from './BackupDialog';
 import { ExportMenu } from './ExportMenu';
 import { count } from './format';
 import { RemoveDialog } from './RemoveDialog';
+import { DeleteAccountDialog } from './DeleteAccountDialog';
+import { siteUrl } from '@/lib/site';
 import { goToPlans } from './router';
 import { SitesYouMoved } from './SitesYouMoved';
 import { CloudSyncLine, SyncLine } from './SyncLine';
@@ -185,6 +187,7 @@ export function SettingsDialog({
   const autoRuns = useAutoFoldLast();
   const [backups, setBackups] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     const dialog = ref.current;
@@ -256,6 +259,22 @@ export function SettingsDialog({
             <YourPlan open={open} onRestore={() => setBackups(true)} />
             {plan.team && plan.email && <TeamSection plan={plan} open={open} />}
             <SettingRow
+              center
+              title="Toolbar button opens"
+              description="The side panel stays open while you browse."
+              control={
+                <Segmented
+                  label="Toolbar button opens"
+                  value={settings.toolbarOpens}
+                  onChange={(toolbarOpens) => update({ toolbarOpens })}
+                  options={[
+                    { value: 'popup', label: 'The popup' },
+                    { value: 'side-panel', label: 'The side panel' },
+                  ]}
+                />
+              }
+            />
+            <SettingRow
               title="Keep pinned tabs open"
               description="Fold skips them. Tabs playing sound always stay open too."
               control={<Switch checked={settings.keepPinnedOpen} onChange={(v) => update({ keepPinnedOpen: v })} label="Keep pinned tabs open" />}
@@ -300,6 +319,11 @@ export function SettingsDialog({
               control={<Switch checked={settings.autoSuspend} onChange={(v) => update({ autoSuspend: v })} label="Put idle tabs to sleep" />}
             />
             <AutoFoldSection settings={settings} update={update} plan={plan} folders={folders} notice={autoNotice} runs={autoRuns} />
+            <SettingRow
+              title="Weekly summary"
+              description="On Mondays: how many tabs you folded, the memory you freed and the tabs you went back to. At the top of the full list and in the popup."
+              control={<Switch checked={settings.weeklySummary} onChange={(v) => update({ weeklySummary: v })} label="Weekly summary" />}
+            />
             {pro ? (
               <SettingRow
                 title="Sync with your Tabfold account"
@@ -448,9 +472,27 @@ export function SettingsDialog({
             >
               Remove Tabfold…
             </button>
+            {plan.email && (
+              <button
+                type="button"
+                onClick={() => setDeleting(true)}
+                title="Deletes your account on Tabfold’s server. Your folded tabs stay here."
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control px-2.5 font-semibold text-text-2 hover:bg-hover hover:text-text"
+              >
+                Delete my Tabfold account…
+              </button>
+            )}
             <span className="text-small text-text-3">
               Clear everything removes {foldedCount > 0 ? `all ${count(foldedCount, 'folded tab')}` : 'everything'} here and from Chrome sync. Asks first.
             </span>
+            <nav aria-label="Tabfold’s policies" className="ml-auto flex shrink-0 items-center gap-3 text-small">
+              <a href={siteUrl('/privacy')} target="_blank" rel="noreferrer" className="text-text-2 no-underline hover:text-text hover:underline">
+                Privacy
+              </a>
+              <a href={siteUrl('/terms')} target="_blank" rel="noreferrer" className="text-text-2 no-underline hover:text-text hover:underline">
+                Terms
+              </a>
+            </nav>
           </footer>
           <ToastViewport inDialog />
         </div>
@@ -458,6 +500,7 @@ export function SettingsDialog({
     </dialog>
     <BackupDialog open={open && backups} onClose={() => setBackups(false)} />
     <RemoveDialog open={open && removing} onClose={() => setRemoving(false)} foldedCount={foldedCount} pro={pro} />
+    {open && deleting && plan.email && <DeleteAccountDialog email={plan.email} onClose={() => setDeleting(false)} />}
     </>
   );
 }

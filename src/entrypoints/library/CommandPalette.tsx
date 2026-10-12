@@ -1,6 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Command, CopyX, FolderPlus, Settings, Sparkles, Trash2, Upload } from 'lucide-react';
+import { AppWindow, Command, CopyX, FolderPlus, Settings, Sparkles, Trash2, Upload } from 'lucide-react';
 import type { PlanState } from '@/lib/pro/types';
+import type { SearchDoc } from '@/lib/search/engine';
+import { Highlight } from '@/ui/components/Highlight';
+import { openHitsFirstHere, switchTo } from '@/ui/openTabs';
+import { ago } from './format';
 import type { LiveFolder } from '@/lib/state';
 import type { FolderRecord, TabRecord } from '@/lib/types';
 import { Kbd } from '@/ui/components/Chips';
@@ -15,10 +19,14 @@ import { openDialog } from './uiStore';
 
 interface Option {
   id: string;
-  section: 'Folders' | 'Actions' | 'Folded tabs';
+  section: 'Folders' | 'Actions' | 'Switch to tab' | 'Folded tabs';
   label: string;
   icon: ReactNode;
   run: () => void;
+  /** Words to highlight in the label. */
+  terms?: string[];
+  /** On the right: the open tab's window ("Client work"), a folded tab's age. */
+  hint?: ReactNode;
 }
 
 function matches(text: string, query: string): boolean {
@@ -31,8 +39,9 @@ function matches(text: string, query: string): boolean {
 const ICON = { size: 15, strokeWidth: 1.75, 'aria-hidden': true, className: 'shrink-0 text-text-2' } as const;
 
 /**
- * Ctrl+K / ⌘K in the full list (Mx-Ask): open a folder (live on Pro), run an action, or jump to
- * a folded tab. ↑↓ move, ↵ runs, Esc closes.
+ * Ctrl+K / ⌘K in the full list (Mx-Ask, Fi-Search): open a folder (live on Pro), run an action,
+ * switch to an open tab ("Switch to tab", with its window), or open a folded tab. ↑↓ move, ↵ runs,
+ * Esc closes.
  */
 export function CommandPalette({
   onClose,
@@ -41,6 +50,8 @@ export function CommandPalette({
   plan,
   liveFolders,
   actions,
+  openDocs = [],
+  currentWindowId,
 }: {
   onClose: () => void;
   folders: FolderRecord[];
@@ -48,12 +59,16 @@ export function CommandPalette({
   plan: PlanState;
   liveFolders: Record<string, LiveFolder>;
   actions: { settings: () => void; importer: () => void; makeRoom: () => void; organise: () => void };
+  /** Open tabs, with their window's name (1.0: "Switch to tab"). */
+  openDocs?: SearchDoc[];
+  /** This page's window: its tabs come first. */
+  currentWindowId?: number;
 }) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const listId = useId();
   const free = hasFreeLimits(plan);
-  const { result } = useTabSearch(query, [], { limit: 6 });
+  const { result } = useTabSearch(query, openDocs, { limit: 6 });
   const listRef = useRef<HTMLDivElement>(null);
 
   const options = useMemo<Option[]>(() => {
@@ -66,7 +81,7 @@ export function CommandPalette({
         section: 'Folders',
         label: free ? `${folder.name} · open all` : liveFolders[folder.id] ? `${folder.name} · go to the live group` : `${folder.name} · open live`,
         icon: <FolderIcon color={folder.color} size={15} />,
-        run: () => (free ? void openGroup(items, folder) : void openLive(folder, liveFolders, folders, plan)),
+        run: () => (free ? void openGroup(items, folder, folder.id) : void openLive(folder, liveFolders, folders, plan)),
       });
       if (out.length >= 6) break;
     }
@@ -86,6 +101,24 @@ export function CommandPalette({
     ];
     for (const act of acts) if (matches(`${act.label} ${act.keywords}`, query)) out.push({ ...act, section: 'Actions' });
     if (query.trim() && result) {
+      for (const hit of openHitsFirstHere(result.open, currentWindowId).slice(0, 6)) {
+        const doc = hit.doc;
+        if (doc.tabId === undefined) continue;
+        out.push({
+          id: `o:${doc.tabId}`,
+          section: 'Switch to tab',
+          label: doc.title || doc.url,
+          icon: <Favicon url={doc.url} size={16} />,
+          terms: hit.terms,
+          hint: (
+            <span className="inline-flex shrink-0 items-center gap-1.5 text-small text-text-3">
+              <AppWindow size={13} strokeWidth={1.75} aria-hidden />
+              {doc.windowLabel}
+            </span>
+          ),
+          run: () => void switchTo(doc.tabId!, doc.windowId),
+        });
+      }
       for (const hit of result.saved.slice(0, 6)) {
         const tab = hit.doc.tabRecordId ? tabs.find((t) => t.id === hit.doc.tabRecordId) : undefined;
         if (!tab) continue;
@@ -94,12 +127,14 @@ export function CommandPalette({
           section: 'Folded tabs',
           label: tab.title || tab.url,
           icon: <Favicon url={tab.url} size={16} />,
+          terms: hit.terms,
+          hint: <span className="shrink-0 text-small text-text-3">{ago(tab.savedAt)}</span>,
           run: () => void openFolded(tab, true),
         });
       }
     }
     return out;
-  }, [folders, tabs, query, free, liveFolders, plan, result, actions]);
+  }, [folders, tabs, query, free, liveFolders, plan, result, actions, currentWindowId]);
 
   useEffect(() => setActive(0), [query]);
   const current = options[Math.min(active, options.length - 1)];
@@ -169,13 +204,24 @@ export function CommandPalette({
               >
                 {option.icon}
                 <span dir="auto" className="min-w-0 flex-1 truncate">
-                  {option.label}
+                  {option.terms?.length ? <Highlight text={option.label} terms={option.terms} /> : option.label}
                 </span>
+                {option.hint}
                 {on && <Kbd>↵</Kbd>}
               </div>
             </div>
           );
         })}
+      </div>
+      <div aria-hidden className="flex h-9 items-center gap-1.5 border-t border-border bg-bg-subtle px-3.5 text-small text-text-3">
+        <Kbd>↵</Kbd>
+        {current?.section === 'Switch to tab' ? 'switch' : 'open'}
+        <span>·</span>
+        <Kbd>↑↓</Kbd>
+        move
+        <span>·</span>
+        <Kbd>esc</Kbd>
+        close
       </div>
     </Modal>
   );

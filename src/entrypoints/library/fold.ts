@@ -6,8 +6,10 @@ import { UNDO_WINDOW_MS, type ActiveFold } from '@/lib/state';
 import { dismissToast, toast } from '@/ui/components/Toast';
 import { useActiveFold, useLastAction } from '@/ui/hooks';
 import { listFullFrom } from '@/ui/limits';
+import { foldOutcomeText } from '@/ui/openTabs';
 import type { WindowInfo } from '@/ui/windows';
-import { approxBytes, count } from './format';
+import { approxBytes } from './format';
+import { openDialog } from './uiStore';
 import { dropUndo, registerUndo } from './undo';
 
 interface FoldError {
@@ -49,9 +51,9 @@ export function freedBytes(outcome: FoldOutcome): number {
 
 export function foldMessage(outcome: FoldOutcome): string {
   // Tabs that went into the list (or were already there); blank pages also close but are not counted.
-  const folded = outcome.savedTabs + outcome.skippedDuplicates;
+  // 1.0: "Folded 12 tabs into Client sites", "Folded 12 tabs · 5 went back into Client sites".
   const freed = freedBytes(outcome);
-  return `Folded ${count(folded, 'tab')}${freed > 0 ? ` · freed ${approxBytes(freed)}` : ''}`;
+  return foldOutcomeText(outcome, freed > 0 ? ` · freed ${approxBytes(freed)}` : '');
 }
 
 /** The fold announced last, so the command's answer and the progress broadcast never show two toasts. */
@@ -86,8 +88,13 @@ function showFoldToast(foldId: string, outcome: FoldOutcome, finishedAt: number)
   shownFold = { foldId, toastId, actionId };
 }
 
-/** Fold every window, or one (`windowId`; `keepWindowOpen` for the window this page is in). */
-export async function startFold(options: { windowId?: number; keepWindowOpen?: boolean } = {}): Promise<void> {
+/**
+ * Fold every window, or one (`windowId`; `keepWindowOpen` for the window this page is in), maybe
+ * into a folder (1.0: `intoFolderId`, or `newFolderName` for "New folder…").
+ */
+export async function startFold(
+  options: { windowId?: number; keepWindowOpen?: boolean; intoFolderId?: string; newFolderName?: string } = {},
+): Promise<void> {
   useFoldError.getState().set(null);
   try {
     const outcome = await send({ type: 'fold', ...options });
@@ -97,6 +104,10 @@ export async function startFold(options: { windowId?: number; keepWindowOpen?: b
     }
     showFoldToast(outcome.foldId, outcome, Date.now());
   } catch (error) {
+    if (error instanceof CommandError && error.code === 'folder-limit') {
+      openDialog({ kind: 'folder-limit' });
+      return;
+    }
     const quota = error instanceof CommandError && error.code === 'quota';
     const code = error instanceof CommandError ? error.code : undefined;
     const details = error instanceof CommandError ? error.details : undefined;

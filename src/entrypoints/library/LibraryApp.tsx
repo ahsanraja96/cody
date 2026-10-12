@@ -11,8 +11,14 @@ import { isTeamSession } from '@/lib/teams';
 import { FREE_PLAN } from '@/lib/pro/types';
 import { send } from '@/lib/messages';
 import {
+  foldIntoOrder,
+  hasFreeLimits,
+  isStarred,
   useActiveFold,
   useAutoFoldNotice,
+  useRecentFolders,
+  useStarredTeamFolders,
+  useWeeklySummary,
   useCloudSyncStatus,
   useFoldedTabs,
   useFolders,
@@ -28,6 +34,13 @@ import {
   useWorkerEvents,
 } from '@/ui/hooks';
 import { autoFoldText } from '@/ui/limits';
+import { WeeklyCard } from '@/ui/components/Weekly';
+import type { FoldTarget } from '@/ui/components/WindowMenu';
+import { folderCounts, starredFirst } from '@/ui/folders';
+import { openSearchDocs } from '@/ui/openTabs';
+import { personalFolders } from '@/lib/teams';
+import { FREE_LIMITS } from '@/lib/limits';
+import type { FolderRecord } from '@/lib/types';
 import { describeWindows, foldChoice, type WindowInfo } from '@/ui/windows';
 import { AccountDialogHost, useCheckoutClosedToast } from './AccountDialogs';
 import { AskChip, BestMatches, looksLikeQuestion, useAsk } from './ask';
@@ -42,7 +55,7 @@ import { GroupedList } from './GroupedList';
 import { HowPage } from './HowPage';
 import { MakeRoomDialog } from './LimitBits';
 import { Notices } from './Notices';
-import { OpenWindows } from './OpenWindows';
+import { OpenWindows, type FoldIntoContext } from './OpenWindows';
 import { OrganiseDialog } from './OrganiseDialog';
 import { PlansPage } from './PlansPage';
 import { RecentFolds } from './RecentFolds';
@@ -174,7 +187,7 @@ export function LibraryApp() {
   const plan = loadedPlan ?? FREE_PLAN;
   const cloudStatus = useCloudSyncStatus();
   const [organising, setOrganising] = useState(false);
-  const { windows, allWindows, foldsIncognito } = useFoldWindows();
+  const { allWindows, foldsIncognito } = useFoldWindows();
   const [currentWindowId, setCurrentWindowId] = useState<number>();
   const dialog = useLibraryUi((s) => s.dialog);
   const closeDialog = useLibraryUi((s) => s.close);
@@ -192,6 +205,16 @@ export function LibraryApp() {
   const candidates = useFoldCandidates(infos);
   // The window this page is in stays open with a new tab; another window is folded away.
   const foldWindow = (info: WindowInfo) => void startFold({ windowId: info.id, keepWindowOpen: info.current });
+  // 1.0: Fold into a folder (a window card's ⋯), starred folders first, the weekly summary.
+  const foldInto = (info: WindowInfo, target: FoldTarget) =>
+    void startFold({
+      windowId: info.id,
+      keepWindowOpen: info.current,
+      ...('folderId' in target ? { intoFolderId: target.folderId } : { newFolderName: target.newName }),
+    });
+  const teamStars = useStarredTeamFolders();
+  const recentFolders = useRecentFolders();
+  const weekly = useWeeklySummary();
   const shortcut = useFoldShortcut();
   const hasRemovals = useRemovals((s) => s.removals.size > 0);
   const [activeResult, setActiveResult] = useState<string | undefined>();
@@ -211,6 +234,20 @@ export function LibraryApp() {
   });
 
   const tabs = folded?.tabs ?? NO_TABS;
+  const starred = useCallback((folder: FolderRecord) => isStarred(folder, teamStars), [teamStars]);
+  // Ctrl+K's "Switch to tab": open tabs with their window's name, Tabfold's own pages left out.
+  const paletteDocs = useMemo(() => openSearchDocs(infos, extUrl('/')), [infos]);
+  // Starred folders come first everywhere (1.0): the list, the left column, the menus.
+  const shownFolders = useMemo(() => starredFirst(folders ?? [], teamStars), [folders, teamStars]);
+  const into: FoldIntoContext = useMemo(
+    () => ({
+      folders: foldIntoOrder(folders ?? [], teamStars, recentFolders),
+      counts: folderCounts(folded?.tabs),
+      starred,
+      folderLimit: hasFreeLimits(plan) && personalFolders(folders ?? []).length >= FREE_LIMITS.folders,
+    }),
+    [folders, teamStars, recentFolders, folded, starred, plan],
+  );
   const recent = useMemo(
     () =>
       (folded?.folds ?? [])
@@ -308,6 +345,8 @@ export function LibraryApp() {
                 tabs={tabs}
                 plan={plan}
                 liveFolders={liveFolders}
+                openDocs={paletteDocs}
+                currentWindowId={currentWindowId}
                 actions={{
                   settings: () => navigate('settings'),
                   importer: openImport,
@@ -400,8 +439,11 @@ export function LibraryApp() {
               {searching ? (
                 <SearchResults
                   query={query}
-                  windows={windows}
-                  foldedCount={tabs.length}
+                  openDocs={paletteDocs}
+                  currentWindowId={currentWindowId}
+                  tabs={tabs}
+                  folders={shownFolders}
+                  siteKinds={siteKinds}
                   scrollRef={scrollRef}
                   onClear={() => {
                     setQuery('');
@@ -413,13 +455,14 @@ export function LibraryApp() {
                 />
               ) : empty ? (
                 <>
-                  <OpenWindows windows={infos} disabled={isFolding(fold)} onFold={foldWindow} />
+                  <OpenWindows windows={infos} disabled={isFolding(fold)} onFold={foldWindow} onFoldInto={foldInto} into={into} />
                   <EmptyState onImport={openImport} foldable={candidates.tabs} />
                 </>
               ) : (
                 <>
+                  {weekly && <WeeklyCard week={weekly} className="mb-7" />}
                   {proAi && showTidy(tidy, settings.tidyUp) && <TidyCard tidy={tidy} onSettings={() => navigate('settings')} />}
-                  <OpenWindows windows={infos} disabled={isFolding(fold)} onFold={foldWindow} />
+                  <OpenWindows windows={infos} disabled={isFolding(fold)} onFold={foldWindow} onFoldInto={foldInto} into={into} />
                   <RecentFolds folds={recent} tabs={tabs} />
                   {folded && (
                     <FoldedHeading
@@ -438,7 +481,8 @@ export function LibraryApp() {
             {!searching && !empty && folded && (
               <GroupedList
                 tabs={tabs}
-                folders={folders ?? []}
+                folders={shownFolders}
+                isStarred={starred}
                 siteKinds={siteKinds}
                 liveFolders={liveFolders}
                 plan={plan}

@@ -30,6 +30,8 @@ export type MenuEntry =
       submenuWidth?: number;
       /** For screen readers when the label isn't plain text. */
       ariaLabel?: string;
+      /** Choosing it keeps the menu open (it swaps what the menu shows: "Fold into…", ‹ back). */
+      keepOpen?: boolean;
     }
   | { type: 'separator'; key: string }
   | { type: 'heading'; key: string; label: ReactNode }
@@ -200,6 +202,10 @@ function MenuPanel({ entries, label, width, anchor, parent, depth, closeAll, clo
               onClick={(e) => {
                 if (hasSub) {
                   setOpenSub(expanded ? null : { key: entry.key, el: e.currentTarget, focus: e.detail === 0 });
+                  return;
+                }
+                if (entry.keepOpen) {
+                  entry.onSelect?.();
                   return;
                 }
                 closeAll(true);
