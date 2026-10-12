@@ -1,4 +1,4 @@
-import type { Purchase, Subscription, TeamRole } from '../../server/supabase/functions/_shared/plan.ts';
+import { isLive, type Purchase, type Subscription, type TeamRole } from '../../server/supabase/functions/_shared/plan.ts';
 import {
   RUN_LIMIT_REACHED,
   SYNC_CONFLICT,
@@ -24,7 +24,7 @@ import {
  * An in-memory Store for the server tests and the end-to-end Pro test (e2e/pro.mjs), with no
  * test-runner imports so plain Node can load it. Behaves like the SQL in server/supabase/migrations,
  * including its atomic functions (sync and team sync writes, team creation and joining, share
- * views). Times come from `now` (default Date.now), as the database's `now()` would.
+ * views, deleting an account, the trial fingerprints, pruning ended teams' folders). Times come from `now` (default Date.now), as the database's `now()` would.
  */
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -97,7 +97,10 @@ export class MemoryStore implements Store {
   teamSync = new Map<string, SyncState>();
   /** By id. */
   shares = new Map<string, ShareRecord>();
+  /** `trial_used`: the trial fingerprints of emails that had a trial (kept after accounts are deleted). */
+  trialHashes = new Set<string>();
   private seq = 0;
+  private accountSeq = 0;
 
   constructor(options: MemoryStoreOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -109,7 +112,8 @@ export class MemoryStore implements Store {
   account(email: string): Account {
     for (const account of this.accounts.values()) if (account.email === email) return account;
     const account: Account = {
-      id: `account-${this.accounts.size + 1}`,
+      // Numbered in the order they were made: never reused, even after an account is deleted.
+      id: `account-${++this.accountSeq}`,
       email,
       stripeCustomerId: null,
       trialStartedAt: null,
@@ -143,11 +147,16 @@ export class MemoryStore implements Store {
     if (row && row.stripeCustomerId === null && !taken) row.stripeCustomerId = customerId;
   }
 
-  async startTrial(account: string) {
+  async startTrial(account: string, trialHash: string) {
     const row = this.accounts.get(account);
-    if (!row || row.trialStartedAt !== null) return false;
+    if (!row || row.trialStartedAt !== null || this.trialHashes.has(trialHash)) return false;
     row.trialStartedAt = this.now();
+    this.trialHashes.add(trialHash);
     return true;
+  }
+
+  async trialUsed(trialHash: string) {
+    return this.trialHashes.has(trialHash);
   }
 
   async verifyEmail(account: string) {
@@ -317,6 +326,10 @@ export class MemoryStore implements Store {
     for (const day of [...map.keys()]) if (day < beforeDay) map.delete(day);
   }
 
+  async backupPruneAll(beforeDay: string) {
+    for (const account of this.backups.keys()) await this.backupPrune(account, beforeDay);
+  }
+
   async aiUsage(account: string, month: string) {
     return { ...(this.usage.get(`${account}|${month}`) ?? { runs: 0, light: 0 }) };
   }
@@ -462,7 +475,57 @@ export class MemoryStore implements Store {
     const share = this.shares.get(id);
     if (!share) return null;
     share.views += 1;
-    return { name: share.name, color: share.color, tabs: copy(share.tabs), updatedAt: share.updatedAt };
+    return { name: share.name, color: share.color, tabs: copy(share.tabs), updatedAt: share.updatedAt, note: share.note ?? '' };
+  }
+
+  // ---- Deleting an account ----
+
+  /** `tabfold_account_delete`: the account and everything kept for it, as the database's cascades do. */
+  async accountDelete(account: string, trialHash: string) {
+    const row = this.accounts.get(account);
+    if (!row) return false;
+    // An account that had a trial leaves its email's fingerprint behind (trials from before 1.0 too).
+    if (row.trialStartedAt !== null) this.trialHashes.add(trialHash);
+    const tokens = new Set<string>();
+    for (const [hash, device] of [...this.devices]) {
+      if (device.accountId !== account) continue;
+      tokens.add(hash);
+      this.devices.delete(hash);
+    }
+    for (const [id, pending] of [...this.pending]) {
+      if (tokens.has(pending.tokenHash) || pending.signInEmail === row.email) this.pending.delete(id);
+    }
+    this.codes.delete(row.email);
+    for (const [id, sub] of [...this.subscriptions]) if (sub.accountId === account) this.subscriptions.delete(id);
+    for (const [id, purchase] of [...this.purchases]) if (purchase.accountId === account) this.purchases.delete(id);
+    this.sync.delete(account);
+    this.backups.delete(account);
+    for (const key of [...this.usage.keys()]) if (key.startsWith(`${account}|`)) this.usage.delete(key);
+    for (const [id, share] of [...this.shares]) if (share.accountId === account) this.shares.delete(id);
+    // A team it owns ends: its people, invitations and folders go with it.
+    for (const [teamId, team] of [...this.teams]) {
+      if (team.ownerId !== account) continue;
+      this.teams.delete(teamId);
+      this.teamSync.delete(teamId);
+      for (const [member, membership] of [...this.teamMembersByAccount]) if (membership.teamId === teamId) this.teamMembersByAccount.delete(member);
+      for (const [key, invite] of [...this.teamInviteRows]) if (invite.teamId === teamId) this.teamInviteRows.delete(key);
+    }
+    this.teamMembersByAccount.delete(account);
+    this.accounts.delete(account);
+    return true;
+  }
+
+  /** `tabfold_team_sync_prune`: empties the folders of teams whose subscription ended before then. */
+  async teamSyncPruneEnded(endedBefore: number) {
+    let emptied = 0;
+    for (const team of this.teams.values()) {
+      const subscription = team.subscriptionId ? this.subscriptions.get(team.subscriptionId)?.subscription : undefined;
+      if (!subscription || isLive(subscription)) continue;
+      const endedAt = subscription.endedAt ?? subscription.cancelAt ?? subscription.currentPeriodEnd;
+      if (typeof endedAt !== 'number' || endedAt >= endedBefore) continue;
+      if (this.teamSync.delete(team.id)) emptied += 1;
+    }
+    return emptied;
   }
 
   // ---- Test helpers ----

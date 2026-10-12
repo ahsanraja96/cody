@@ -75,6 +75,7 @@ JSON `{ "error": <code>, "message": <text for people>, ... }`, codes as in `ProE
 | 400 | `invalid-email` | `POST /signin/start` with something that isn't an email address |
 | 400 | `wrong-code` | `POST /signin/finish`: the code doesn't match (body also has `triesLeft`) |
 | 400 | `code-expired` | `POST /signin/finish`: no code for that email, it's older than 10 minutes, or 5 wrong tries used it up |
+| 400 | `invalid` | 1.0: `POST /account/delete` without the account's email typed as confirmation |
 | 401 | `not-signed-in` | Missing or malformed token; a Pro route from a computer that isn't signed in; an unknown profile key |
 | 402 | `needs-pro` / `needs-pro-ai` | The plan doesn't include it (0.6: also a team's routes once its plan has ended) |
 | 403 | `server` | 0.6: a team member (not the owner) asking for an owner's team route |
@@ -230,7 +231,7 @@ reaches the extension.
 | `EMAIL_FROM` | Sender, e.g. `Tabfold <hello@tabfold.app>` (a domain verified in Resend) |
 | `ANTHROPIC_API_KEY` | For Pro AI |
 | `ALLOWED_ORIGINS` | `chrome-extension://<id>` of the store copy (and the development copy), comma separated |
-| `CODE_SECRET` | Optional: the key for hashing sign-in codes (defaults to the service role key) |
+| `CODE_SECRET` | Optional but recommended: the key for hashing sign-in codes and (1.0) the trial fingerprints (defaults to the service role key); set it once and keep it |
 | `PUBLIC_URL` | Optional: the function's public URL (defaults to `$SUPABASE_URL/functions/v1/tabfold`) |
 | `STRIPE_API_BASE` | Test only: a fake Stripe for the end-to-end test |
 
@@ -382,8 +383,59 @@ leaves the team it's in, and deletes its devices (every computer is signed out),
 shares (their links stop working), invitations it sent, sign-in codes and AI usage. A Pro for life
 purchase goes with it. → `{ ok: true }`.
 
+In order: Stripe first, so that when Stripe can't be reached (502 `server`) nothing is deleted and the
+person can try again. Every subscription stored for the account that Stripe hasn't ended is cancelled
+at once (`DELETE /v1/subscriptions/<id>`: its own, and the Teams subscription of a team it owns); one
+Stripe already ended is left alone. Then the database deletes the account in one step
+(`tabfold_account_delete`, migration `20261013000000_v10.sql`): the account row and, through its
+foreign keys, its devices and Chrome profile key, synced items, backups, AI usage, subscriptions and
+purchases as stored here, shares, its team membership, and a team it owns with that team's members,
+invitations and shared folders; plus its sign-in code and the checkouts its computers started (or
+that wait for it to sign in). A member's team then gets one seat fewer, as when someone leaves.
+
+Afterwards: every computer that was signed in is a token the server doesn't know (`GET /me` answers
+Free; Pro routes 401). Stripe's `customer.subscription.deleted` events find no account and change
+nothing. Invitations other teams sent to the email are theirs and stay on their lists. Signing in
+again with the same email makes a new, empty account, which can't start the trial again if the old
+one had it (below). The Stripe customer and its payment records stay in Stripe.
+
+Not signed in: 401. The server's log has a line only when something fails (never the email).
+
+### One trial per email, also after deleting the account
+
+The server keeps a one-way **trial fingerprint** of every email that had the trial: HMAC-SHA256 of
+`trial:<email>` (trimmed, lower-cased), keyed with `CODE_SECRET` (else the service role key), in hex,
+in the `trial_used` table (migration `20261014000000_v10_trials.sql`). No email is kept in clear, and
+the key isn't in the database. It's written when a trial starts (`tabfold_start_trial`, atomically
+with the check) and when an account that had a trial is deleted (`tabfold_account_delete`, which
+covers trials started before 1.0), and it stays after the account is gone.
+
+`POST /signin/finish` with `startTrial`, and `POST /trial`, start no trial when the email's
+fingerprint is there (`trialStarted: false, trialUsed: true`); the plan's `trialUsed` says so too
+wherever a trial could be offered. Changing `CODE_SECRET` (or the service role key while it isn't
+set) makes the kept fingerprints unrecognisable, so set it once and keep it.
+
+### Once a day: old backups, and ended teams' folders
+
+The first sync write of each day (`POST /sync`, any account) runs a clean-up:
+
+- backups older than 30 days are deleted for every account, including accounts whose plan ended
+  and that no longer write or list backups;
+- the shared folders (team sync items and version) of every team whose plan ended more than 30 days
+  ago are deleted (`tabfold_team_sync_prune`): its subscription isn't active, trialing or past due,
+  and its end (else its cancellation time, else its period's end) is more than 30 days back. Until
+  then `GET /team/sync` keeps working for its people, so they can keep a copy. The team, its people
+  and invitations stay; if the owner starts the plan again, its folders start empty.
+
+Each part is logged when it fails and never fails the sync write.
+
 ### Shares carry a folder's note
 
 `POST /shares` and `PUT /shares/<id>` take an optional `note` (one line, at most 140 characters after
 squeezing whitespace; longer is cut, never mid-character); `GET /shares/<id>` and
 `GET /public/shares/<id>` return `note` ('' when none).
+
+Control characters and line breaks become spaces; a note that isn't text is ''. "Characters" are
+Unicode code points, and the cut keeps whole user-perceived characters: an emoji, a flag or a letter
+with its accent is kept whole or left out. A `PUT` without `note` removes it (it replaces the
+contents). Stored in `shares.note` (`''` by default, at most 140 characters).

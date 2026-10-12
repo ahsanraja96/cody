@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser';
 import { db } from '../db';
-import { addFolder, duplicateGroups, freeLimitsNow, listPersonalFolders as listLiveFolders, setTabsFolder } from '../folders';
+import { addFolder, duplicateGroups, freeLimitsNow, listPersonalFolders as listLiveFolders, noteRecentFolders, setTabsFolder } from '../folders';
 import { CommandError, type AskMatch, type Command, type CommandResults } from '../messages';
 import { cutText, pickAskTabs, pickTabsForAi, readAskMatches, readTidyGroups } from '../pro/ai';
 import { api } from '../pro/api';
@@ -160,6 +160,7 @@ export async function applyTidy(suggestionId: string): Promise<{ done: number; a
     }
     const { moved, before } = await setTabsFolder(suggestion.tabRecordIds, folderId);
     done = moved;
+    if (moved) await noteRecentFolders([folderId]);
     if (moved || created.length) actionId = await undoable({ patches: before, foldersMade: created });
   }
   await tidyState.set({ ...state, suggestions: state.suggestions.filter((s) => s.id !== suggestionId) });

@@ -12,7 +12,9 @@ Tabfold Free never talks to a server. Pro and Pro AI do: they use one small prog
 - runs Teams: invitations by email, the team's shared folders, and seats that follow the team,
 - serves shared folders to their public page (a small static site in `web/`, on Netlify),
 - runs Organise with AI, smart fold names, Copy as context, Ask your tabs and the weekly tidy-up,
-  sending only tab titles and sites (and folder names) to Claude.
+  sending only tab titles and sites (and folder names, a group's name or the question asked) to
+  Claude,
+- deletes an account when its owner asks (1.0, Settings › "Delete my Tabfold account…").
 
 This guide sets it up from nothing. It takes about an hour. You'll need accounts at
 [supabase.com](https://supabase.com), [stripe.com](https://stripe.com), [resend.com](https://resend.com),
@@ -70,6 +72,10 @@ supabase db push
 
 `link` asks for the database password from step 1. `db push` creates the tables. Every table is
 locked to the server: nobody else can read it, even with the project's public key.
+
+Set up before 1.0? Run `supabase db push` again: it applies `20261013000000_v10.sql` (a shared
+folder's note, and deleting an account) and `20261014000000_v10_trials.sql` (one trial per email,
+and clearing ended teams' folders), and leaves the rest.
 
 ## 4. Set up Stripe (in test mode first)
 
@@ -177,7 +183,7 @@ supabase secrets set SHARE_BASE_URL=https://tabfold.app
 | `ANTHROPIC_API_KEY` | Anthropic API key | Pro AI |
 | `ALLOWED_ORIGINS` | `chrome-extension://<id>`, comma separated for more than one (no spaces) | Everything (the extension is turned away without it) |
 | `SHARE_BASE_URL` | The public site's address, e.g. `https://tabfold.app` (no slash at the end). Defaults to `https://tabfold.app` | Shared folder links, the link in team invitations |
-| `CODE_SECRET` | Optional: a long random string for hashing sign-in codes. Defaults to the project's service role key | — |
+| `CODE_SECRET` | A long random string (e.g. `openssl rand -hex 32`) for hashing sign-in codes and the trial fingerprints. Defaults to the project's service role key. Set it once and never change it: a new one makes the kept trial fingerprints unrecognisable, so emails that had the trial could start it again | Recommended |
 | `PUBLIC_URL` | Optional: the server's address, if it isn't `https://<project id>.supabase.co/functions/v1/tabfold` | — |
 | `STRIPE_API_BASE` | Tests only: points the server at a pretend Stripe. Never set it on the real server | — |
 
@@ -299,31 +305,54 @@ Thinking tokens bill as output and are the biggest AI cost; the server already a
 - Each account's email, its Stripe customer id, and its subscriptions' plan, status and dates
   (Stripe keeps the card details; the server never sees them).
 - When the account's trial started, and when its email was first proved with a code.
+- For every email that had the trial, a one-way fingerprint (an HMAC of the email keyed with
+  `CODE_SECRET`), kept even after the account is deleted, so the trial can't be started again with
+  the same email. The address can't be read back from it.
 - For each signed-in computer, and each Chrome profile key, only a scrambled form (SHA-256) of its
   token, and when it was last seen.
 - The latest sign-in code for an email, scrambled (HMAC), for 10 minutes; deleted once used.
 - Counters for how many codes were asked for and checkouts started in the last hour, under
   scrambled emails and tokens.
 - Which computer started a checkout, for a day, and Stripe's event ids, for 30 days.
-- The account's folded tabs (addresses, titles, keywords), as the extension syncs them, plus one
-  backup a day for 30 days. Older backups are deleted automatically.
+- The account's folded tabs (addresses, titles, keywords, folders and their notes), as the
+  extension syncs them, plus one backup a day for 30 days. Older backups are deleted automatically,
+  once a day, also for accounts that stopped syncing. When a plan ends, the synced copy stays (so
+  it's there if the person comes back) until they delete their account.
 - How many AI runs the account used each month.
 - A Pro for life purchase: when, and its Stripe payment's id.
 - Teams: the team's name, who is in it (their accounts), the emails invited and when, and the
-  team's shared folders (as the extension syncs them; no backups).
-- Shared folders: the name, colour, page titles and addresses the owner shared, how many times
-  the page was opened, and when it changed. Anyone with the link can see them, until the owner
+  team's shared folders (as the extension syncs them; no backups). When a team's plan ends, its
+  folders stay readable for 30 days, then the daily clean-up deletes them.
+- Shared folders: the name, colour, note, page titles and addresses the owner shared, how many
+  times the page was opened, and when it changed. Anyone with the link can see them, until the owner
   stops sharing. The public page's visits are counted against a scrambled (SHA-256) address, for a
   minute, to stop floods; the address itself isn't kept.
 
 For the AI, only tab titles (cut to 200 characters) and sites go to Anthropic, never addresses or
-page content, and at most 300 tabs at a time. The server doesn't keep what it sent or got back.
-The server's logs never contain tokens, codes or tab titles.
+page content, and at most 300 tabs at a time; the tidy-up also sends folder names, Copy as context
+the group's name, and Ask your tabs the question typed. The server doesn't keep what it sent or got
+back. The server's logs never contain tokens, codes or tab titles.
 
-To delete someone's data: in the Supabase dashboard, open **Table Editor → accounts**, find their
-email and delete the row. Their computers, subscriptions, purchases, tabs, backups, AI counts and
-shared folders go with it, and so does a team they own (its people go back to their own plans).
-Cancel their subscription and delete the customer in Stripe too.
+**Deleting an account.** People delete their own account in Tabfold: Settings › "Delete my Tabfold
+account…", typing their email to confirm (`POST /account/delete`, see `API.md`). Their Stripe
+subscriptions are cancelled at once, then their computers, synced tabs, backups, shared folders, AI
+counts, Pro for life purchase and sign-in code go, and a team they own ends (its people go back to
+their own plans). If they had the trial, the email's trial fingerprint stays. Stripe keeps its own
+records of the payments (the customer, invoices, receipts).
+
+If someone writes to you asking for it instead, first cancel their subscriptions in Stripe
+(**Customers →** their email **→** the subscription **→ Cancel subscription → Immediately**), then in
+the Supabase dashboard open **SQL Editor** and run this, with your `CODE_SECRET` in place of
+`<CODE_SECRET>` (it works out the email's trial fingerprint, which the database needs when the
+account had a trial):
+
+```sql
+select public.tabfold_account_delete(id, encode(extensions.hmac('trial:' || email, '<CODE_SECRET>', 'sha256'), 'hex'))
+  from public.accounts where email = 'their@email';
+```
+
+Delete the Stripe customer too only if they ask and you don't need the records (tax and accounting
+rules usually require keeping invoices).
 
 ## Later
 

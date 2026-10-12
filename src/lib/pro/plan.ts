@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser';
 import { readRuns } from './ai';
-import { ensureProfileKey, forgetDeviceToken, isToken, peekDeviceToken, PROFILE_KEY, setSignedOutHere, usableProfileKey } from './account';
+import { ensureProfileKey, forgetDeviceToken, forgetProfileKey, isToken, peekDeviceToken, PROFILE_KEY, setSignedOutHere, usableProfileKey } from './account';
 import { api, ProError } from './api';
 import { proConfigured } from './config';
 import { aiRuns, forgetCloudSyncState, needsSignIn, planEnded, planState, readPlan } from './state';
@@ -273,6 +273,19 @@ export async function signOut(now = Date.now()): Promise<{ ok: true }> {
   await applyPlan({ ...FREE_PLAN, checkedAt: now }, { now });
   await Promise.all([aiRuns.set(null), needsSignIn.set(null), forgetCloudSyncState()]);
   return { ok: true };
+}
+
+/**
+ * After the Tabfold account was deleted (1.0): this computer signs out as `signOut` does, without
+ * asking the server (the account and its devices are gone), and the Chrome profile key goes too.
+ * The plan here is Free, account sync stops and Chrome sync takes over; folded tabs stay.
+ */
+export async function signOutAfterDeletion(now = Date.now()): Promise<void> {
+  await forgetDeviceToken();
+  await setSignedOutHere(true);
+  lastReadAt = now;
+  await applyPlan({ ...FREE_PLAN, checkedAt: now }, { now });
+  await Promise.all([aiRuns.set(null), needsSignIn.set(null), forgetCloudSyncState(), forgetProfileKey()]);
 }
 
 // ---------------------------------------------------------------------------------------------

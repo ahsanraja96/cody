@@ -29,6 +29,14 @@ export const CATEGORIES: Category[] = [
 
 const BY_ID = new Map(CATEGORIES.map((c) => [c.id, c]));
 
+/**
+ * "Tidy into groups" (1.0): the Chrome tab group colour each kind of site gets, one distinct colour
+ * per kind (the list's own colours), so a tidied window looks like the list.
+ */
+export const KIND_GROUP_COLORS: Readonly<Record<CategoryId, TabGroupColor>> = Object.fromEntries(
+  CATEGORIES.map((c) => [c.id, c.color]),
+) as Record<CategoryId, TabGroupColor>;
+
 export function category(id: CategoryId): Category {
   return BY_ID.get(id) ?? BY_ID.get('other')!;
 }

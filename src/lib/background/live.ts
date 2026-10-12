@@ -4,7 +4,7 @@ import { bumpSearchVersion, db } from '../db';
 import { CommandError, type Command, type CommandResults } from '../messages';
 import { removeTabsWithSnapshot, saveCapture, type RemovedTabs } from '../repo';
 import { getSettings } from '../settings';
-import { getDeviceId, liveFolders, type LiveFolder } from '../state';
+import { getDeviceId, liveFolders, windowNames, type LiveFolder } from '../state';
 import { planState } from '../pro/state';
 import { placeTabs } from '../teamFolders';
 import type { FolderRecord, TabRecord } from '../types';
@@ -14,6 +14,7 @@ import { sleepWhenLoaded } from './restore';
 import { chunk, refuseToOpen } from './restorePlan';
 import { requirePaid } from './room';
 import { closeTabsSafely, recordChangeUndo, takeClosingByTabfold } from './save';
+import { countCameBack } from './weeklyNumbers';
 
 /**
  * Live folders (Mx-Live boards, Pro): a folder open as a Chrome tab group that saves itself. The
@@ -470,6 +471,9 @@ async function openLive(folderId: string, newWindow: boolean | undefined, foldOt
     return { opened: opened.length, groupId: null, reason: 'Chrome didn’t let Tabfold make a tab group, so the tabs are open but don’t save themselves.' };
   }
   await saveBindings({ ...(await bindings()), [folderId]: { folderId, groupId, windowId, openedAt: Date.now() } });
+  // The window is named after the folder (1.0), unless the person named it.
+  if (!(await windowNames.get())[windowId]) await windowNames.set(windowId, folder.name).catch(() => undefined);
+  void countCameBack(opened.length);
   return { opened: opened.length, groupId };
 }
 

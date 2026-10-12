@@ -21,8 +21,9 @@ import { hmacSha256Hex, safeEqual, type CheckoutInfo, type CheckoutInput, type P
  * The Tabfold Pro server (server/API.md): device tokens, sign-in with an emailed code, the server
  * trial, Stripe Checkout (subscriptions, Pro for life, Teams) and the billing portal, Stripe
  * webhooks, plan checks, sync, daily backups, teams and their shared folders, shared folder links
- * and the AI tasks. Only web-standard APIs, with the database, Stripe, the mailer and the model
- * injected, so the same code runs in the Edge Function (index.ts), in tests and in Node.
+ * (1.0: with a folder's note), the AI tasks, and deleting an account (1.0). Only web-standard APIs,
+ * with the database, Stripe, the mailer and the model injected, so the same code runs in the Edge
+ * Function (index.ts), in tests and in Node.
  */
 
 const MINUTE_MS = 60 * 1000;
@@ -68,6 +69,8 @@ export const LIMITS = {
   shareTitle: 200,
   shareUrl: 2000,
   shareName: 60,
+  /** A folder's note (1.0): one line, at most this many characters. */
+  shareNote: 140,
   /** …shares an account can have, and public reads a minute per address. */
   sharesPerAccount: 500,
   shareReadsPerMinute: 60,
@@ -164,6 +167,8 @@ export interface ShareContent {
   tabs: { title: string; url: string }[];
   /** "Keep it up to date": the extension sends changes. */
   live: boolean;
+  /** The folder's note (1.0): one line, at most 140 characters; '' or left out when none. */
+  note?: string;
 }
 
 export interface ShareRecord extends ShareContent {
@@ -180,6 +185,8 @@ export interface PublicShare {
   color: string;
   tabs: { title: string; url: string }[];
   updatedAt: number;
+  /** The folder's note; '' or left out when none (the route always answers with one). */
+  note?: string;
 }
 
 export interface SigninCode {
@@ -207,8 +214,14 @@ export interface Store {
   accountByCustomer(customerId: string): Promise<Account | null>;
   /** Sets the account's Stripe customer, unless it has one. */
   setCustomer(account: string, customerId: string): Promise<void>;
-  /** `tabfold_start_trial`: starts the trial now, only if it never started. True if it did. */
-  startTrial(account: string): Promise<boolean>;
+  /**
+   * `tabfold_start_trial`, atomically: starts the trial now, only if it never started for this
+   * account and no account with this email had one (`trialHash`, the email's trial fingerprint, is
+   * not in `trial_used`); then records the fingerprint. True if it started.
+   */
+  startTrial(account: string, trialHash: string): Promise<boolean>;
+  /** Whether an account with this email (by its trial fingerprint) ever had a trial, deleted accounts included. */
+  trialUsed(trialHash: string): Promise<boolean>;
   /**
    * `tabfold_verify_email`: the email was just proved with a code. The first time, unlinks every
    * device token and profile key of the account (atomically with marking it). True if it was.
@@ -272,6 +285,8 @@ export interface Store {
   backupGet(account: string, day: string): Promise<{ day: string; items: Record<string, unknown> } | null>;
   /** Deletes backups from before this day. */
   backupPrune(account: string, beforeDay: string): Promise<void>;
+  /** Deletes every account's backups from before this day (1.0: also those of accounts that stopped syncing). */
+  backupPruneAll(beforeDay: string): Promise<void>;
   aiUsage(account: string, month: string): Promise<{ runs: number; light: number }>;
   /** `tabfold_take_run`: adds one if under the limit and returns the new count, or RUN_LIMIT_REACHED. */
   takeRun(account: string, month: string, kind: UsageKind, limit: number): Promise<number>;
@@ -319,6 +334,21 @@ export interface Store {
   shareCount(account: string): Promise<number>;
   /** `tabfold_share_view`: counts a view and returns what the page shows, or null if there's no such share. */
   shareView(id: string): Promise<PublicShare | null>;
+
+  /**
+   * `tabfold_account_delete` (1.0), atomically: the account and everything kept for it (devices and
+   * profile keys, synced copy, backups, AI usage, subscriptions and purchases as stored here, shares,
+   * its team membership, a team it owns with that team's people, invitations and folders), its
+   * sign-in code and the checkouts its computers started. If the account had a trial, its email's
+   * trial fingerprint (`trialHash`) stays in `trial_used`, so the trial can't start again. False if
+   * there was no such account.
+   */
+  accountDelete(account: string, trialHash: string): Promise<boolean>;
+  /**
+   * `tabfold_team_sync_prune`: deletes the shared folders (team sync items and state) of every team
+   * whose subscription isn't live and ended before this time (ms). The number of teams emptied.
+   */
+  teamSyncPruneEnded(endedBefore: number): Promise<number>;
 }
 
 export interface Deps {
@@ -360,6 +390,8 @@ type ErrorCode =
   | 'code-expired'
   | 'ai-failed'
   | 'send-failed'
+  /** 1.0: `POST /account/delete` without the account's email as confirmation. */
+  | 'invalid'
   | 'server';
 
 class HttpError extends Error {
@@ -435,6 +467,7 @@ const ROUTES: Record<string, Handlers> = {
   '/team/leave': { POST: teamLeave },
   '/team/sync': { GET: teamSyncGet, POST: teamSyncPost },
   '/shares': { POST: shareCreate },
+  '/account/delete': { POST: accountDelete },
 };
 
 /** Routes with a part that varies, which the handler gets as `param` (URL-decoded). */
@@ -576,6 +609,27 @@ async function codeHash(deps: Deps, email: string, code: string): Promise<string
   return hmacSha256Hex(deps.config.codeSecret, `${email}:${code}`);
 }
 
+/**
+ * An email's trial fingerprint: HMAC-SHA256 of `trial:<email>` (trimmed, lower-cased), keyed with the
+ * code secret, in hex. One-way: the address can't be read back from it, and without the secret it
+ * can't even be checked against a guess. Kept in `trial_used` once the email has had a trial, also
+ * after its account is deleted, so the 7-day trial can't be started again with the same email.
+ * Changing the secret (CODE_SECRET, or the service role key while CODE_SECRET isn't set) makes the
+ * kept fingerprints unrecognisable: set CODE_SECRET once and keep it.
+ */
+export async function trialFingerprint(secret: string, email: string): Promise<string> {
+  if (!secret) throw new Error('CODE_SECRET is not set');
+  return hmacSha256Hex(secret, `trial:${email.trim().toLowerCase()}`);
+}
+
+const fingerprintOf = (deps: Deps, account: Account) => trialFingerprint(deps.config.codeSecret, account.email);
+
+/** This account, or an earlier (deleted) account with the same email, had a trial. */
+async function hadTrial(deps: Deps, account: Account): Promise<boolean> {
+  if (account.trialStartedAt !== null) return true;
+  return deps.store.trialUsed(await fingerprintOf(deps, account));
+}
+
 // ---- Who is asking ----
 
 const notSignedIn = () => new HttpError(401, 'not-signed-in', 'This computer isn’t signed in to Tabfold Pro.');
@@ -625,10 +679,15 @@ async function planOf(deps: Deps, account: Account | null): Promise<PlanState> {
     deps.store.purchaseList(account.id),
     teamInputOf(deps, account.id),
   ]);
-  return planFor(
+  const plan = planFor(
     { account: { email: account.email, trialStartedAt: account.trialStartedAt }, subscriptions, purchases, team },
     deps.now(),
   );
+  // Where a trial could be offered, say whether this email already had one (on a deleted account).
+  if (!plan.trialUsed && plan.status === null && !plan.team && deps.config.codeSecret) {
+    if (await deps.store.trialUsed(await fingerprintOf(deps, account))) return { ...plan, trialUsed: true };
+  }
+  return plan;
 }
 
 /** `{ plan, runs }`, as `GET /me` and the sign-in routes answer. */
@@ -663,7 +722,38 @@ const cutChars = (text: string, max: number) => Array.from(text).slice(0, max).j
 
 /** Text for a name: one line, no control characters, whitespace tidied, at most `max` characters. */
 export function cleanLine(value: string, max: number): string {
-  return cutChars(value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim(), max).trim();
+  return cutChars(oneLine(value), max).trim();
+}
+
+const oneLine = (value: string) => value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+interface GraphemeSegmenter {
+  segment(text: string): Iterable<{ segment: string }>;
+}
+
+/**
+ * At most `max` characters (code points), never ending partway through one: a letter with its
+ * accents, a flag or an emoji sequence is kept whole or left out.
+ */
+export function cutWhole(text: string, max: number): string {
+  if (Array.from(text).length <= max) return text;
+  const Segmenter = (Intl as unknown as { Segmenter?: new (locale?: string, options?: { granularity: 'grapheme' }) => GraphemeSegmenter })
+    .Segmenter;
+  if (!Segmenter) return cutChars(text, max);
+  let out = '';
+  let count = 0;
+  for (const { segment } of new Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+    const size = Array.from(segment).length;
+    if (count + size > max) break;
+    out += segment;
+    count += size;
+  }
+  return out;
+}
+
+/** A folder's note (1.0): one line, whitespace squeezed, at most 140 characters, never cut partway through one. */
+export function cleanNote(value: unknown): string {
+  return typeof value === 'string' ? cutWhole(oneLine(value), LIMITS.shareNote).trim() : '';
 }
 
 async function readJson(req: Request, optional = false): Promise<unknown> {
@@ -888,13 +978,16 @@ interface TrialResult {
   trialUsed: boolean;
 }
 
-/** Starts the 7-day Pro AI trial if this email never had one and has no live subscription. */
+/**
+ * Starts the 7-day Pro AI trial if this email never had one (on this account or a deleted one with
+ * the same email) and has no live subscription.
+ */
 async function startTrial(deps: Deps, account: Account): Promise<TrialResult> {
   const plan = await planOf(deps, account);
-  const hadTrial = account.trialStartedAt !== null;
+  const used = await hadTrial(deps, account);
   // A team already gives Pro AI: the trial keeps for later.
-  if (plan.status !== null || plan.team || hadTrial) return { account, trialStarted: false, trialUsed: hadTrial };
-  const started = await deps.store.startTrial(account.id);
+  if (plan.status !== null || plan.team || used) return { account, trialStarted: false, trialUsed: used };
+  const started = await deps.store.startTrial(account.id, await fingerprintOf(deps, account));
   const fresh = (await deps.store.accountById(account.id)) ?? account;
   return { account: fresh, trialStarted: started, trialUsed: !started };
 }
@@ -914,7 +1007,7 @@ async function signinFinish(req: Request, deps: Deps): Promise<Reply> {
   // The code proved the email: an invitation to a team sent to it is accepted now.
   await joinInvitedTeam(deps, account);
   let trialStarted = false;
-  let trialUsed = account.trialStartedAt !== null;
+  let trialUsed = await hadTrial(deps, account);
   if (body.startTrial === true) ({ account, trialStarted, trialUsed } = await startTrial(deps, account));
   return ok({ ...(await planReply(deps, account)), trialStarted, trialUsed });
 }
@@ -1132,6 +1225,7 @@ async function syncPost(req: Request, deps: Deps): Promise<Reply> {
   }
   if (result < 0) throw new Error(`Unexpected sync write result ${result}`);
   await backUpToday(deps, account);
+  await dailyPrune(deps);
   return ok({ version: result });
 }
 
@@ -1160,6 +1254,32 @@ async function backUpToday(deps: Deps, account: string): Promise<void> {
 }
 
 const oldestKeptDay = (now: number) => dayOf(now - LIMITS.backupDays * DAY_MS);
+
+/**
+ * Once a day, whichever sync write gets there first: backups older than 30 days go for every
+ * account, including accounts whose plan ended and that no longer write (theirs would otherwise
+ * stay); and the shared folders of teams whose plan ended more than 30 days ago go too (they stay
+ * readable for those 30 days, so people can keep a copy). Never fails the write.
+ */
+async function dailyPrune(deps: Deps): Promise<void> {
+  try {
+    if ((await deps.store.rateTake('prune:daily', 1, DAY_MS / 1000)) > 0) return;
+  } catch (error) {
+    deps.log?.(`Pruning old backups failed: ${describe(error)}`);
+    return;
+  }
+  const now = deps.now();
+  try {
+    await deps.store.backupPruneAll(oldestKeptDay(now));
+  } catch (error) {
+    deps.log?.(`Pruning old backups failed: ${describe(error)}`);
+  }
+  try {
+    await deps.store.teamSyncPruneEnded(now - LIMITS.teamReadableMs);
+  } catch (error) {
+    deps.log?.(`Pruning ended teams’ folders failed: ${describe(error)}`);
+  }
+}
 
 // ---- Backups ----
 
@@ -1511,7 +1631,10 @@ export function pageAddress(value: unknown): string | null {
   return url.href.length <= LIMITS.shareUrl ? url.href : null;
 }
 
-/** A shared folder's contents: name, colour, at most 1,000 tabs with http(s) addresses, titles cut to 200 characters. */
+/**
+ * A shared folder's contents: name, colour, at most 1,000 tabs with http(s) addresses, titles cut to
+ * 200 characters, and (1.0) the folder's note, one line of at most 140 characters ('' when none).
+ */
 export function readShare(body: Record<string, unknown>): ShareContent {
   if (typeof body.name !== 'string') throw badRequest('Send { name, color, tabs, live }.');
   const name = cleanLine(body.name, LIMITS.shareName);
@@ -1526,7 +1649,7 @@ export function readShare(body: Record<string, unknown>): ShareContent {
     if (!url) continue;
     tabs.push({ title: typeof entry.title === 'string' ? cleanLine(entry.title, LIMITS.shareTitle) : '', url });
   }
-  return { name, color, tabs, live: body.live === true };
+  return { name, color, tabs, live: body.live === true, note: cleanNote(body.note) };
 }
 
 const noShare = () => new HttpError(404, 'server', 'This link doesn’t work any more.');
@@ -1565,7 +1688,7 @@ async function shareInfo(req: Request, deps: Deps, param: string): Promise<Reply
   const id = shareIdOf(param);
   const share = await deps.store.shareGet(id);
   if (!share || share.accountId !== account.id) throw noShare();
-  return ok({ id, url: shareUrl(deps, id), views: share.views, live: share.live, updatedAt: share.updatedAt });
+  return ok({ id, url: shareUrl(deps, id), views: share.views, live: share.live, updatedAt: share.updatedAt, note: share.note ?? '' });
 }
 
 /** Stops sharing: the link stops working at once. Fine to ask twice. */
@@ -1591,5 +1714,45 @@ async function publicShare(req: Request, deps: Deps, param: string): Promise<Rep
   }
   const share = await deps.store.shareView(shareIdOf(param));
   if (!share) throw noShare();
-  return ok(share);
+  return ok({ ...share, note: share.note ?? '' });
+}
+
+// ---- Deleting an account (1.0) ----
+
+/** Stripe's states for a subscription that has ended for good. */
+const ENDED_STATUSES = ['canceled', 'incomplete_expired'];
+
+/**
+ * Cancels a subscription at once, unless it has already ended (Stripe's answer now is the truth:
+ * the stored state can be a little behind).
+ */
+async function cancelSubscription(deps: Deps, stored: Subscription): Promise<void> {
+  if (ENDED_STATUSES.includes(stored.status)) return;
+  const current = await deps.payments.getSubscription(stored.id);
+  if (ENDED_STATUSES.includes(current.status)) return;
+  await deps.payments.cancelSubscription(stored.id);
+}
+
+/**
+ * `POST /account/delete`: the person typed their account's email to confirm. Stripe first, so that
+ * when it can't be reached nothing is deleted and they can try again: every subscription on the
+ * account (its own, and a team's it owns) is cancelled at once. Then the account and everything
+ * kept for it go in one step (Store.accountDelete): its computers are signed out, its synced copy,
+ * backups, shares (their links stop working), AI usage and a Pro for life purchase go, and a team it
+ * owns ends for everyone in it. A member's team gets one seat fewer, as when someone leaves.
+ * Stripe keeps its own records of payments. If the account had a trial, the email's trial
+ * fingerprint stays (see trialFingerprint), so the same email can't start another.
+ */
+async function accountDelete(req: Request, deps: Deps): Promise<Reply> {
+  const { account } = await signedIn(req, deps);
+  const body = await readObject(req, '{ confirm }');
+  const typed = typeof body.confirm === 'string' ? body.confirm.trim().toLowerCase() : '';
+  if (!typed || typed !== account.email) throw new HttpError(400, 'invalid', 'Type your account’s email to confirm.');
+  const membership = await deps.store.teamOf(account.id);
+  // Worked out first: if the secret is missing, nothing is cancelled or deleted.
+  const trialHash = await fingerprintOf(deps, account);
+  for (const subscription of await deps.store.subscriptionList(account.id)) await cancelSubscription(deps, subscription);
+  await deps.store.accountDelete(account.id, trialHash);
+  if (membership && membership.role === 'member') await matchSeats(deps, membership.team, 'left');
+  return ok({ ok: true });
 }

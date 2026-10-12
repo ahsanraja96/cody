@@ -13,7 +13,7 @@ import { AUTOFOLD_ALARM, AUTOFOLD_MINUTES, autoFoldTick, onTabActivated, setupSn
 import { forgetUnfinishedFold } from './fold';
 import { setupFolders } from './folders';
 import { setupLive } from './live';
-import { createMenus, onCommand, onMenuClicked, refreshSnoozeMenu } from './menus';
+import { createMenus, onCommand, onMenuClicked, refreshSnoozeMenu, setupMenus } from './menus';
 import { ensureMilestoneStart } from './pro';
 import { route } from './router';
 import { handleExternalMessage, pushLiveShares, setupShare, SHARE_ALARM } from './share';
@@ -22,6 +22,9 @@ import { setupTeams } from './teams';
 import { autoSuspendTick } from './suspend';
 import { forgetPendingTitle, onTabUpdated } from './titles';
 import { onUpdateAvailable, onUpdated } from './update';
+import { setupToolbar } from './toolbar';
+import { refreshNamedWindows, restoreWindowNamesSoon } from './windowNames';
+import { setupWindows } from './windows';
 
 /**
  * The service worker. It keeps no state in memory between wake-ups: everything lives in
@@ -83,6 +86,8 @@ function ensureStartup(): Promise<void> {
     await promoteShutdownSnapshot();
     // Give Chrome a moment to bring back its own tabs before deciding whether to offer recovery.
     setTimeout(() => safely('recovery check', checkRecovery), 8000);
+    // Named windows get their names back once Chrome has brought them back (1.0).
+    restoreWindowNamesSoon();
   })().catch((error) => console.error('[tabfold] startup failed', error));
   return startup;
 }
@@ -127,6 +132,7 @@ export function setupBackground(): void {
       await ensureStartup();
       await ensureAlarms();
     });
+    restoreWindowNamesSoon();
   });
 
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -163,6 +169,7 @@ export function setupBackground(): void {
       safely('auto-fold', () => autoFoldTick());
       safely('snooze menu', () => refreshSnoozeMenu());
       safely('shared folders', pushLiveShares);
+      safely('window names', () => refreshNamedWindows());
     }
     else if (alarm.name === SNOOZE_ALARM) safely('snooze', () => wakeDue());
     else if (alarm.name === SHARE_ALARM) safely('shared folders', pushLiveShares);
@@ -218,4 +225,9 @@ export function setupBackground(): void {
   setupFolders();
   // Teams: following the plan's team (joined, left, removed, signed out), and its folders leaving here.
   setupTeams();
+  // 1.0: what the toolbar button opens (popup or side panel), "Fold this tab into ›", groups opened
+  // from folders, the window-cap rule and named windows.
+  setupToolbar();
+  setupMenus();
+  setupWindows();
 }

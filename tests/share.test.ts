@@ -25,6 +25,7 @@ const API = 'https://api.tabfold.test/functions/v1/tabfold';
 interface StoredShare {
   name: string;
   color: string;
+  note?: string;
   tabs: Array<{ title: string; url: string }>;
   live: boolean;
   views: number;
@@ -48,7 +49,7 @@ class FakeShares {
       const share = this.shares.get(pub[1]!);
       if (!share) return json(404, { error: 'server' });
       share.views += 1;
-      return json(200, { name: share.name, color: share.color, tabs: share.tabs, updatedAt: 1 });
+      return json(200, { name: share.name, color: share.color, note: share.note ?? '', tabs: share.tabs, updatedAt: 1 });
     }
     if (path === '/shares' && method === 'POST') {
       const id = `share${String(this.next++).padStart(5, '0')}`;
@@ -115,6 +116,7 @@ describe('share a folder', () => {
     expect(post.body).toEqual({
       name: 'Client sites',
       color: 'green',
+      note: '',
       live: true,
       tabs: expect.arrayContaining([
         { title: 'Title of https://a.com', url: 'https://a.com' },
@@ -189,6 +191,20 @@ describe('"Keep it up to date"', () => {
     expect(server.count('PUT')).toBe(1);
   });
 
+  it('a folder’s note goes with its share, and a live share sends a changed note (1.0)', async () => {
+    await folderWith(['https://a.com']);
+    await db.folders.update(FOLDER.id, { note: 'Waiting on the client', noteAt: Date.now() });
+    await route({ type: 'share-create', folderId: FOLDER.id, live: true });
+    expect(server.shares.get('share00001')!.note).toBe('Waiting on the client');
+    expect(await pushLiveShares()).toBe(0);
+    await route({ type: 'folder-update', id: FOLDER.id, note: 'Signed off' });
+    expect(await pushLiveShares()).toBe(1);
+    expect(server.shares.get('share00001')!.note).toBe('Signed off');
+    await route({ type: 'folder-update', id: FOLDER.id, note: '' });
+    expect(await pushLiveShares()).toBe(1);
+    expect(server.shares.get('share00001')!.note).toBe('');
+  });
+
   it('shares that don’t follow the folder, and other changes, set no alarm', async () => {
     await folderWith(['https://a.com']);
     await route({ type: 'share-create', folderId: FOLDER.id, live: false });
@@ -236,6 +252,14 @@ describe('"Save to my Tabfold" from a shared page', () => {
       ['Aim Travel', 'https://aimtravel.netlify.app'],
       ['Road Rescue', 'https://rlroadrescue.com'],
     ]);
+  });
+
+  it('keeps the shared folder’s note (1.0)', async () => {
+    server.shares.get('share00001')!.note = 'Our  favourite\nplaces';
+    expect(await handleExternalMessage({ type: 'tabfold-save-share', id: 'share00001' }, site)).toEqual({ ok: true, tabs: 2 });
+    const [saved] = await db.folders.toArray();
+    expect(saved).toMatchObject({ note: 'Our favourite places' });
+    expect(saved!.noteAt).toBeGreaterThan(0);
   });
 
   it('Free limits apply: a 4th folder, or more tabs than the list has room for, and nothing is saved', async () => {

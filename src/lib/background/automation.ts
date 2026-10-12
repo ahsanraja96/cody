@@ -14,6 +14,7 @@ import {
   liveFolders,
   recoveryOffer,
   snoozeBack,
+  windowNames,
   type LastAction,
   type SnoozeBack,
 } from '../state';
@@ -25,6 +26,7 @@ import { foldTabs, handleFold } from './fold';
 import { refuseToOpen } from './restorePlan';
 import { freeLimitsNow, limitCode } from './room';
 import { recordChangeUndo } from './save';
+import { countCameBack } from './weeklyNumbers';
 
 /**
  * Snooze and Fold automatically (Mx-Auto board).
@@ -104,7 +106,7 @@ export async function snooze(command: Pick<SnoozeCommand, 'until' | 'tabRecordId
 
   if (command.tabIds?.length) {
     if (free && already.size + command.tabIds.length > FREE_LIMITS.snoozes) throw snoozeLimitError();
-    const run = await foldTabs({ tabIds: command.tabIds, quiet: true });
+    const run = await foldTabs({ tabIds: command.tabIds, quiet: true, foldBack: false });
     // A copy already in a team folder stays as it is for the team.
     const teamFolds = new Set(
       (await db.sessions.bulkGet([...new Set(run.existingCopies.map((c) => c.sessionId))])).filter((s) => isTeamSession(s)).map((s) => s!.id),
@@ -241,6 +243,7 @@ export async function wakeDue(now = Date.now()): Promise<number> {
   if (due.length) {
     const back = await reopen(due.sort((a, b) => a.snoozeUntil! - b.snoozeUntil!));
     opened = back.length;
+    await countCameBack(back.filter((t) => !t.incognito).length, now);
     if (back.length) {
       const current = await snoozeBack.get();
       const next: SnoozeBack = {
@@ -260,6 +263,7 @@ export async function wakeDue(now = Date.now()): Promise<number> {
 export async function wakeNow(tabRecordIds: string[]): Promise<{ opened: number }> {
   const rows = (await db.tabs.bulkGet([...new Set(tabRecordIds)])).filter((t): t is TabRecord => !!t && !!t.snoozeUntil);
   const opened = rows.length ? await reopen(rows) : [];
+  await countCameBack(opened.filter((t) => !t.incognito).length);
   await scheduleSnoozeAlarm();
   return { opened: opened.length };
 }
@@ -312,11 +316,17 @@ function validRule(rule: AutoFoldRule): boolean {
   return Array.isArray(when.weekdays) && when.weekdays.length > 0 && Number.isFinite(when.hour) && Number.isFinite(when.minute);
 }
 
-/** The rules that run: every enabled one, or on Free only the first enabled "not looked at for N days" rule. */
+/** Free's one rule may be one of these: "not looked at for N days", or "a window has more than N tabs" (1.0). */
+const FREE_RULE_TYPES: ReadonlySet<AutoFoldRule['when']['type']> = new Set(['idle', 'window-cap']);
+
+/**
+ * The rules that run: every enabled one, or on Free only the first enabled "not looked at for N
+ * days" or "a window has more than N tabs" rule.
+ */
 export function runnableRules(settings: Pick<Settings, 'autoFold'>, free: boolean): AutoFoldRule[] {
   const enabled = (settings.autoFold ?? []).filter((r) => r.enabled && validRule(r));
   if (!free) return enabled;
-  const first = enabled.find((r) => r.when.type === 'idle');
+  const first = enabled.find((r) => FREE_RULE_TYPES.has(r.when.type));
   return first ? [first] : [];
 }
 
@@ -351,8 +361,11 @@ interface Foldable {
   seen: number;
 }
 
-/** Open tabs a rule may fold, with when each was last looked at. */
-async function foldableTabs(settings: Settings, now: number): Promise<Foldable[]> {
+/** Per window a rule may look at: how many tabs count toward "a window has more than N tabs" (every tab but pinned ones). */
+type WindowCounts = Map<number, number>;
+
+/** Open tabs a rule may fold, with when each was last looked at (and, per window, the tabs that count toward a cap). */
+async function foldableTabs(settings: Settings, now: number, counts?: WindowCounts): Promise<Foldable[]> {
   const windows = await getNormalWindows();
   const incognito = settings.foldIncognito && (await incognitoAllowed());
   const liveGroups = new Set(Object.values(await liveFolders.get()).map((l) => l.groupId));
@@ -360,6 +373,7 @@ async function foldableTabs(settings: Settings, now: number): Promise<Foldable[]
   const tabs: Array<{ tab: Browser.tabs.Tab; url: string }> = [];
   for (const window of windows) {
     if (window.incognito && !incognito) continue;
+    if (counts && window.id !== undefined) counts.set(window.id, (window.tabs ?? []).filter((t) => !t.pinned).length);
     for (const tab of window.tabs ?? []) {
       if (tab.id === undefined || tab.pinned || tab.audible) continue;
       if (tab.active && window.focused) continue;
@@ -386,14 +400,33 @@ async function foldableTabs(settings: Settings, now: number): Promise<Foldable[]
   }));
 }
 
-function pickForRule(rule: AutoFoldRule, tabs: Foldable[], now: number): Foldable[] {
+/**
+ * "A window has more than N tabs": in each window over the cap (every tab but pinned ones counts),
+ * the foldable tabs looked at longest ago, until the window is back to N (or nothing more can fold).
+ */
+export function pickOverCap(max: number, tabs: Foldable[], counts: WindowCounts): Foldable[] {
+  const byWindow = new Map<number, Foldable[]>();
+  for (const t of tabs) {
+    if (t.tab.windowId === undefined) continue;
+    byWindow.set(t.tab.windowId, [...(byWindow.get(t.tab.windowId) ?? []), t]);
+  }
+  const picked: Foldable[] = [];
+  for (const [windowId, list] of byWindow) {
+    const over = (counts.get(windowId) ?? 0) - max;
+    if (over <= 0) continue;
+    const oldest = [...list].sort((a, b) => a.seen - b.seen || a.tab.index - b.tab.index);
+    picked.push(...oldest.slice(0, over));
+  }
+  return picked;
+}
+
+function pickForRule(rule: AutoFoldRule, tabs: Foldable[], now: number, counts: WindowCounts): Foldable[] {
   const when = rule.when;
   if (when.type === 'idle') return tabs.filter((t) => t.seen <= now - when.days * DAY);
   if (when.type === 'site-idle') {
     return tabs.filter((t) => t.seen <= now - when.minutes * MINUTE && when.hosts.some((h) => hostMatchesDomain(t.host, h.toLowerCase().replace(/^www\./, ''))));
   }
-  // TODO(1.0 core): per window, fold the tabs looked at longest ago beyond `max`.
-  if (when.type === 'window-cap') return [];
+  if (when.type === 'window-cap') return pickOverCap(when.max, tabs, counts);
   return tabs;
 }
 
@@ -403,7 +436,8 @@ function pickForRule(rule: AutoFoldRule, tabs: Foldable[], now: number): Foldabl
  * tabs it folded. A full free list throws `list-full` (nothing closes).
  */
 async function runRule(rule: AutoFoldRule, settings: Settings, now: number): Promise<number> {
-  const tabs = pickForRule(rule, await foldableTabs(settings, now), now);
+  const counts: WindowCounts = new Map();
+  const tabs = pickForRule(rule, await foldableTabs(settings, now, counts), now, counts);
   const mark = async (folded: number) => {
     const last = await autoFoldLast.get();
     await autoFoldLast.set({ ...last, [rule.id]: { at: now, folded } });
@@ -421,7 +455,19 @@ async function runRule(rule: AutoFoldRule, settings: Settings, now: number): Pro
   const folded = outcome.savedTabs + outcome.skippedDuplicates;
   await mark(folded);
   if (folded > 0) {
-    await autoFoldNotice.set({ ruleId: rule.id, label: ruleLabel(rule), folded, freedBytes: outcome.freedBytes, at: Date.now(), actionId: outcome.actionId });
+    // "Folded 6 tabs in Client work (your 25-tab rule)": the window's name, when it was one named window.
+    const windowIds = new Set(tabs.map((t) => t.tab.windowId));
+    const only = windowIds.size === 1 ? [...windowIds][0] : undefined;
+    const windowName = only !== undefined ? (await windowNames.get())[only] : undefined;
+    await autoFoldNotice.set({
+      ruleId: rule.id,
+      label: ruleLabel(rule),
+      folded,
+      freedBytes: outcome.freedBytes,
+      at: Date.now(),
+      actionId: outcome.actionId,
+      ...(windowName ? { windowName } : {}),
+    });
   }
   return folded;
 }
@@ -455,10 +501,50 @@ export async function autoFoldTick(now = Date.now()): Promise<number> {
   return folded;
 }
 
+/**
+ * "A window has more than N tabs" right after tabs open (debounced, so opening ten tabs folds once):
+ * only the runnable window-cap rules run. Cheap when there's none.
+ */
+export async function windowCapTick(now = Date.now()): Promise<number> {
+  const settings = await getSettings();
+  if (!(settings.autoFold ?? []).some((r) => r.enabled && r.when.type === 'window-cap')) return 0;
+  const rules = runnableRules(settings, await freeLimitsNow()).filter((r) => r.when.type === 'window-cap');
+  let folded = 0;
+  for (const rule of rules) {
+    try {
+      folded += await runRule(rule, settings, now);
+    } catch (error) {
+      const code = limitCode(error);
+      if (!code) throw error;
+      if (now - lastLimitHit >= LIMIT_HIT_EVERY_MS) {
+        lastLimitHit = now;
+        const event: WorkerEvent = { type: 'limit-hit', code };
+        broadcast(event);
+      }
+    }
+  }
+  return folded;
+}
+
+/** Tabs opened: the window-cap check this long after the last one. */
+export const WINDOW_CAP_DELAY_MS = 3_000;
+let capTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** tabs.onCreated: check the window-cap rules a moment later (registered at the worker's top level). */
+export function scheduleWindowCap(delayMs = WINDOW_CAP_DELAY_MS): void {
+  clearTimeout(capTimer);
+  capTimer = setTimeout(() => {
+    capTimer = undefined;
+    windowCapTick().catch((error) => console.error('[tabfold] window cap failed', (error as Error)?.name ?? error));
+  }, delayMs);
+}
+
 /** For tests: forget the in-memory throttles. */
 export function resetAutomationRuntime(): void {
   lastLimitHit = 0;
   trackActivations = false;
+  clearTimeout(capTimer);
+  capTimer = undefined;
 }
 
 /** `autofold-run`: run one rule now, whatever its schedule. On Free only "not looked at for N days" rules run. */
@@ -466,7 +552,7 @@ async function runRuleNow(ruleId: string, now = Date.now()): Promise<number> {
   const settings = await getSettings();
   const rule = (settings.autoFold ?? []).find((r) => r.id === ruleId);
   if (!rule) throw new CommandError('This rule no longer exists.', 'not-found');
-  if (rule.when.type !== 'idle' && (await freeLimitsNow())) throw new ProError('needs-pro', 'Rules with times and sites are part of Tabfold Pro.');
+  if (!FREE_RULE_TYPES.has(rule.when.type) && (await freeLimitsNow())) throw new ProError('needs-pro', 'Rules with times and sites are part of Tabfold Pro.');
   if (!validRule(rule)) throw new CommandError('This rule isn’t complete. Edit it, then try again.', 'invalid-rule');
   return runRule(rule, settings, now);
 }

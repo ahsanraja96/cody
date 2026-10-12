@@ -9,7 +9,7 @@ import { api, ProError } from '../pro/api';
 import { proConfigured } from '../pro/config';
 import { addFreed, dismissMilestone, monthKey } from '../pro/milestone';
 import { focusCheckout, openBilling, openCheckout, type Source } from '../pro/checkout';
-import { refreshPlan, signinFinish, signinStart, signOut, startTrial } from '../pro/plan';
+import { refreshPlan, signinFinish, signinStart, signOut, signOutAfterDeletion, startTrial } from '../pro/plan';
 import { aiRuns, milestoneState, planState } from '../pro/state';
 import { hasFreeLimits, hasPro, hasProAi } from '../pro/tiers';
 import { AI_MAX_TABS, type AiGroup, type AiRuns, type BackupInfo, type OrganiseResult, type PlanState } from '../pro/types';
@@ -94,6 +94,29 @@ export async function requirePlan(need: 'pro' | 'pro-ai'): Promise<PlanState> {
   if (!includes(plan)) plan = await refreshPlan({ force: true });
   if (!includes(plan)) throw new ProError(need === 'pro' ? 'needs-pro' : 'needs-pro-ai');
   return plan;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Delete my account (1.0)
+
+const sameEmail = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * "Delete my Tabfold account…": `confirm` is the account's email as the person typed it. The server
+ * (`POST /account/delete`) cancels the account's Stripe subscriptions at once, ends a team it owns,
+ * and deletes its devices, synced copy, backups and shares; then this computer signs out (the plan
+ * is Free, Chrome sync takes over, team folders leave quietly). The folded tabs here stay.
+ */
+export async function deleteAccount(confirm: string): Promise<{ deleted: true }> {
+  if (!proConfigured()) throw new ProError('not-configured');
+  const plan = await planState.get();
+  if (!plan.email) throw new ProError('not-signed-in');
+  const typed = typeof confirm === 'string' ? confirm.trim() : '';
+  // The server checks too; this saves a request for a typo.
+  if (!typed || !sameEmail(typed, plan.email)) throw new CommandError('Type your account’s email to confirm.', 'confirm-mismatch');
+  await api('/account/delete', { method: 'POST', body: { confirm: typed } });
+  await signOutAfterDeletion();
+  return { deleted: true };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -228,10 +251,17 @@ async function dismissMilestoneNow(now = Date.now()): Promise<{ ok: boolean }> {
   return { ok: true };
 }
 
-/** Fire and forget, after every fold: the milestone total, and a smart name for Pro AI. */
-export function afterFold(outcome: Pick<FoldOutcome, 'sessionId' | 'savedTabs' | 'freedBytes'>, now = Date.now()): Promise<void> {
+/**
+ * Fire and forget, after every fold: the milestone total, and a smart name for Pro AI (not for a
+ * fold that took its window's name, `named`).
+ */
+export function afterFold(
+  outcome: Pick<FoldOutcome, 'sessionId' | 'savedTabs' | 'freedBytes'>,
+  now = Date.now(),
+  options: { named?: boolean } = {},
+): Promise<void> {
   const tasks: Array<Promise<unknown>> = [recordFreedMemory(outcome.freedBytes, now)];
-  if (outcome.sessionId && outcome.savedTabs > 0) tasks.push(nameFold(outcome.sessionId));
+  if (outcome.sessionId && outcome.savedTabs > 0 && !options.named) tasks.push(nameFold(outcome.sessionId));
   return Promise.allSettled(tasks).then(() => undefined);
 }
 

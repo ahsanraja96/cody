@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="What Tabfold keeps, where it keeps it, who else handles it, and how to delete it.">
+<title>Privacy policy · Tabfold</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="sheet doc">
+  <a class="brand" href="/">
+    <span class="logo big" aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="11" rx="2.5"/><path d="M7 5.5h10"/><path d="M9.5 2.5h5"/></svg>
+    </span>
+    Tabfold
+  </a>
+
+  <h1>Privacy policy</h1>
+  <p class="dated">Effective <span class="placeholder">[Effective date]</span></p>
+
+  <p>Tabfold is a Chrome extension that folds your open tabs into one list and finds them again. It’s made by
+    <span class="placeholder">[Company or owner name]</span> (“we”). This page says what Tabfold keeps, where it keeps
+    it, who else handles it, and how to delete it.</p>
+
+  <section class="summary" aria-labelledby="short">
+    <h2 id="short">In short</h2>
+    <ul>
+      <li>On Free, your folded tabs stay on your computer. With Chrome sync on (it is unless you turn it off), your newest
+        folded tabs also go to your own Chrome sync, so they show up on your other computers.</li>
+      <li>With a Tabfold account (Pro, Pro AI, Pro for life and Teams), your folded tabs are kept on Tabfold’s server so
+        every computer you sign in on has them.</li>
+      <li>Tabfold never reads what’s on the pages you visit. It has no ads, no analytics and no tracking, and we never
+        sell your data.</li>
+      <li>You can delete it all: “Clear everything” on your computer, and “Delete my Tabfold account…” for the server.</li>
+    </ul>
+  </section>
+
+  <h2 id="free">Using Tabfold for free</h2>
+  <p>When you fold tabs, Tabfold keeps, for each tab: its address, its title, the link to its icon, whether it was pinned,
+    its tab group’s name and colour, the keywords you gave it, which window it was in and when it was folded. It also keeps
+    your folders (their names, colours, stars and notes), your window names, your settings, a weekly count of what you
+    folded, and recent snapshots of your open windows so it can bring your tabs back after a crash.</p>
+  <p>All of this stays on your computer, in Chrome’s storage for the extension. Free has no account. Tabfold doesn’t send
+    any of it to us, and makes no network requests of its own, with one exception: when you press “Save to my Tabfold” on
+    a folder someone shared with you, Tabfold reads that folder from Tabfold’s server, without sending anything about
+    you.</p>
+  <p>After a fold, Tabfold reads how much free memory your computer has (Chrome’s <code>system.memory</code>), to show
+    what folding freed. That number stays on your computer.</p>
+
+  <h2 id="chrome-sync">Chrome sync</h2>
+  <p>So your list shows up on your other computers, Tabfold puts your newest folded tabs (about 500) in Chrome’s own sync
+    storage. For each of them it shares the address, the title (cut to 120 characters), when it was folded, its keywords,
+    its folder, and its snooze time with a random id for the computer that snoozed it. It also shares your folders (names,
+    colours, stars and notes), the sites you moved to another kind of site, and a short list of tabs you removed, so they
+    go on your other computers too.</p>
+  <p>This goes through your own Chrome sync, like your bookmarks and settings, and only reaches computers signed in to
+    Chrome with the same Google account. Google handles it under its own privacy policy; we can’t see it. Older folded
+    tabs, tab groups, icons, snapshots, and tabs folded from Incognito windows are never shared.</p>
+  <p>Chrome sync is on unless you turn it off: Settings › “Sync folded tabs with Chrome”, or in Chrome’s own sync
+    settings.</p>
+
+  <h2 id="account">Your Tabfold account (Pro, Pro AI, Pro for life, Teams)</h2>
+  <p>The paid plans use a Tabfold account and Tabfold’s server, which runs on Supabase (supabase.com) in
+    <span class="placeholder">[Server region]</span>. Nothing in this section happens until you sign in, start the trial or
+    pay.</p>
+
+  <h3>Your email and signing in</h3>
+  <p>Your account is your email address. There’s no password: to sign in or start the 7-day trial, you type your email
+    and we email you a 6-digit code. The server keeps the code only in a scrambled form (a keyed hash), for 10 minutes and
+    5 tries, and deletes it once used. Each computer makes a random device token, and once you sign in, a random profile
+    key goes in your Chrome sync so your other computers on the same Chrome profile sign themselves in. The server keeps
+    only fingerprints of these (SHA-256 hashes), never the token or key itself, and when each computer was last seen.</p>
+
+  <h3>Your folded tabs</h3>
+  <p>With a paid plan, Tabfold syncs your folded tabs through your account instead of Chrome sync, so every folded tab
+    reaches your other computers. For each tab it sends the address, the title (cut to 200 characters), when it was folded,
+    its keywords, its folder and snooze time; and your folders (names, colours, stars and notes), the sites you moved, and
+    the tabs you removed. Icons, tab groups, windows, snapshots and Incognito tabs are never sent.</p>
+  <p>Once a day the server keeps a backup copy of what’s synced, for 30 days; older backups are deleted automatically.
+    When a plan ends, your synced copy stays in your account, so it’s there if you come back, until you delete your
+    account.</p>
+
+  <h3>What else the server keeps</h3>
+  <ul>
+    <li>When your trial started, and when you first proved your email with a code.</li>
+    <li>If your email had the 7-day trial, a fingerprint of it: a one-way code made from the address with a secret key
+      (HMAC-SHA256). The address can’t be worked back out of it. It’s how we make sure each email gets the trial once,
+      so it stays even after you delete your account.</li>
+    <li>How many AI requests your account made each month.</li>
+    <li>Your plan as Stripe last described it: Stripe’s ids for you, your subscriptions and a Pro for life payment, the
+      plan, its status, seats and dates.</li>
+    <li>Short-lived counters that stop floods (codes asked for, checkouts started, visits to shared pages), kept under
+      scrambled emails, tokens and addresses for at most a day.</li>
+  </ul>
+  <p>The server’s own logs record errors only, never your tokens, codes or tab titles. Supabase also keeps short technical
+    logs of requests (which can include your IP address) to run and protect its service.</p>
+
+  <h2 id="payments">Payments</h2>
+  <p>Payments go through Stripe (stripe.com). Paying happens on Stripe’s own page, opened in a tab, and changing your plan
+    or card, invoices and cancelling are on Stripe’s billing page. You type your card into Stripe, never into Tabfold, and
+    we never see your card number. Stripe keeps your payment details and the records of your payments under its own
+    privacy policy. Stripe tells our server your email, which plan you bought and its status.</p>
+
+  <h2 id="email">Email</h2>
+  <p>Sign-in codes and team invitations are sent by Resend (resend.com), which therefore gets the address each email goes
+    to and what it says (a code, or who invited you to which team). We don’t send newsletters or marketing email.</p>
+
+  <h2 id="ai">The AI features (Pro AI)</h2>
+  <p>Organise with AI, smart names for folds, Copy as context, Ask your tabs and the weekly tidy-up use Claude, a model by
+    Anthropic (anthropic.com). For these, Tabfold sends your tabs’ titles (cut to 200 characters) and sites (like
+    <code>github.com</code>, never full addresses), at most 300 tabs at a time, to Tabfold’s server, which asks Anthropic.
+    The weekly tidy-up also sends your folder names, Copy as context the group’s name, and Ask your tabs the question you
+    typed.</p>
+  <p>Some of this happens without a click: with Pro AI, each fold’s tabs are sent to get its smart name, and on Mondays the
+    tidy-up looks at tabs you haven’t opened in a month (Settings › “Weekly tidy-up” turns it off).</p>
+  <p>Tabfold never sends the content of pages, and never tabs folded from Incognito windows. Our server doesn’t keep what it
+    sends or gets back, only the count of requests. Anthropic handles the request under its commercial terms, which say it
+    doesn’t train its models on it.</p>
+
+  <h2 id="sharing">Shared folders</h2>
+  <p>When you share a folder (Pro), its name, colour, note and its pages’ titles and addresses go to Tabfold’s server and
+    appear on a public page at a link. Anyone with the link can see them until you stop sharing, and can save a copy into
+    their own Tabfold; their copy is theirs. The server counts how many times the page was opened. Tabs folded from
+    Incognito windows are never shared.</p>
+  <p>The shared page is on this site, which Netlify (netlify.com) hosts. It loads the folder from Tabfold’s server, sets no
+    cookies and runs no analytics.</p>
+
+  <h2 id="teams">Teams</h2>
+  <p>On a Teams plan, the owner invites people by email. Everyone in the team sees the team’s name, its members’ and
+    invitees’ email addresses, and the team folders, with who added each tab. Team folders are kept on Tabfold’s server for
+    the team, without daily backups, while its plan is on. When the plan ends they stay readable for 30 days, so people
+    can keep a copy, and then they’re deleted (sooner if the team’s owner deletes their account). Whoever leaves or is
+    removed can keep a copy of the team folders on their computer.</p>
+
+  <h2 id="never">What Tabfold never does</h2>
+  <ul>
+    <li>It never reads, collects or changes what’s on web pages. It has no permission to access websites and runs no
+      scripts in them.</li>
+    <li>It has no ads, no analytics and no trackers, and it never loads code from the internet.</li>
+    <li>We never sell your data, share it for advertising, or use it for anything but running Tabfold.</li>
+  </ul>
+
+  <h2 id="who">Who handles your data</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th scope="col">Service</th><th scope="col">What it gets</th><th scope="col">Why</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Google (Chrome sync)</td><td>Your newest folded tabs and folders, if Chrome sync is on</td><td>Your list on your other computers</td></tr>
+        <tr><td>Supabase</td><td>Your account and everything it syncs</td><td>Runs Tabfold’s server and database</td></tr>
+        <tr><td>Stripe</td><td>Your email, payment details and payments</td><td>Takes payments, receipts and invoices</td></tr>
+        <tr><td>Resend</td><td>Your email address and the email’s text</td><td>Sends sign-in codes and team invitations</td></tr>
+        <tr><td>Anthropic</td><td>Tab titles and sites (and the extras above)</td><td>Pro AI</td></tr>
+        <tr><td>Netlify</td><td>Visits to this site</td><td>Hosts this site and shared folder pages</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>These providers handle data on our behalf, and may do so in the United States and other countries.</p>
+
+  <h2 id="delete">Deleting your data</h2>
+  <ul>
+    <li><b>One tab:</b> × in the list.</li>
+    <li><b>Everything on a computer:</b> Settings › “Clear everything” removes your folded tabs, snapshots and settings
+      from that computer and Tabfold’s copy in Chrome sync. With a paid plan it also empties your account’s synced copy;
+      its backups are then deleted within 30 days.</li>
+    <li><b>Your account:</b> Settings › “Delete my Tabfold account…”, after typing your email. Your subscriptions are
+      cancelled at once, with no further charges. Your account, synced tabs, backups, shared links (they stop working),
+      AI counts and a Pro for life purchase are deleted, and every computer is signed out. A team you own ends for
+      everyone in it; a team you’re in carries on without you. The folded tabs on your computers stay there.</li>
+    <li><b>Removing Tabfold:</b> Chrome deletes what Tabfold kept on that computer. Settings › “Remove Tabfold…” first
+      offers to reopen your tabs, save them to Chrome bookmarks or download them. To remove the copy in Chrome sync too,
+      use “Clear everything” first.</li>
+  </ul>
+  <p>What stays after you delete your account: if you had the trial, the fingerprint of your email (above), so the trial
+    can’t be started again with it; Stripe’s records of your payments (as payment and tax rules require); Resend’s and
+    our hosting providers’ short-lived logs; invitations someone else sent to your email, on their team’s list until they
+    cancel them; and copies other people saved from your shared folders or kept from a team, which are theirs.</p>
+
+  <h2 id="rights">Your rights</h2>
+  <p>You can see and export what Tabfold keeps (Settings › Export…), correct or delete it as above, and ask us anything
+    about it. Where the law gives you more rights, such as in the EU and UK, you can use them by writing to us, and
+    complain to your data protection authority. We use your data to give you the service you asked for, to keep it safe,
+    and to keep the records the law requires.</p>
+
+  <h2 id="children">Children</h2>
+  <p>Tabfold isn’t meant for children under 13, and we don’t knowingly keep their data.</p>
+
+  <h2 id="changes">Changes</h2>
+  <p>If what Tabfold keeps or shares changes, we’ll update this page first, with a new date at the top.</p>
+
+  <h2 id="contact">Contact</h2>
+  <p>Questions, or a request about your data: <span class="placeholder">[Contact email]</span>.</p>
+
+  <footer class="site-foot">
+    <a href="/">Tabfold</a>
+    <span aria-hidden="true">·</span>
+    <a href="/privacy" aria-current="page">Privacy</a>
+    <span aria-hidden="true">·</span>
+    <a href="/terms">Terms</a>
+  </footer>
+</main>
+</body>
+</html>

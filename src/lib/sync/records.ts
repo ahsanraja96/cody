@@ -19,6 +19,8 @@ export const recordKey = (index: number) => `tf.c${index}`;
 export const tombstoneKey = (index: number) => `tf.t${index}`;
 /** Folders and sites moved to another kind (0.6): one item, `{ v: 1, f: [...], k: [...] }`. */
 export const FOLDERS_KEY = 'tf.f';
+/** Folders' notes (1.0): one item, `{ v: 1, n: [[folderId, note, noteAtSeconds], ...] }`. */
+export const NOTES_KEY = 'tf.n';
 
 /** Where the shared copy lives sets how much fits: Chrome sync's quota, or the Tabfold server's. */
 export interface SyncLimits {
@@ -131,6 +133,8 @@ export interface RemoteState {
   complete: boolean;
   /** Folders and sites moved to another kind (`tf.f`); null when there is none. */
   folders: SharedFolders | null;
+  /** Folders' notes (`tf.n`, 1.0); null when there is none. */
+  notes: SyncNote[] | null;
   /** The whole copy's fingerprint (records, tombstones and `tf.f`), to notice an unchanged copy. */
   copyHash: string | null;
 }
@@ -322,6 +326,15 @@ export interface SyncFolder {
   order: number;
   updatedAt: number;
   deletedAt: number;
+  /** Starred (1.0, field [6]): when; left out when not. A team's copy never carries one. */
+  starredAt?: number;
+}
+
+/** A folder's note as shared (1.0, `tf.n`): '' when it was removed. `noteAt` in whole seconds (in milliseconds). */
+export interface SyncNote {
+  folderId: string;
+  note: string;
+  noteAt: number;
 }
 
 /** A site moved to another kind, or put back (`kind: ''`), and when (whole seconds, in milliseconds). */
@@ -336,7 +349,9 @@ export interface SharedFolders {
   kinds: SyncSiteKind[];
 }
 
-type PackedFolder = [id: string, name: string, color: string, order: number, updatedAtSeconds: number, deletedAtSeconds: number];
+/** `[6] starredAtSeconds` came in 1.0, only when starred; older readers ignore it. */
+type PackedFolder = [id: string, name: string, color: string, order: number, updatedAtSeconds: number, deletedAtSeconds: number, starredAtSeconds?: number];
+type PackedNote = [folderId: string, note: string, noteAtSeconds: number];
 type PackedKind = [host: string, kind: string, atSeconds: number];
 
 /** The `tf.f` item. */
@@ -355,7 +370,9 @@ const CATEGORY_IDS = new Set<string>(CATEGORIES.map((c) => c.id));
 const HOST = /^[a-z0-9.-]{1,253}$/;
 
 function encodeFolder(folder: SyncFolder): PackedFolder {
-  return [folder.id, folder.name, folder.color, folder.order, Math.floor(folder.updatedAt / 1000), Math.floor(folder.deletedAt / 1000)];
+  const packed: PackedFolder = [folder.id, folder.name, folder.color, folder.order, Math.floor(folder.updatedAt / 1000), Math.floor(folder.deletedAt / 1000)];
+  if (folder.starredAt && folder.starredAt > 0) packed.push(Math.floor(folder.starredAt / 1000));
+  return packed;
 }
 
 function encodeKind(kind: SyncSiteKind): PackedKind {
@@ -364,13 +381,13 @@ function encodeKind(kind: SyncSiteKind): PackedKind {
 
 export function decodeFolder(raw: unknown): SyncFolder | null {
   if (!Array.isArray(raw) || raw.length < 6) return null;
-  const [id, name, color, order, updated, deleted] = raw as unknown[];
+  const [id, name, color, order, updated, deleted, starred] = raw as unknown[];
   if (typeof id !== 'string' || !SHORT_ID.test(id)) return null;
   if (typeof name !== 'string' || !name.trim()) return null;
   if (typeof order !== 'number' || !Number.isFinite(order)) return null;
   if (typeof updated !== 'number' || !Number.isFinite(updated) || updated <= 0) return null;
   if (typeof deleted !== 'number' || !Number.isFinite(deleted) || deleted < 0) return null;
-  return {
+  const folder: SyncFolder = {
     id,
     name: Array.from(name.replace(/\s+/g, ' ').trim()).slice(0, 60).join('').trim(),
     color: (TAB_GROUP_COLORS as readonly string[]).includes(color as string) ? (color as TabGroupColor) : 'grey',
@@ -378,6 +395,9 @@ export function decodeFolder(raw: unknown): SyncFolder | null {
     updatedAt: Math.floor(updated) * 1000,
     deletedAt: Math.floor(deleted) * 1000,
   };
+  // A malformed star is dropped on its own; the folder still comes in.
+  if (typeof starred === 'number' && Number.isFinite(starred) && starred > 0) folder.starredAt = Math.floor(starred) * 1000;
+  return folder;
 }
 
 export function decodeKind(raw: unknown): SyncSiteKind | null {
@@ -456,6 +476,79 @@ export function encodeFolderItem(shared: SharedFolders, limits: SyncLimits = SYN
   return { v: 1, f: sorted('f'), k: sorted('k') };
 }
 
+// ---------------------------------------------------------------------------------------------
+// Folders' notes (`tf.n`, 1.0)
+
+/** The `tf.n` item. */
+export interface NoteItem {
+  v: 1;
+  n: PackedNote[];
+}
+
+/** A note is at most this many characters (FOLDER_NOTE_MAX); longer ones from elsewhere are cut. */
+const NOTE_MAX = 140;
+
+function cutNote(note: string): string {
+  const line = note.replace(/\s+/g, ' ').trim();
+  const points = Array.from(line);
+  return points.length <= NOTE_MAX ? line : points.slice(0, NOTE_MAX).join('').trim();
+}
+
+export function decodeNote(raw: unknown): SyncNote | null {
+  if (!Array.isArray(raw) || raw.length < 3) return null;
+  const [folderId, note, at] = raw as unknown[];
+  if (typeof folderId !== 'string' || !SHORT_ID.test(folderId)) return null;
+  if (typeof note !== 'string') return null;
+  if (typeof at !== 'number' || !Number.isFinite(at) || at <= 0) return null;
+  return { folderId, note: cutNote(note), noteAt: Math.floor(at) * 1000 };
+}
+
+/** What a `tf.n` item holds (one note per folder, the newest); anything malformed is skipped. Null when it isn't one. */
+export function decodeNoteItem(raw: unknown): SyncNote[] | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const item = raw as Partial<NoteItem>;
+  if (item.v !== 1) return null;
+  const byFolder = new Map<string, SyncNote>();
+  for (const entry of Array.isArray(item.n) ? item.n : []) {
+    const note = decodeNote(entry);
+    if (!note) continue;
+    const current = byFolder.get(note.folderId);
+    if (!current || note.noteAt > current.noteAt) byFolder.set(note.folderId, note);
+  }
+  return [...byFolder.values()];
+}
+
+/**
+ * The `tf.n` item for these notes, within one item's quota (8 KB in Chrome sync): when they don't
+ * all fit, the oldest notes are left out first (they stay on the computers that have them). In one
+ * canonical order, so the same notes always give the same item. Null when there is none.
+ */
+export function encodeNoteItem(notes: readonly SyncNote[], limits: SyncLimits = SYNC_LIMITS): NoteItem | null {
+  if (notes.length === 0) return null;
+  const entries = notes.map((n) => {
+    const packed: PackedNote = [n.folderId, n.note, Math.floor(n.noteAt / 1000)];
+    const text = JSON.stringify(packed);
+    return { note: n, text, bytes: byteLength(text) };
+  });
+  // `{"v":1,"n":[]}` plus a comma between entries.
+  const budget = limits.quotaBytesPerItem - NOTES_KEY.length - 64;
+  let total = 14 + entries.reduce((sum, e) => sum + e.bytes + 1, 0);
+  const keep = new Set(entries);
+  if (total > budget) {
+    const oldestFirst = [...entries].sort((a, b) => a.note.noteAt - b.note.noteAt || (a.note.folderId < b.note.folderId ? -1 : 1));
+    for (const entry of oldestFirst) {
+      if (total <= budget) break;
+      keep.delete(entry);
+      total -= entry.bytes + 1;
+    }
+  }
+  const kept = entries
+    .filter((e) => keep.has(e))
+    .sort((a, b) => (a.note.folderId < b.note.folderId ? -1 : a.note.folderId > b.note.folderId ? 1 : 0));
+  if (kept.length === 0) return null;
+  return { v: 1, n: kept.map((e) => JSON.parse(e.text) as PackedNote) };
+}
+
 /** Tombstones younger than 30 days, one per id (the latest), newest first, at most 300 (Chrome sync). */
 export function pruneTombstones(tombstones: Tombstone[], now: number, limits: SyncLimits = SYNC_LIMITS): Tombstone[] {
   const byId = new Map<string, Tombstone>();
@@ -478,6 +571,8 @@ export interface PackOptions {
   limits?: SyncLimits;
   /** The `tf.f` item (folders and site kinds), already within one item's quota; it takes room from the records. */
   folderItem?: FolderItem | null;
+  /** The `tf.n` item (folders' notes, 1.0), already within one item's quota; it takes room from the records too. */
+  noteItem?: NoteItem | null;
 }
 
 export interface PackResult {
@@ -530,9 +625,11 @@ export function pack(candidates: SyncRecord[], tombstoneList: Tombstone[], optio
 
   const folderItem = options.folderItem ?? null;
   const folderBytes = folderItem ? itemBytes(FOLDERS_KEY, folderItem) : 0;
+  const noteItem = options.noteItem ?? null;
+  const noteBytes = noteItem ? itemBytes(NOTES_KEY, noteItem) : 0;
   const metaReserve = 160;
-  const budget = Math.floor((limits.quotaBytes - limits.reserveBytes) * factor) - metaReserve - tombstoneBytes - folderBytes;
-  const maxChunks = limits.maxItems - 1 - tombstoneChunks.length - (folderItem ? 1 : 0);
+  const budget = Math.floor((limits.quotaBytes - limits.reserveBytes) * factor) - metaReserve - tombstoneBytes - folderBytes - noteBytes;
+  const maxChunks = limits.maxItems - 1 - tombstoneChunks.length - (folderItem ? 1 : 0) - (noteItem ? 1 : 0);
 
   const sorted = [...candidates].sort(compareRecords);
   const recordChunks: string[][] = [];
@@ -562,13 +659,14 @@ export function pack(candidates: SyncRecord[], tombstoneList: Tombstone[], optio
   }
 
   const floorSeconds = Math.floor(Math.max(0, options.floor) / 1000);
-  if (included.length === 0 && tombstones.length === 0 && floorSeconds === 0 && !folderItem) {
+  if (included.length === 0 && tombstones.length === 0 && floorSeconds === 0 && !folderItem && !noteItem) {
     return { items: {}, records: [], tombstones: [], hash: null, bytes: 0 };
   }
   const items: Record<string, unknown> = {};
   recordChunks.forEach((chunk, i) => (items[recordKey(i)] = JSON.parse(`[${chunk.join(',')}]`)));
   tombstoneChunks.forEach((chunk, i) => (items[tombstoneKey(i)] = JSON.parse(`[${chunk.join(',')}]`)));
   if (folderItem) items[FOLDERS_KEY] = folderItem;
+  if (noteItem) items[NOTES_KEY] = noteItem;
   // The meta hash covers records and tombstones only, as before 0.6, so older versions still read
   // the copy as complete; `copyHash` adds `tf.f` for noticing changes.
   const hash = contentHash(recordChunks.map((c) => c.join(',')), tombstoneChunks.map((c) => c.join(',')), floorSeconds);
@@ -584,14 +682,17 @@ function contentHash(recordChunks: string[], tombstoneChunks: string[], floorSec
 }
 
 /**
- * A fingerprint of the whole shared copy: the meta record's hash, plus `tf.f` when there is one.
- * Equal to the meta hash alone when there are no folders (what 0.5 remembered). Null for an empty copy.
+ * A fingerprint of the whole shared copy: the meta record's hash, plus `tf.f` and `tf.n` when there
+ * are. Equal to the meta hash alone when there are no folders (what 0.5 remembered), and to 0.6's
+ * when there are no notes. Null for an empty copy.
  */
 export function copyHash(items: Record<string, unknown>): string | null {
   const meta = isMeta(items[META_KEY]) ? (items[META_KEY] as SyncMeta).h : null;
   const folders = items[FOLDERS_KEY];
-  if (folders === undefined) return meta;
-  return `${meta ?? ''}.${hash53(JSON.stringify(folders))}`;
+  const notes = items[NOTES_KEY];
+  if (folders === undefined && notes === undefined) return meta;
+  const base = folders === undefined ? (meta ?? '') : `${meta ?? ''}.${hash53(JSON.stringify(folders))}`;
+  return notes === undefined ? base : `${base}.n${hash53(JSON.stringify(notes))}`;
 }
 
 function isMeta(value: unknown): value is SyncMeta {
@@ -673,6 +774,7 @@ export function unpack(items: Record<string, unknown>, limits: SyncLimits = SYNC
     floor: meta ? meta.c * 1000 : 0,
     complete,
     folders: decodeFolderItem(items[FOLDERS_KEY]),
+    notes: decodeNoteItem(items[NOTES_KEY]),
     copyHash: copyHash(items),
   };
 }

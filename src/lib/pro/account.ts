@@ -79,6 +79,15 @@ export async function ensureProfileKey(): Promise<string | null> {
   }
 }
 
+/** Drop the Chrome profile key (the account it signed into was deleted). Never throws. */
+export async function forgetProfileKey(): Promise<void> {
+  try {
+    await browser.storage.sync.remove(PROFILE_KEY);
+  } catch {
+    // Chrome sync storage isn't available: there's no key to drop.
+  }
+}
+
 export async function signedOutHere(): Promise<boolean> {
   return (await browser.storage.local.get(SIGNED_OUT_KEY))[SIGNED_OUT_KEY] === true;
 }
