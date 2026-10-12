@@ -8,7 +8,8 @@ import { classifyUrl } from '../urls';
 import { weekKey } from '../weekly';
 import { scheduleWindowCap } from './automation';
 import { getNormalWindows, sleep } from './browserState';
-import { forgetGroupFolder } from './foldBack';
+import { forgetGroupFolder, rememberTidyGroups } from './foldBack';
+import { forgetOpenedByTabfold, replaceOpenedByTabfold } from './openedByTabfold';
 import { noteClosingByTabfold, recordChangeUndo, stillOpen } from './save';
 import { scheduleNamedWindowsRefresh, setWindowName } from './windowNames';
 
@@ -101,6 +102,7 @@ export async function tidyWindow(windowId: number): Promise<{ grouped: number; g
     byKind.set(kind, [...(byKind.get(kind) ?? []), tab.id]);
   }
   const grouped: number[] = [];
+  const made: number[] = [];
   let groups = 0;
   for (const [kind, ids] of byKind) {
     if (ids.length < TIDY_MIN_GROUP) continue;
@@ -115,8 +117,11 @@ export async function tidyWindow(windowId: number): Promise<{ grouped: number; g
     }
     await browser.tabGroups.update(groupId, { title: category(kind).name, color: KIND_GROUP_COLORS[kind], collapsed: false }).catch(() => undefined);
     grouped.push(...ids);
+    made.push(groupId);
     groups += 1;
   }
+  // Not a folder's group, whatever its name: folding the window never puts these tabs in a folder.
+  await rememberTidyGroups(made);
   const actionId = grouped.length ? await recordChangeUndo({ ungroupTabIds: grouped }) : null;
   return { grouped: grouped.length, groups, actionId };
 }
@@ -151,9 +156,13 @@ export function setupWindows(): void {
     scheduleWindowCap();
     scheduleNamedWindowsRefresh();
   });
-  browser.tabs.onRemoved.addListener((_id, info) => {
+  browser.tabs.onRemoved.addListener((id, info) => {
     if (!info.isWindowClosing) scheduleNamedWindowsRefresh();
+    void forgetOpenedByTabfold(id);
   });
+  // A tab Tabfold opened counts toward a window's cap once the person looks at it.
+  browser.tabs.onActivated.addListener(({ tabId }) => void forgetOpenedByTabfold(tabId));
+  browser.tabs.onReplaced.addListener((added, removed) => void replaceOpenedByTabfold(added, removed));
   browser.tabs.onUpdated.addListener((_id, change) => {
     if (change.url) scheduleNamedWindowsRefresh();
   });

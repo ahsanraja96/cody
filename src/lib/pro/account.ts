@@ -14,6 +14,8 @@ import { browser } from 'wxt/browser';
 export const DEVICE_TOKEN_KEY = 'tabfoldDevice';
 export const PROFILE_KEY = 'tabfold_profile';
 export const SIGNED_OUT_KEY = 'tabfoldSignedOut';
+/** A fingerprint of a Chrome profile key the server didn't know (local): this computer stops trying it. */
+export const PROFILE_REFUSED_KEY = 'tabfoldProfileRefused';
 
 const TOKEN = /^[A-Za-z0-9_-]{32,128}$/;
 
@@ -97,8 +99,34 @@ export async function setSignedOutHere(value: boolean): Promise<void> {
   else await browser.storage.local.remove(SIGNED_OUT_KEY);
 }
 
-/** The profile key, when this computer may sign itself in with it (there is one, and the person didn't sign out here). */
+/** A short fingerprint of a profile key (FNV-1a), so the key itself isn't copied around. */
+function fingerprint(key: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i += 1) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${(hash >>> 0).toString(36)}.${key.length}`;
+}
+
+/** The server doesn't know this profile key (its account is gone): this computer stops using it. */
+export async function refuseProfileKey(key: string): Promise<void> {
+  await browser.storage.local.set({ [PROFILE_REFUSED_KEY]: fingerprint(key) });
+}
+
+/** Signed in again (with a code): the profile key is registered afresh, so it's usable again. */
+export async function clearProfileRefusal(): Promise<void> {
+  await browser.storage.local.remove(PROFILE_REFUSED_KEY);
+}
+
+/**
+ * The profile key, when this computer may sign itself in with it: there is one, the person didn't
+ * sign out here, and the server hasn't refused this very key before.
+ */
 export async function usableProfileKey(): Promise<string | null> {
   if (await signedOutHere()) return null;
-  return getProfileKey();
+  const key = await getProfileKey();
+  if (!key) return null;
+  const refused = (await browser.storage.local.get(PROFILE_REFUSED_KEY))[PROFILE_REFUSED_KEY];
+  return refused === fingerprint(key) ? null : key;
 }

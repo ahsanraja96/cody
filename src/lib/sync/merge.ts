@@ -6,8 +6,10 @@ import {
   capTitle,
   compareRecords,
   DELETED_FOLDER_TTL_MS,
+  copyHash,
   encodeFolderItem,
   encodeNoteItem,
+  hash53,
   isSyncable,
   MAX_SHARED_SITE_KINDS,
   pack,
@@ -27,6 +29,7 @@ import {
   type SyncRecord,
   type SyncSiteKind,
   type Tombstone,
+  withStars,
 } from './records';
 
 /**
@@ -69,7 +72,7 @@ export interface LocalFolders {
 
 export interface SyncPlanInput {
   local: LocalTab[];
-  remote: Pick<RemoteState, 'records' | 'tombstones' | 'floor'> & Partial<Pick<RemoteState, 'folders' | 'notes'>>;
+  remote: Pick<RemoteState, 'records' | 'tombstones' | 'floor'> & Partial<Pick<RemoteState, 'folders' | 'notes' | 'copyHash'>>;
   /** Shared tabs that were on this computer after the last run: sync id -> urlKey. */
   known: Record<string, string>;
   /** Tombstones this computer wrote (sync id -> time), so putting a tab back takes them back. */
@@ -87,6 +90,12 @@ export interface SyncPlanInput {
    * still carries them. Unlimited unless given.
    */
   room?: number;
+  /**
+   * The notes this computer last shared or saw shared (`SyncPlan.notesHash` of the last run; null:
+   * none yet). When its notes are the same and the copy lacks `tf.n` (a 0.6 computer removes keys it
+   * doesn't know), it isn't written back for that alone. Unknown (left out): never written back alone.
+   */
+  lastNotes?: string | null;
 }
 
 /** A tab's folder and snooze. A field left out means none. */
@@ -138,6 +147,8 @@ export interface SyncPlan {
   counts: { synced: number; localOnly: number; waiting: number };
   /** Folders and site kinds after merging `tf.f`; null when `folders` wasn't given. */
   folders: FolderMerge | null;
+  /** A fingerprint of the notes this computer shares (null: none), for `lastNotes` next time. */
+  notesHash: string | null;
 }
 
 /**
@@ -548,9 +559,32 @@ export function planSync(input: SyncPlanInput): SyncPlan {
   };
   for (const view of live) offer(view.record, view.key);
   for (const record of waiting) offer(record, urlKey(record.url));
-  const folderItem = folders ? encodeFolderItem(folders.shared, limits) : null;
+  // `tf.f` as 0.6 writes it (it sets the records' room on every computer alike), and the 1.0
+  // additions, written only in the room left: the stars, then the notes.
+  const plainFolders = folders
+    ? encodeFolderItem({ ...folders.shared, folders: folders.shared.folders.map(({ starredAt: _star, ...f }) => f) }, limits)
+    : null;
+  const starredFolders = folders ? withStars(plainFolders, folders.shared.folders, limits) : null;
   const noteItem = folders ? encodeNoteItem(folders.notes, limits) : null;
-  const packed = pack([...winners.values()], tombstones, { floor, budgetFactor: input.budgetFactor, limits, folderItem, noteItem });
+  const notesHash = noteItem ? hash53(JSON.stringify(noteItem)) : null;
+  const packFor = (notes: typeof noteItem) =>
+    pack([...winners.values()], tombstones, {
+      floor,
+      budgetFactor: input.budgetFactor,
+      limits,
+      folderItem: plainFolders,
+      extras: { folderItem: starredFolders, noteItem: notes },
+    });
+  // The copy has no notes item though this computer's notes haven't changed: a 0.6 computer took
+  // it out (it removes keys it doesn't know). Not written back for that alone, so the two never
+  // take turns; it goes back with the next real change.
+  const notesChanged = input.lastNotes !== undefined && notesHash !== input.lastNotes;
+  let packed: PackResult | null = null;
+  if (noteItem && !input.remote.notes && !notesChanged && input.remote.copyHash !== undefined) {
+    const without = packFor(null);
+    if (copyHash(without.items) === input.remote.copyHash) packed = without;
+  }
+  packed ??= packFor(noteItem);
 
   const known: Record<string, string> = {};
   const sharedKeys = new Set<string>();
@@ -576,6 +610,7 @@ export function planSync(input: SyncPlanInput): SyncPlan {
     floor,
     counts: { synced: Object.keys(known).length, localOnly, waiting: waiting.length },
     folders,
+    notesHash,
   };
 }
 

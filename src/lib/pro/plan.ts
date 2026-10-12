@@ -1,9 +1,9 @@
 import { browser } from 'wxt/browser';
 import { readRuns } from './ai';
-import { ensureProfileKey, forgetDeviceToken, forgetProfileKey, isToken, peekDeviceToken, PROFILE_KEY, setSignedOutHere, usableProfileKey } from './account';
+import { clearProfileRefusal, ensureProfileKey, forgetDeviceToken, forgetProfileKey, isToken, refuseProfileKey, peekDeviceToken, PROFILE_KEY, setSignedOutHere, usableProfileKey } from './account';
 import { api, ProError } from './api';
 import { proConfigured } from './config';
-import { aiRuns, forgetCloudSyncState, needsSignIn, planEnded, planState, readPlan } from './state';
+import { aiRuns, checkoutState, forgetCloudSyncState, lastCheckoutAt, needsSignIn, planEnded, planState, readPlan } from './state';
 import { FREE_PLAN, type PlanState, type SigninPurpose, type SigninResult, type Tier } from './types';
 
 /**
@@ -120,6 +120,7 @@ export async function applyPlan(next: PlanState, options: { viaProfile?: boolean
  */
 async function afterSignIn(previousEmail: string | null, email: string, viaProfile: boolean): Promise<void> {
   await setSignedOutHere(false);
+  if (!viaProfile) await clearProfileRefusal();
   // Signed in as someone else: what this computer knew about the other account's copy doesn't apply.
   if (previousEmail && previousEmail !== email) await forgetCloudSyncState();
   if (viaProfile) return;
@@ -150,7 +151,9 @@ async function signInWithProfile(profileKey: string, hadToken: boolean): Promise
     answer = await api<PlanAnswer>('/signin/profile', { method: 'POST', body: { profileKey } });
   } catch (error) {
     if (error instanceof ProError && error.code === 'not-signed-in') {
-      // A token made just for this try is of no use: Free stays without one.
+      // The server doesn't know this key (its account was deleted, or it was unlinked): don't try
+      // it again. A token made just for this try is of no use: Free stays without one.
+      await refuseProfileKey(profileKey);
       if (!hadToken) await forgetDeviceToken();
       return null;
     }
@@ -162,6 +165,21 @@ async function signInWithProfile(profileKey: string, hadToken: boolean): Promise
   await applyPlan(plan, { viaProfile: true });
   await storeRuns(answer.runs);
   return plan;
+}
+
+/** A checkout may still sign this computer in for this long after it started (server/API.md `GET /me`). */
+const CHECKOUT_TOKEN_KEEP_MS = 24 * 60 * 60_000;
+
+/**
+ * A device token that isn't signed in is still needed while a payment may sign this computer in:
+ * a checkout started from here in the last day (or being watched), or a payment waiting for this
+ * computer to sign in with a code (`needsSignIn`).
+ */
+async function tokenStillNeeded(answer: PlanAnswer, now = Date.now()): Promise<boolean> {
+  if (answer.needsSignIn && typeof answer.needsSignIn === 'object') return true;
+  if (await checkoutState.get()) return true;
+  const startedAt = (await lastCheckoutAt.get()) ?? 0;
+  return startedAt > 0 && now - startedAt < CHECKOUT_TOKEN_KEEP_MS;
 }
 
 async function readFromServer(): Promise<PlanState> {
@@ -181,6 +199,7 @@ async function readFromServer(): Promise<PlanState> {
   }
   const answer = await api<PlanAnswer>('/me');
   const plan = planOf(answer);
+  const wasSignedIn = (await planState.get()).email !== null;
   if (plan.email === null && tryProfile) {
     const signedIn = await signInWithProfile(profileKey, true);
     if (signedIn) return signedIn;
@@ -188,6 +207,13 @@ async function readFromServer(): Promise<PlanState> {
   await applyPlan(plan);
   await storeRuns(answer.runs);
   await storeNeedsSignIn(plan, answer.needsSignIn);
+  // Not signed in (the account was deleted, or this computer unlinked): a Free computer then asks
+  // the server nothing more, unless a checkout from here may still sign it in.
+  if (plan.email === null && !(await tokenStillNeeded(answer))) {
+    await forgetDeviceToken();
+    // Signed out from elsewhere: what this computer knew of the account goes, as on signing out.
+    if (wasSignedIn) await Promise.all([aiRuns.set(null), forgetCloudSyncState()]);
+  }
   return plan;
 }
 

@@ -522,3 +522,33 @@ export const recentFolders = {
   watch: (callback: (value: Record<string, number>) => void) =>
     watchKey('local', RECENT_FOLDERS, (value) => callback((value as Record<string, number> | undefined) ?? {})),
 };
+
+/** Tab groups "Tidy into groups" made this browser session (group ids): never a folder's group by name. */
+const TIDY_GROUPS = 'tidyGroups';
+export const tidyGroups = {
+  get: async (): Promise<number[]> => ((await browser.storage.session.get(TIDY_GROUPS))[TIDY_GROUPS] as number[] | undefined) ?? [],
+  set: (value: number[]) => browser.storage.session.set({ [TIDY_GROUPS]: value }),
+};
+
+/**
+ * Open tabs Tabfold opened itself (Undo, Open all, Reopen, snooze waking, a live folder, the copies
+ * put back), by tab id, until the person looks at one (activates it): "a window has more than N
+ * tabs" neither counts nor folds them meanwhile.
+ */
+const OPENED_BY_TABFOLD = 'openedByTabfold';
+export const openedByTabfold = {
+  get: async (): Promise<number[]> => ((await browser.storage.session.get(OPENED_BY_TABFOLD))[OPENED_BY_TABFOLD] as number[] | undefined) ?? [],
+  set: (value: number[]) => browser.storage.session.set({ [OPENED_BY_TABFOLD]: value }),
+};
+
+/** What 1.0 keeps on this computer outside IndexedDB, in local and session storage. */
+export const LOCAL_1_0_KEYS = [NAMED_WINDOWS, WEEKLY_STATS, WEEKLY_SUMMARY_SEEN, RECENT_FOLDERS, STARRED_TEAM_FOLDERS] as const;
+export const SESSION_1_0_KEYS = [WINDOW_NAMES, GROUP_FOLDERS, PENDING_FOLD_INTO, TIDY_GROUPS, OPENED_BY_TABFOLD, 'foldIntoMenu', 'foldIntoMenuShown'] as const;
+
+/**
+ * "Clear everything": the window names, the weekly numbers, recently used folders, team folders'
+ * stars, groups opened from folders and the rest 1.0 keeps outside IndexedDB go too.
+ */
+export async function clearLocal10State(): Promise<void> {
+  await Promise.all([browser.storage.local.remove([...LOCAL_1_0_KEYS]), browser.storage.session.remove([...SESSION_1_0_KEYS])]);
+}
