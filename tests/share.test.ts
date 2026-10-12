@@ -115,6 +115,7 @@ describe('share a folder', () => {
     expect(post.body).toEqual({
       name: 'Client sites',
       color: 'green',
+      note: '',
       live: true,
       tabs: expect.arrayContaining([
         { title: 'Title of https://a.com', url: 'https://a.com' },

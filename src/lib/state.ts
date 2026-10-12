@@ -49,6 +49,28 @@ export interface LastAction {
   foldersMade?: string[];
   /** A site this action moved to another kind: Undo puts its kind back (`before` null: it had none). */
   siteKind?: { host: string; before: { kind: CategoryId; at: number } | null };
+  /**
+   * Saved tabs this action wrote outside its own fold (1.0: a fold that put tabs into a team folder
+   * gives them new copies in the team's fold): Undo removes them too.
+   */
+  alsoRemove?: string[];
+  /** Open tabs this action closed without folding them ("Close the copies", 1.0): Undo reopens each where it was. */
+  reopenTabs?: ReopenTab[];
+  /** Open tabs this action put into new tab groups ("Tidy into groups", 1.0): Undo takes them out again. */
+  ungroupTabIds?: number[];
+  /** What this action added to the weekly numbers (1.0): Undo takes it off again. */
+  weekly?: { at: number; folded: number; freedBytes: number };
+}
+
+/** An open tab "Close the copies" closed, as Undo reopens it (1.0). */
+export interface ReopenTab {
+  url: string;
+  windowId: number;
+  index: number;
+  pinned: boolean;
+  /** The tab group it was in (when that group is still there, it goes back in). */
+  groupId?: number;
+  incognito?: true;
 }
 
 /** A restore in progress, so a popup opened mid-restore can show it and offer Cancel. */
@@ -322,6 +344,11 @@ export interface AutoFoldNotice {
   at: number;
   /** Undo for the fold (lastAction), while it lasts. */
   actionId: string | null;
+  /**
+   * The named window it folded in (1.0, a window over its tab cap): "Folded 6 tabs in Client work
+   * (your 25-tab rule)". Missing when the window has no name or the fold took tabs from several.
+   */
+  windowName?: string;
 }
 
 const AUTO_FOLD_NOTICE = 'autoFoldNotice';

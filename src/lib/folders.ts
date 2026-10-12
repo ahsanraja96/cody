@@ -9,10 +9,10 @@ import { planState, projectsState } from './pro/state';
 import { hasFreeLimits } from './pro/tiers';
 import type { PlanState } from './pro/types';
 import { updateSettings } from './settings';
-import { siteKinds, type LastAction } from './state';
+import { recentFolders, siteKinds, type LastAction } from './state';
 import { DELETED_FOLDER_TTL_MS, hash53, urlKey } from './sync/records';
 import { isTeamSession, personalFolders } from './teams';
-import { TAB_GROUP_COLORS, type FolderRecord, type TabGroupColor, type TabRecord } from './types';
+import { FOLDER_NOTE_MAX, TAB_GROUP_COLORS, type FolderRecord, type TabGroupColor, type TabRecord } from './types';
 
 /**
  * Folders the person names (Fo-* boards), where tabs are (`TabRecord.folderId`), sites moved to
@@ -53,6 +53,29 @@ export function cleanFolderName(name: unknown): string | null {
   if (typeof name !== 'string') return null;
   const clean = Array.from(name.replace(/\s+/g, ' ').trim()).slice(0, FOLDER_NAME_MAX).join('').trim();
   return clean || null;
+}
+
+/**
+ * A folder's note (1.0): one line, whitespace squeezed, trimmed, at most 140 characters
+ * (`FOLDER_NOTE_MAX`), never cutting a character in half (nor an emoji made of several). '' when
+ * nothing is left.
+ */
+export function cleanFolderNote(note: unknown): string {
+  if (typeof note !== 'string') return '';
+  const line = note.replace(/\s+/g, ' ').trim();
+  const points = Array.from(line);
+  if (points.length <= FOLDER_NOTE_MAX) return line;
+  const Segmenter = (Intl as unknown as { Segmenter?: new (locale?: string, options?: { granularity: 'grapheme' }) => { segment(text: string): Iterable<{ segment: string }> } }).Segmenter;
+  if (!Segmenter) return points.slice(0, FOLDER_NOTE_MAX).join('').trim();
+  let out = '';
+  let used = 0;
+  for (const { segment } of new Segmenter(undefined, { granularity: 'grapheme' }).segment(line)) {
+    const size = Array.from(segment).length;
+    if (used + size > FOLDER_NOTE_MAX) break;
+    out += segment;
+    used += size;
+  }
+  return out.trim();
 }
 
 export function isFolderColor(value: unknown): value is TabGroupColor {
@@ -213,6 +236,29 @@ export async function undoFolderChanges(
     });
   }
   if (action.siteKind) await restoreSiteKind(action.siteKind, now);
+}
+
+/** How many folders "used lately" keeps (`recentFolders`, 1.0). */
+export const RECENT_FOLDERS_KEPT = 30;
+
+/**
+ * Tabs were folded or moved into these folders (1.0): they're "used lately", first after the starred
+ * ones in "Fold into" lists and the right-click menu. The newest 30 are kept. Never throws.
+ */
+export async function noteRecentFolders(folderIds: Iterable<string>, now = Date.now()): Promise<void> {
+  const ids = [...new Set(folderIds)].filter(Boolean);
+  if (ids.length === 0) return;
+  try {
+    const current = await recentFolders.get();
+    const next: Record<string, number> = { ...current };
+    for (const id of ids) next[id] = now;
+    const kept = Object.entries(next)
+      .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+      .slice(0, RECENT_FOLDERS_KEPT);
+    await recentFolders.set(Object.fromEntries(kept));
+  } catch {
+    // Only the order of a list depends on it.
+  }
 }
 
 /** Opened from Tabfold: remembered for the weekly tidy-up ("not opened in a month"). Not synced. */

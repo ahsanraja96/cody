@@ -29,7 +29,10 @@ import {
   type RestoreTab,
   type RestoreWindow,
 } from './restorePlan';
+import { rememberGroupFolders } from './foldBack';
 import { takeSnapshot } from './snapshots';
+import { countCameBack } from './weeklyNumbers';
+import { nameReopenedWindow } from './windowNames';
 
 /** Tabs are opened in batches so restoring hundreds never spikes memory or CPU. */
 const BATCH_SIZE = 10;
@@ -98,6 +101,10 @@ interface RestoreResult {
   opened: number;
   failed: RestoreFailure[];
   cancelled: boolean;
+  /** Tab groups made (1.0: "Open all" from a folder remembers its group). */
+  groups: Array<{ groupId: number; windowId: number; name: string; incognito: boolean }>;
+  /** Tabs opened from Incognito folds (they never count in the weekly numbers). */
+  openedIncognito: number;
 }
 
 export async function restoreWindows(windows: RestoreWindow[], options: RestoreOptions): Promise<RestoreResult> {
@@ -105,7 +112,9 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
   const restoreId = options.restoreId ?? crypto.randomUUID();
   const total = windows.reduce((n, w) => n + w.tabs.length, 0);
   const failed: RestoreFailure[] = [];
+  const madeGroups: RestoreResult['groups'] = [];
   let opened = 0;
+  let openedIncognito = 0;
   let done = 0;
   let fileAccess = true;
   try {
@@ -188,6 +197,8 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
     let windowId: number | undefined;
     let placeholderTabId: number | undefined;
     let activateFirst = false;
+    /** A window made for this one (not one already open): it gets the saved window's name back. */
+    let madeWindow = false;
     const target = options.targetWindowIds?.[windowIndex];
     const sharedWindowId = await sharedWindow(incognito);
     // windowExists only accepts a window of the same mode: normal tabs never land in Incognito.
@@ -210,6 +221,7 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
       firstCreated ??= windowId;
       placeholderTabId = created?.tabs?.[0]?.id;
       activateFirst = true;
+      madeWindow = options.mode === 'original' || windows.length === 1;
       if (windowId !== undefined && (plan.state === 'maximized' || plan.state === 'fullscreen')) {
         await browser.windows.update(windowId, { state: plan.state }).catch(() => undefined);
       }
@@ -248,6 +260,7 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
         done += 1;
         if (id === undefined) continue;
         opened += 1;
+        if (incognito) openedIncognito += 1;
         const key = groupKey(tab);
         if (key && !tab.pinned) {
           const entry = groups.get(key) ?? { tab, ids: [] };
@@ -266,18 +279,21 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
           color: safeGroupColor(tab.groupColor),
           collapsed: tab.groupCollapsed,
         });
+        madeGroups.push({ groupId, windowId, name: tab.groupName ?? '', incognito });
       } catch {
         // Groups are a nicety; the tabs themselves are open.
       }
     }
     if (placeholderTabId !== undefined) await browser.tabs.remove(placeholderTabId).catch(() => undefined);
+    // A fold of a named window reopens as a window with that name (1.0).
+    if (madeWindow && plan.name) await nameReopenedWindow(windowId, plan.name).catch(() => undefined);
   }
 
   if (options.background && firstCreated !== undefined) {
     await browser.windows.update(firstCreated, { focused: true }).catch(() => undefined);
   }
   const wasCancelled = cancelled.delete(restoreId);
-  return { opened, failed, cancelled: wasCancelled };
+  return { opened, failed, cancelled: wasCancelled, groups: madeGroups, openedIncognito };
 }
 
 function emptyOutcome(restoreId: string): RestoreOutcome {
@@ -346,13 +362,15 @@ export async function handleRestore(command: RestoreCommand): Promise<RestoreOut
       },
     );
 
+    // Folded tabs that came back (the weekly summary).
+    void countCameBack(result.opened - result.openedIncognito);
     let trashed = false;
     const wholeSession = !command.windowRecordId;
     if (wholeSession && settings.afterRestore === 'trash' && !result.cancelled && result.failed.length === 0) {
       await trashSessions([graph.session.id]);
       trashed = true;
     }
-    return { restoreId, ...result, needsFileAccess: needsFileAccess(result.failed), trashed };
+    return { restoreId, opened: result.opened, failed: result.failed, cancelled: result.cancelled, needsFileAccess: needsFileAccess(result.failed), trashed };
   });
 }
 
@@ -377,7 +395,7 @@ export async function handleRestoreSnapshot(command: SnapshotRestoreCommand): Pr
       await recoveryOffer.set(null);
       await setAttentionBadge(false);
     }
-    return { restoreId, ...result, needsFileAccess: needsFileAccess(result.failed), trashed: false };
+    return { restoreId, opened: result.opened, failed: result.failed, cancelled: result.cancelled, needsFileAccess: needsFileAccess(result.failed), trashed: false };
   });
 }
 
@@ -435,6 +453,11 @@ export async function handleOpenTabs(command: OpenTabsCommand): Promise<{ opened
     currentWindowId: command.windowId,
   });
   if (result.opened) await markOpened(rows.map((row) => row.id)).catch(() => undefined);
+  // Opened from a folder as a group (1.0): folding that group puts its tabs back into the folder.
+  if (group && command.folderId && result.groups.length) {
+    await rememberGroupFolders(result.groups.map((g) => g.groupId), command.folderId).catch(() => undefined);
+  }
+  void countCameBack(result.opened - result.openedIncognito);
   return { opened: result.opened, ...(result.failed.some((f) => f.reason === 'incognito') ? { reason: INCOGNITO_OFF } : {}) };
 }
 
@@ -462,6 +485,7 @@ export async function handleOpenSavedTab(
     const created = await browser.tabs.create({ url: tab.url, active, windowId: target });
     if (active && created.windowId !== undefined) await browser.windows.update(created.windowId, { focused: true });
     await markOpened([tab.id]).catch(() => undefined);
+    if (!incognito) void countCameBack(1);
     return { opened: true };
   } catch {
     return { opened: false, reason: 'Chrome refused to open this address. Copy it and paste it into the address bar.' };

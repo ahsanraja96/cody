@@ -3,13 +3,15 @@ import { refreshDataGuard } from '../dataGuard';
 import { db, isQuotaError } from '../db';
 import { estimateBytes } from '../format';
 import { CommandError, type FoldOutcome, type MemoryReading, type SaveOutcome, type WorkerEvent } from '../messages';
-import { findSavedCopies, saveCapture, type SaveResult } from '../repo';
+import { addFolder } from '../folders';
+import { saveCapture } from '../repo';
 import { getSettings } from '../settings';
-import { activeFold, getDeviceId, type ActiveFold, type LastAction } from '../state';
+import { activeFold, getDeviceId, type ActiveFold } from '../state';
 import type { TabRecord } from '../types';
-import { broadcast, getNormalWindows, incognitoAllowed, ownOrigin, sleep } from './browserState';
+import { broadcast, getGroups, getNormalWindows, incognitoAllowed, ownOrigin, sleep } from './browserState';
+import { copiesOf, placeFoldedTabs } from './foldBack';
 import { afterFold } from './pro';
-import { ensureRoomFor } from './room';
+import { ensureRoomFor, freeLimitsNow } from './room';
 import {
   buildPlan,
   capturedTabs,
@@ -22,6 +24,7 @@ import {
   tabsById,
 } from './save';
 import { takeSnapshot } from './snapshots';
+import { countFold } from './weeklyNumbers';
 
 /**
  * Fold: save every tab in every normal window, then close it. Pinned tabs (per the setting) and
@@ -86,8 +89,18 @@ export interface FoldOptions {
   tabIds?: number[];
   /** The saved tabs go in this folder (and a copy already folded moves there). */
   intoFolderId?: string;
+  /**
+   * "Fold into a folder › New folder…" (1.0): make this folder first (Free: 3 folders, `folder-limit`
+   * before anything closes), then fold into it. Ignored with `intoFolderId`.
+   */
+  newFolderName?: string;
   /** A person (default), or an auto-fold rule. */
   source?: 'person' | 'rule';
+  /**
+   * Tabs from a folder's tab group go back into that folder (1.0; on unless false). Snoozing open
+   * tabs turns it off: they leave the list when they wake anyway.
+   */
+  foldBack?: boolean;
   /**
    * No progress for the popup (`activeFold`, `fold-progress`): an auto-fold rule, or snoozing a tab.
    * Undo still works (lastAction). Rules are always quiet.
@@ -105,8 +118,9 @@ export interface FoldRun {
 }
 
 function foldKey(options: FoldOptions): string {
-  if (!options.tabIds) return `fold:${options.windowId ?? 'all'}`;
-  return `fold:tabs:${[...options.tabIds].sort((a, b) => a - b).join(',')}:${options.intoFolderId ?? ''}`;
+  const into = `${options.intoFolderId ?? ''}:${options.intoFolderId ? '' : (options.newFolderName ?? '')}`;
+  if (!options.tabIds) return `fold:${options.windowId ?? 'all'}:${into}`;
+  return `fold:tabs:${[...options.tabIds].sort((a, b) => a - b).join(',')}:${into}`;
 }
 
 /** Fold, for callers in the worker that need the saved tabs (snooze). */
@@ -138,36 +152,22 @@ async function leftOut(windows: Browser.windows.Window[], includeIncognito: bool
 }
 
 /**
- * A folder's tabs: the ones this fold wrote go in, and copies already folded move there too (so
- * "Move this tab to a folder" lands it there even when it was folded before). Returns what Undo
- * needs to move those copies back.
+ * "Fold into › New folder…": the folder is made first (Free: `folder-limit`, and nothing closes);
+ * a fold that then fails takes it away again.
  */
-async function putInFolder(folderId: string, savedTabIds: string[], copies: TabRecord[]): Promise<NonNullable<LastAction['patches']>> {
-  const folder = await db.folders.get(folderId);
-  // A folder deleted meanwhile: the tabs stay by kind of site. A team folder isn't a fold's
-  // destination (a rule can't share tabs with a team): they stay by kind of site too.
-  if (!folder || folder.deletedAt || folder.teamId) return [];
-  const moving = copies.filter((t) => t.folderId !== folderId);
-  await db.transaction('rw', db.tabs, async () => {
-    if (savedTabIds.length) await db.tabs.where('id').anyOf(savedTabIds).modify({ folderId });
-    for (const tab of moving) await db.tabs.update(tab.id, { folderId });
-  });
-  return moving.map((t) => ({ id: t.id, before: { folderId: t.folderId, snoozeUntil: t.snoozeUntil, snoozedOn: t.snoozedOn } }));
-}
-
-/** The copies already in the list of the tabs a fold skipped as duplicates (in the same mode). */
-async function copiesOf(result: SaveResult): Promise<TabRecord[]> {
-  if (result.skippedTabs.length === 0) return [];
-  const normal = result.skippedTabs.filter((s) => !s.incognito).map((s) => s.tab.url);
-  const incognito = result.skippedTabs.filter((s) => s.incognito).map((s) => s.tab.url);
-  const found = [
-    ...(normal.length ? (await findSavedCopies(normal, undefined, db, false)).values() : []),
-    ...(incognito.length ? (await findSavedCopies(incognito, undefined, db, true)).values() : []),
-  ];
-  return [...new Map(found.map((c) => [c.tab.id, c.tab])).values()];
-}
-
 async function runFold(options: FoldOptions): Promise<FoldRun> {
+  const name = options.newFolderName?.trim();
+  if (options.intoFolderId || !name) return runFoldInto(options, null);
+  const folder = await addFolder({ name, source: 'person' }, { unlimited: !(await freeLimitsNow()) });
+  try {
+    return await runFoldInto({ ...options, intoFolderId: folder.id }, folder.id);
+  } catch (error) {
+    await db.folders.delete(folder.id).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function runFoldInto(options: FoldOptions, madeFolderId: string | null): Promise<FoldRun> {
   const { keepTabId, windowId, keepWindowOpen, tabIds, intoFolderId } = options;
   const quiet = options.quiet === true || options.source === 'rule';
   const foldId = crypto.randomUUID();
@@ -224,6 +224,10 @@ async function runFold(options: FoldOptions): Promise<FoldRun> {
     newTabsLeftOpen: 0,
     memory: memoryReading(null, null),
   };
+  if (madeFolderId) {
+    const made = await db.folders.get(madeFolderId);
+    if (made) outcome.intoFolder = { folderId: made.id, name: made.name };
+  }
   if (plan.windows.length === 0) {
     // Only pinned, playing, blank or Tabfold pages: nothing to fold, nothing closes.
     await report({ phase: 'done', finishedAt: Date.now(), outcome });
@@ -256,11 +260,16 @@ async function runFold(options: FoldOptions): Promise<FoldRun> {
   }
 
   const now = Date.now();
+  // A whole window the person named folds under its name (1.0): "Client work". So does a rule's
+  // fold within one named window (a window over its tab cap).
+  const named = plan.windows.length === 1 && (!picked || options.source === 'rule') ? plan.windows[0]!.name : '';
+  const foldName = named || undefined;
+  const groups = await getGroups();
   let result;
   try {
     result = await saveCapture(
       plan.windows,
-      { source: 'save-all', deviceId: await getDeviceId(), now },
+      { source: 'save-all', deviceId: await getDeviceId(), now, ...(foldName ? { name: foldName } : {}) },
       // Every fold gets its own session (never "Unsorted"): "Recent folds" lists each one.
       { dedupe: true },
     );
@@ -272,7 +281,18 @@ async function runFold(options: FoldOptions): Promise<FoldRun> {
   }
   await refreshDataGuard().catch(() => undefined);
   const existingCopies = await copiesOf(result);
-  const patches = intoFolderId ? await putInFolder(intoFolderId, result.savedTabIds, existingCopies) : [];
+  // Into the folder asked for, or tabs from a folder's group back into that folder.
+  const placed = await placeFoldedTabs({
+    plan,
+    windows,
+    groups,
+    result,
+    existingCopies,
+    intoFolderId,
+    source: options.source,
+    foldBack: options.foldBack !== false,
+    now,
+  });
 
   await report({ phase: 'closing' });
   const byId = tabsById(windows);
@@ -303,8 +323,31 @@ async function runFold(options: FoldOptions): Promise<FoldRun> {
 
   const skipped = new Set(result.skippedTabs.map((s) => s.tab));
   const written = capturedTabs(plan).filter((t) => !skipped.has(t));
-  const freedBytes = estimateBytes(plan.closeTabIds.filter((id) => byId.has(id) && !byId.get(id)!.discarded && !notClosed.has(id)).length);
-  const actionId = await recordUndo({ result, plan, now, close: true, closedTabs, freedBytes, stillOpen: notClosed, patches });
+  const freedIds = plan.closeTabIds.filter((id) => byId.has(id) && !byId.get(id)!.discarded && !notClosed.has(id));
+  const freedBytes = estimateBytes(freedIds.length);
+  // The weekly summary counts normal tabs only, never Incognito.
+  const incognitoFolded = plan.windows.filter((w) => w.incognito).reduce((n, w) => n + w.tabs.length, 0);
+  const weekly = {
+    at: now,
+    folded: Math.max(0, result.savedTabIds.length + result.skippedDuplicates - incognitoFolded),
+    freedBytes: estimateBytes(freedIds.filter((id) => !byId.get(id)!.incognito).length),
+  };
+  const actionId = await recordUndo({
+    result,
+    plan,
+    now,
+    close: true,
+    closedTabs,
+    freedBytes,
+    stillOpen: notClosed,
+    patches: placed.patches,
+    putBack: placed.putBack,
+    alsoRemove: placed.alsoRemove,
+    reopenExtra: placed.reopenOnly,
+    foldersMade: madeFolderId ? [madeFolderId] : [],
+    weekly,
+  });
+  await countFold(weekly.folded, weekly.freedBytes, now);
 
   const done: FoldOutcome = {
     ...outcome,
@@ -320,10 +363,12 @@ async function runFold(options: FoldOptions): Promise<FoldRun> {
     truncatedTabs: written.filter((t) => t.urlTruncated).length,
     newTabsLeftOpen: closing.newTabsLeftOpen,
     memory: memoryReading(before, after),
+    ...(placed.backIntoFolders.length ? { backIntoFolders: placed.backIntoFolders } : {}),
+    ...(placed.intoFolder ? { intoFolder: placed.intoFolder } : {}),
   };
   await report({ phase: 'done', closed: closedTabs, waiting: [], finishedAt: Date.now(), outcome: done });
-  // The memory milestone, and a smart name for Pro AI. Never holds up or fails the fold.
-  afterFold(done).catch(() => undefined);
+  // The memory milestone, and a smart name for Pro AI (not for a fold named after its window).
+  afterFold(done, Date.now(), { named: !!foldName }).catch(() => undefined);
   return { outcome: done, savedTabIds: result.savedTabIds, existingCopies };
 }
 
