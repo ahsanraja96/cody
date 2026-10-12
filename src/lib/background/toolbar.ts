@@ -80,6 +80,14 @@ export function setupToolbar(): void {
   });
   browser.windows.onCreated.addListener(() => void safely(refreshWindowHint()));
   browser.windows.onRemoved.addListener(() => void safely(refreshWindowHint()));
+  // Chrome opens the side panel itself on a click (or the Open Tabfold shortcut) when the
+  // behaviour is set. This only fires when the button has no popup and Chrome didn't: the side
+  // panel opens here instead, inside the click.
+  browser.action.onClicked.addListener((tab) => {
+    const panel = sidePanelApi();
+    if (tab?.windowId === undefined || typeof panel?.open !== 'function') return;
+    void safely(Promise.resolve(panel.open({ windowId: tab.windowId })));
+  });
 }
 
 /** For tests: forget what this worker knew. */

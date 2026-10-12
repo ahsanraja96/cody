@@ -172,6 +172,17 @@ describe('fold back into its folder', () => {
     expect(await db.tabs.where('folderId').equals(team.id).count()).toBe(0);
   });
 
+  it('a rule never shares tabs with a team: a team folder’s group folds by kind of site then', async () => {
+    await planState.set({ ...FREE_PLAN, tier: 'pro-ai', email: 'ada@example.com', team: { id: 'team1', name: 'Truewidgets', role: 'member', seats: 3 } });
+    await db.folders.bulkPut([folder('teamfolder01', 'Launch', { teamId: 'team1' }), CLIENT]);
+    const { tabIds } = chrome.openWindow(['https://launch.com', 'https://client.com', 'https://here.com'], { focused: true });
+    chrome.makeGroup([tabIds[0]!], { title: 'Launch' });
+    chrome.makeGroup([tabIds[1]!], { title: 'Client sites' });
+    const outcome = await handleFold({ tabIds: [tabIds[0]!, tabIds[1]!], source: 'rule' });
+    expect(outcome.backIntoFolders).toEqual([{ folderId: CLIENT.id, name: 'Client sites', tabs: 1 }]);
+    expect(await placement()).toEqual({ 'https://launch.com': null, 'https://client.com': CLIENT.id });
+  });
+
   it('a live folder’s group is left to the live folder', async () => {
     await db.folders.bulkPut([CLIENT, RECIPES]);
     const { windowId, tabIds } = chrome.openWindow(['https://a.com'], { focused: true });

@@ -68,7 +68,7 @@ export interface PlaceInput {
   existingCopies: TabRecord[];
   /** "Fold into": every saved tab goes here (fold back doesn't apply). */
   intoFolderId?: string;
-  /** A rule's tabs never go into a team folder (a rule can't share tabs with a team). */
+  /** A rule's tabs never go into a team folder, by "Fold into" or folding back (a rule can't share tabs with a team). */
   source?: 'person' | 'rule';
   /** Tabs from a folder's tab group go back into it (unless false). */
   foldBack?: boolean;
@@ -132,6 +132,8 @@ export async function placeFoldedTabs(input: PlaceInput): Promise<PlaceOutcome> 
   } else {
     if (input.foldBack === false || !captured.some(({ tab }) => tab.groupName !== null)) return out;
     targets = await groupTargets(input.groups, await listLiveFolders());
+    // A rule never shares tabs with a team: a team folder's group folds by kind of site then.
+    if (input.source === 'rule') for (const [groupId, target] of targets) if (target.teamId) targets.delete(groupId);
     if (targets.size === 0) return out;
   }
 
