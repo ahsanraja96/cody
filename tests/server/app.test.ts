@@ -1088,4 +1088,27 @@ describe('backups', () => {
     expect(res.status).toBe(200);
     expect(server.log).toHaveBeenCalledWith(expect.stringContaining('Backup failed'));
   });
+
+  it('deletes everyone’s backups older than 30 days once a day, also for accounts that stopped syncing', async () => {
+    // A backup from an account whose plan ended, which no longer writes or lists.
+    const lapsed = server.store.account('gone@example.com').id;
+    await server.store.backupPut(lapsed, { day: '2026-09-01', items: {}, tabCount: 0, createdAt: Date.UTC(2026, 8, 1) });
+    await server.store.backupPut(lapsed, { day: '2026-10-01', items: {}, tabCount: 0, createdAt: Date.UTC(2026, 9, 1) });
+    await write({ 'tf.c0': chunk(1) }, 0);
+    expect([...server.store.backups.get(lapsed)!.keys()]).toEqual(['2026-10-01']);
+    // Once a day: a second write that day doesn't look again.
+    const pruneAll = vi.spyOn(server.store, 'backupPruneAll');
+    await write({ 'tf.c0': chunk(2) }, 1);
+    expect(pruneAll).not.toHaveBeenCalled();
+    server.clock.now = NOW + 22 * DAY;
+    await write({ 'tf.c0': chunk(3) }, 2);
+    expect(pruneAll).toHaveBeenCalledWith('2026-10-02');
+    expect([...server.store.backups.get(lapsed)!.keys()]).toEqual([]);
+  });
+
+  it('still saves the write when pruning fails', async () => {
+    server.store.backupPruneAll = vi.fn().mockRejectedValue(new Error('timeout'));
+    expect((await write({ 'tf.c0': chunk(1) }, 0)).status).toBe(200);
+    expect(server.log).toHaveBeenCalledWith(expect.stringContaining('Pruning old backups failed'));
+  });
 });

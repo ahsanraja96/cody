@@ -12,7 +12,9 @@ Tabfold Free never talks to a server. Pro and Pro AI do: they use one small prog
 - runs Teams: invitations by email, the team's shared folders, and seats that follow the team,
 - serves shared folders to their public page (a small static site in `web/`, on Netlify),
 - runs Organise with AI, smart fold names, Copy as context, Ask your tabs and the weekly tidy-up,
-  sending only tab titles and sites (and folder names) to Claude.
+  sending only tab titles and sites (and folder names, a group's name or the question asked) to
+  Claude,
+- deletes an account when its owner asks (1.0, Settings › "Delete my Tabfold account…").
 
 This guide sets it up from nothing. It takes about an hour. You'll need accounts at
 [supabase.com](https://supabase.com), [stripe.com](https://stripe.com), [resend.com](https://resend.com),
@@ -70,6 +72,9 @@ supabase db push
 
 `link` asks for the database password from step 1. `db push` creates the tables. Every table is
 locked to the server: nobody else can read it, even with the project's public key.
+
+Set up before 1.0? Run `supabase db push` again: it applies `20261013000000_v10.sql` (a shared
+folder's note, and deleting an account) and leaves the rest.
 
 ## 4. Set up Stripe (in test mode first)
 
@@ -305,25 +310,35 @@ Thinking tokens bill as output and are the biggest AI cost; the server already a
 - Counters for how many codes were asked for and checkouts started in the last hour, under
   scrambled emails and tokens.
 - Which computer started a checkout, for a day, and Stripe's event ids, for 30 days.
-- The account's folded tabs (addresses, titles, keywords), as the extension syncs them, plus one
-  backup a day for 30 days. Older backups are deleted automatically.
+- The account's folded tabs (addresses, titles, keywords, folders and their notes), as the
+  extension syncs them, plus one backup a day for 30 days. Older backups are deleted automatically,
+  once a day, also for accounts that stopped syncing. When a plan ends, the synced copy stays (so
+  it's there if the person comes back) until they delete their account.
 - How many AI runs the account used each month.
 - A Pro for life purchase: when, and its Stripe payment's id.
 - Teams: the team's name, who is in it (their accounts), the emails invited and when, and the
   team's shared folders (as the extension syncs them; no backups).
-- Shared folders: the name, colour, page titles and addresses the owner shared, how many times
-  the page was opened, and when it changed. Anyone with the link can see them, until the owner
+- Shared folders: the name, colour, note, page titles and addresses the owner shared, how many
+  times the page was opened, and when it changed. Anyone with the link can see them, until the owner
   stops sharing. The public page's visits are counted against a scrambled (SHA-256) address, for a
   minute, to stop floods; the address itself isn't kept.
 
 For the AI, only tab titles (cut to 200 characters) and sites go to Anthropic, never addresses or
-page content, and at most 300 tabs at a time. The server doesn't keep what it sent or got back.
-The server's logs never contain tokens, codes or tab titles.
+page content, and at most 300 tabs at a time; the tidy-up also sends folder names, Copy as context
+the group's name, and Ask your tabs the question typed. The server doesn't keep what it sent or got
+back. The server's logs never contain tokens, codes or tab titles.
 
-To delete someone's data: in the Supabase dashboard, open **Table Editor → accounts**, find their
-email and delete the row. Their computers, subscriptions, purchases, tabs, backups, AI counts and
-shared folders go with it, and so does a team they own (its people go back to their own plans).
-Cancel their subscription and delete the customer in Stripe too.
+**Deleting an account.** People delete their own account in Tabfold: Settings › "Delete my Tabfold
+account…", typing their email to confirm (`POST /account/delete`, see `API.md`). Their Stripe
+subscriptions are cancelled at once, then their computers, synced tabs, backups, shared folders, AI
+counts, Pro for life purchase and sign-in code go, and a team they own ends (its people go back to
+their own plans). Stripe keeps its own records of the payments (the customer, invoices, receipts).
+
+If someone writes to you asking for it instead, first cancel their subscriptions in Stripe
+(**Customers →** their email **→** the subscription **→ Cancel subscription → Immediately**), then in
+the Supabase dashboard open **SQL Editor** and run
+`select public.tabfold_account_delete(id) from public.accounts where email = 'their@email';`. Delete the Stripe customer too only if they ask and you don't need the records (tax
+and accounting rules usually require keeping invoices).
 
 ## Later
 

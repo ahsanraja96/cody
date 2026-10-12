@@ -75,6 +75,7 @@ JSON `{ "error": <code>, "message": <text for people>, ... }`, codes as in `ProE
 | 400 | `invalid-email` | `POST /signin/start` with something that isn't an email address |
 | 400 | `wrong-code` | `POST /signin/finish`: the code doesn't match (body also has `triesLeft`) |
 | 400 | `code-expired` | `POST /signin/finish`: no code for that email, it's older than 10 minutes, or 5 wrong tries used it up |
+| 400 | `invalid` | 1.0: `POST /account/delete` without the account's email typed as confirmation |
 | 401 | `not-signed-in` | Missing or malformed token; a Pro route from a computer that isn't signed in; an unknown profile key |
 | 402 | `needs-pro` / `needs-pro-ai` | The plan doesn't include it (0.6: also a team's routes once its plan has ended) |
 | 403 | `server` | 0.6: a team member (not the owner) asking for an owner's team route |
@@ -382,8 +383,36 @@ leaves the team it's in, and deletes its devices (every computer is signed out),
 shares (their links stop working), invitations it sent, sign-in codes and AI usage. A Pro for life
 purchase goes with it. → `{ ok: true }`.
 
+In order: Stripe first, so that when Stripe can't be reached (502 `server`) nothing is deleted and the
+person can try again. Every subscription stored for the account that Stripe hasn't ended is cancelled
+at once (`DELETE /v1/subscriptions/<id>`: its own, and the Teams subscription of a team it owns); one
+Stripe already ended is left alone. Then the database deletes the account in one step
+(`tabfold_account_delete`, migration `20261013000000_v10.sql`): the account row and, through its
+foreign keys, its devices and Chrome profile key, synced items, backups, AI usage, subscriptions and
+purchases as stored here, shares, its team membership, and a team it owns with that team's members,
+invitations and shared folders; plus its sign-in code and the checkouts its computers started (or
+that wait for it to sign in). A member's team then gets one seat fewer, as when someone leaves.
+
+Afterwards: every computer that was signed in is a token the server doesn't know (`GET /me` answers
+Free; Pro routes 401). Stripe's `customer.subscription.deleted` events find no account and change
+nothing. Invitations other teams sent to the email are theirs and stay on their lists. Signing in
+again with the same email makes a new, empty account (with no record of the old one's trial). The
+Stripe customer and its payment records stay in Stripe.
+
+Not signed in: 401. The server logs that an account was deleted, never which.
+
+### Backups older than 30 days, for every account
+
+Once a day (the first sync write of the day), backups older than 30 days are deleted for every
+account, including accounts whose plan ended and that no longer write or list backups.
+
 ### Shares carry a folder's note
 
 `POST /shares` and `PUT /shares/<id>` take an optional `note` (one line, at most 140 characters after
 squeezing whitespace; longer is cut, never mid-character); `GET /shares/<id>` and
 `GET /public/shares/<id>` return `note` ('' when none).
+
+Control characters and line breaks become spaces; a note that isn't text is ''. "Characters" are
+Unicode code points, and the cut keeps whole user-perceived characters: an emoji, a flag or a letter
+with its accent is kept whole or left out. A `PUT` without `note` removes it (it replaces the
+contents). Stored in `shares.note` (`''` by default, at most 140 characters).

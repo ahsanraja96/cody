@@ -2,8 +2,9 @@ import type { BillingInterval, Subscription } from '../_shared/plan.ts';
 
 /**
  * A small Stripe client over fetch (no SDK), with only what Tabfold uses: prices by lookup key,
- * Checkout Sessions (subscriptions, and one-time payments for Pro for life), subscriptions and
- * their seats, billing portal sessions and webhook signatures. Web-standard APIs only, so it runs
+ * Checkout Sessions (subscriptions, and one-time payments for Pro for life), subscriptions, their
+ * seats and cancelling them (1.0: deleting an account), billing portal sessions and webhook
+ * signatures. Web-standard APIs only, so it runs
  * in the Edge Function, in tests and in plain Node.
  */
 
@@ -86,6 +87,8 @@ export interface Payments {
   getSubscription(id: string): Promise<Subscription>;
   /** Sets a subscription item's quantity (a Teams plan's seats), prorated. */
   updateQuantity(itemId: string, quantity: number): Promise<void>;
+  /** Cancels a subscription at once (`DELETE /v1/subscriptions/<id>`): no further charges. Its state afterwards. */
+  cancelSubscription(id: string): Promise<Subscription>;
   createPortal(input: PortalInput): Promise<{ url: string }>;
   /** The event, if the signature is right and recent; throws WebhookSignatureError otherwise. */
   verifyWebhook(rawBody: string, signatureHeader: string | null): Promise<StripeEvent>;
@@ -213,11 +216,11 @@ export function createStripe(options: StripeOptions): Payments {
   const now = options.now ?? (() => Date.now());
   const prices = new Map<string, { id: string; at: number }>();
 
-  async function call(method: 'GET' | 'POST', path: string, params: Params = {}): Promise<Record<string, unknown>> {
+  async function call(method: 'GET' | 'POST' | 'DELETE', path: string, params: Params = {}): Promise<Record<string, unknown>> {
     // A missing secret is a set-up problem, not Stripe's: a plain Error, so the route answers 500.
     if (!options.secretKey) throw new Error('STRIPE_SECRET_KEY is not set');
     const encoded = formEncode(params);
-    const url = `${apiBase}${path}${method === 'GET' && encoded ? `?${encoded}` : ''}`;
+    const url = `${apiBase}${path}${method !== 'POST' && encoded ? `?${encoded}` : ''}`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${options.secretKey}`,
       'Stripe-Version': STRIPE_VERSION,
@@ -303,6 +306,10 @@ export function createStripe(options: StripeOptions): Payments {
         quantity: Math.max(1, Math.floor(quantity)),
         proration_behavior: 'create_prorations',
       });
+    },
+
+    async cancelSubscription(id) {
+      return readSubscription(await call('DELETE', `/v1/subscriptions/${encodeURIComponent(id)}`));
     },
 
     async createPortal(input) {

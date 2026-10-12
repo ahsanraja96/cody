@@ -21,8 +21,9 @@ import { hmacSha256Hex, safeEqual, type CheckoutInfo, type CheckoutInput, type P
  * The Tabfold Pro server (server/API.md): device tokens, sign-in with an emailed code, the server
  * trial, Stripe Checkout (subscriptions, Pro for life, Teams) and the billing portal, Stripe
  * webhooks, plan checks, sync, daily backups, teams and their shared folders, shared folder links
- * and the AI tasks. Only web-standard APIs, with the database, Stripe, the mailer and the model
- * injected, so the same code runs in the Edge Function (index.ts), in tests and in Node.
+ * (1.0: with a folder's note), the AI tasks, and deleting an account (1.0). Only web-standard APIs,
+ * with the database, Stripe, the mailer and the model injected, so the same code runs in the Edge
+ * Function (index.ts), in tests and in Node.
  */
 
 const MINUTE_MS = 60 * 1000;
@@ -68,6 +69,8 @@ export const LIMITS = {
   shareTitle: 200,
   shareUrl: 2000,
   shareName: 60,
+  /** A folder's note (1.0): one line, at most this many characters. */
+  shareNote: 140,
   /** …shares an account can have, and public reads a minute per address. */
   sharesPerAccount: 500,
   shareReadsPerMinute: 60,
@@ -164,6 +167,8 @@ export interface ShareContent {
   tabs: { title: string; url: string }[];
   /** "Keep it up to date": the extension sends changes. */
   live: boolean;
+  /** The folder's note (1.0): one line, at most 140 characters; '' or left out when none. */
+  note?: string;
 }
 
 export interface ShareRecord extends ShareContent {
@@ -180,6 +185,8 @@ export interface PublicShare {
   color: string;
   tabs: { title: string; url: string }[];
   updatedAt: number;
+  /** The folder's note; '' or left out when none (the route always answers with one). */
+  note?: string;
 }
 
 export interface SigninCode {
@@ -272,6 +279,8 @@ export interface Store {
   backupGet(account: string, day: string): Promise<{ day: string; items: Record<string, unknown> } | null>;
   /** Deletes backups from before this day. */
   backupPrune(account: string, beforeDay: string): Promise<void>;
+  /** Deletes every account's backups from before this day (1.0: also those of accounts that stopped syncing). */
+  backupPruneAll(beforeDay: string): Promise<void>;
   aiUsage(account: string, month: string): Promise<{ runs: number; light: number }>;
   /** `tabfold_take_run`: adds one if under the limit and returns the new count, or RUN_LIMIT_REACHED. */
   takeRun(account: string, month: string, kind: UsageKind, limit: number): Promise<number>;
@@ -319,6 +328,14 @@ export interface Store {
   shareCount(account: string): Promise<number>;
   /** `tabfold_share_view`: counts a view and returns what the page shows, or null if there's no such share. */
   shareView(id: string): Promise<PublicShare | null>;
+
+  /**
+   * `tabfold_account_delete` (1.0), atomically: the account and everything kept for it (devices and
+   * profile keys, synced copy, backups, AI usage, subscriptions and purchases as stored here, shares,
+   * its team membership, a team it owns with that team's people, invitations and folders), its
+   * sign-in code and the checkouts its computers started. False if there was no such account.
+   */
+  accountDelete(account: string): Promise<boolean>;
 }
 
 export interface Deps {
@@ -360,6 +377,8 @@ type ErrorCode =
   | 'code-expired'
   | 'ai-failed'
   | 'send-failed'
+  /** 1.0: `POST /account/delete` without the account's email as confirmation. */
+  | 'invalid'
   | 'server';
 
 class HttpError extends Error {
@@ -435,6 +454,7 @@ const ROUTES: Record<string, Handlers> = {
   '/team/leave': { POST: teamLeave },
   '/team/sync': { GET: teamSyncGet, POST: teamSyncPost },
   '/shares': { POST: shareCreate },
+  '/account/delete': { POST: accountDelete },
 };
 
 /** Routes with a part that varies, which the handler gets as `param` (URL-decoded). */
@@ -663,7 +683,38 @@ const cutChars = (text: string, max: number) => Array.from(text).slice(0, max).j
 
 /** Text for a name: one line, no control characters, whitespace tidied, at most `max` characters. */
 export function cleanLine(value: string, max: number): string {
-  return cutChars(value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim(), max).trim();
+  return cutChars(oneLine(value), max).trim();
+}
+
+const oneLine = (value: string) => value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+interface GraphemeSegmenter {
+  segment(text: string): Iterable<{ segment: string }>;
+}
+
+/**
+ * At most `max` characters (code points), never ending partway through one: a letter with its
+ * accents, a flag or an emoji sequence is kept whole or left out.
+ */
+export function cutWhole(text: string, max: number): string {
+  if (Array.from(text).length <= max) return text;
+  const Segmenter = (Intl as unknown as { Segmenter?: new (locale?: string, options?: { granularity: 'grapheme' }) => GraphemeSegmenter })
+    .Segmenter;
+  if (!Segmenter) return cutChars(text, max);
+  let out = '';
+  let count = 0;
+  for (const { segment } of new Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+    const size = Array.from(segment).length;
+    if (count + size > max) break;
+    out += segment;
+    count += size;
+  }
+  return out;
+}
+
+/** A folder's note (1.0): one line, whitespace squeezed, at most 140 characters, never cut partway through one. */
+export function cleanNote(value: unknown): string {
+  return typeof value === 'string' ? cutWhole(oneLine(value), LIMITS.shareNote).trim() : '';
 }
 
 async function readJson(req: Request, optional = false): Promise<unknown> {
@@ -1132,6 +1183,7 @@ async function syncPost(req: Request, deps: Deps): Promise<Reply> {
   }
   if (result < 0) throw new Error(`Unexpected sync write result ${result}`);
   await backUpToday(deps, account);
+  await pruneOldBackups(deps);
   return ok({ version: result });
 }
 
@@ -1160,6 +1212,20 @@ async function backUpToday(deps: Deps, account: string): Promise<void> {
 }
 
 const oldestKeptDay = (now: number) => dayOf(now - LIMITS.backupDays * DAY_MS);
+
+/**
+ * Once a day, whichever sync write gets there first: backups older than 30 days go for every
+ * account, including accounts whose plan ended and that no longer write (theirs would otherwise
+ * stay). Never fails the write.
+ */
+async function pruneOldBackups(deps: Deps): Promise<void> {
+  try {
+    if ((await deps.store.rateTake('prune:backups', 1, DAY_MS / 1000)) > 0) return;
+    await deps.store.backupPruneAll(oldestKeptDay(deps.now()));
+  } catch (error) {
+    deps.log?.(`Pruning old backups failed: ${describe(error)}`);
+  }
+}
 
 // ---- Backups ----
 
@@ -1511,7 +1577,10 @@ export function pageAddress(value: unknown): string | null {
   return url.href.length <= LIMITS.shareUrl ? url.href : null;
 }
 
-/** A shared folder's contents: name, colour, at most 1,000 tabs with http(s) addresses, titles cut to 200 characters. */
+/**
+ * A shared folder's contents: name, colour, at most 1,000 tabs with http(s) addresses, titles cut to
+ * 200 characters, and (1.0) the folder's note, one line of at most 140 characters ('' when none).
+ */
 export function readShare(body: Record<string, unknown>): ShareContent {
   if (typeof body.name !== 'string') throw badRequest('Send { name, color, tabs, live }.');
   const name = cleanLine(body.name, LIMITS.shareName);
@@ -1526,7 +1595,7 @@ export function readShare(body: Record<string, unknown>): ShareContent {
     if (!url) continue;
     tabs.push({ title: typeof entry.title === 'string' ? cleanLine(entry.title, LIMITS.shareTitle) : '', url });
   }
-  return { name, color, tabs, live: body.live === true };
+  return { name, color, tabs, live: body.live === true, note: cleanNote(body.note) };
 }
 
 const noShare = () => new HttpError(404, 'server', 'This link doesn’t work any more.');
@@ -1565,7 +1634,7 @@ async function shareInfo(req: Request, deps: Deps, param: string): Promise<Reply
   const id = shareIdOf(param);
   const share = await deps.store.shareGet(id);
   if (!share || share.accountId !== account.id) throw noShare();
-  return ok({ id, url: shareUrl(deps, id), views: share.views, live: share.live, updatedAt: share.updatedAt });
+  return ok({ id, url: shareUrl(deps, id), views: share.views, live: share.live, updatedAt: share.updatedAt, note: share.note ?? '' });
 }
 
 /** Stops sharing: the link stops working at once. Fine to ask twice. */
@@ -1591,5 +1660,43 @@ async function publicShare(req: Request, deps: Deps, param: string): Promise<Rep
   }
   const share = await deps.store.shareView(shareIdOf(param));
   if (!share) throw noShare();
-  return ok(share);
+  return ok({ ...share, note: share.note ?? '' });
+}
+
+// ---- Deleting an account (1.0) ----
+
+/** Stripe's states for a subscription that has ended for good. */
+const ENDED_STATUSES = ['canceled', 'incomplete_expired'];
+
+/**
+ * Cancels a subscription at once, unless it has already ended (Stripe's answer now is the truth:
+ * the stored state can be a little behind).
+ */
+async function cancelSubscription(deps: Deps, stored: Subscription): Promise<void> {
+  if (ENDED_STATUSES.includes(stored.status)) return;
+  const current = await deps.payments.getSubscription(stored.id);
+  if (ENDED_STATUSES.includes(current.status)) return;
+  await deps.payments.cancelSubscription(stored.id);
+}
+
+/**
+ * `POST /account/delete`: the person typed their account's email to confirm. Stripe first, so that
+ * when it can't be reached nothing is deleted and they can try again: every subscription on the
+ * account (its own, and a team's it owns) is cancelled at once. Then the account and everything
+ * kept for it go in one step (Store.accountDelete): its computers are signed out, its synced copy,
+ * backups, shares (their links stop working), AI usage and a Pro for life purchase go, and a team it
+ * owns ends for everyone in it. A member's team gets one seat fewer, as when someone leaves.
+ * Stripe keeps its own records of payments.
+ */
+async function accountDelete(req: Request, deps: Deps): Promise<Reply> {
+  const { account } = await signedIn(req, deps);
+  const body = await readObject(req, '{ confirm }');
+  const typed = typeof body.confirm === 'string' ? body.confirm.trim().toLowerCase() : '';
+  if (!typed || typed !== account.email) throw new HttpError(400, 'invalid', 'Type your account’s email to confirm.');
+  const membership = await deps.store.teamOf(account.id);
+  for (const subscription of await deps.store.subscriptionList(account.id)) await cancelSubscription(deps, subscription);
+  await deps.store.accountDelete(account.id);
+  if (membership && membership.role === 'member') await matchSeats(deps, membership.team, 'left');
+  deps.log?.(membership?.role === 'owner' ? 'An account was deleted, and the team it owned ended' : 'An account was deleted');
+  return ok({ ok: true });
 }

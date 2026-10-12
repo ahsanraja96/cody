@@ -8,7 +8,8 @@ import { signWebhook, STRIPE_VERSION } from '../../server/supabase/functions/tab
  *
  * Checkout does subscriptions (with a quantity: a Teams plan's seats) and one-time payments
  * (`mode=payment`: Pro for life); "Pay" on the page completes either. Changing a subscription
- * item's quantity (`POST /v1/subscription_items/<id>`) sends `customer.subscription.updated`.
+ * item's quantity (`POST /v1/subscription_items/<id>`) sends `customer.subscription.updated`;
+ * cancelling one at once (`DELETE /v1/subscriptions/<id>`) sends `customer.subscription.deleted`.
  *
  * - `createFakeStripe()` answers web-standard Requests (`fake.fetch`), with no network: pass
  *   `fetch: fake.fetch` to createStripe.
@@ -533,6 +534,7 @@ export function createFakeStripe(options: FakeStripeOptions = {}): FakeStripe {
     if ((id = idIn('GET', /^\/v1\/subscriptions\/([^/]+)$/))) {
       return fake.subscriptions.has(id) ? json(200, fake.subscriptions.get(id)) : missing('subscription', id);
     }
+    if ((id = idIn('DELETE', /^\/v1\/subscriptions\/([^/]+)$/))) return cancelNow(id);
     if ((id = idIn('POST', /^\/v1\/subscription_items\/([^/]+)$/))) return updateItem(id, params);
     if (path.startsWith('/v1/billing_portal/')) return portalApi(method, path, params);
     if (is('GET', /^\/v1\/webhook_endpoints$/)) {
@@ -568,6 +570,28 @@ export function createFakeStripe(options: FakeStripeOptions = {}): FakeStripe {
     const { secret: _secret, ...rest } = endpoint;
     return rest;
   };
+
+  /**
+   * Cancels a subscription at once, as `DELETE /v1/subscriptions/<id>` does: it ends now, with no
+   * further charges, and Stripe sends `customer.subscription.deleted`. One that has already ended
+   * can't be cancelled again (400).
+   */
+  async function cancelNow(id: string): Promise<Response> {
+    const subscription = fake.subscriptions.get(id);
+    if (!subscription) return missing('subscription', id);
+    if (subscription.status === 'canceled' || subscription.status === 'incomplete_expired') {
+      return stripeError(400, 'This subscription has already ended and can’t be cancelled again.');
+    }
+    Object.assign(subscription, {
+      status: 'canceled',
+      canceled_at: nowS(),
+      ended_at: nowS(),
+      cancel_at: null,
+      cancel_at_period_end: false,
+    });
+    await emit('customer.subscription.deleted', subscription);
+    return json(200, subscription);
+  }
 
   /** A subscription item's quantity (a Teams plan's seats): Stripe sends `customer.subscription.updated`. */
   async function updateItem(id: string, params: StripeObject): Promise<Response> {
