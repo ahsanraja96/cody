@@ -1,6 +1,6 @@
 // The Store on Supabase Postgres (Deno only; tests use an in-memory Store). The tables and SQL
 // functions are in server/supabase/migrations (0.6: purchases, teams and their folders, shares;
-// 1.0: a shared folder's note, deleting an account).
+// 1.0: a shared folder's note, deleting an account, trial fingerprints, pruning ended teams' folders).
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import type { Purchase, Subscription, TeamRole } from '../_shared/plan.ts';
 import type {
@@ -225,8 +225,13 @@ export function createSupabaseStore(db: SupabaseClient): Store {
       check(result, 'set customer');
     },
 
-    async startTrial(account: string): Promise<boolean> {
-      return check(await db.rpc('tabfold_start_trial', { p_account: account }), 'start trial') === true;
+    async startTrial(account: string, trialHash: string): Promise<boolean> {
+      return check(await db.rpc('tabfold_start_trial', { p_account: account, p_trial_hash: trialHash }), 'start trial') === true;
+    },
+
+    async trialUsed(trialHash: string): Promise<boolean> {
+      const result = await db.from('trial_used').select('email_hash').eq('email_hash', trialHash).maybeSingle();
+      return check(result, 'trial used') !== null;
     },
 
     async verifyEmail(account: string): Promise<boolean> {
@@ -662,9 +667,15 @@ export function createSupabaseStore(db: SupabaseClient): Store {
 
     // ---- Deleting an account (1.0) ----
 
-    async accountDelete(account: string): Promise<boolean> {
+    async accountDelete(account: string, trialHash: string): Promise<boolean> {
       if (!UUID.test(account)) return false;
-      return check(await db.rpc('tabfold_account_delete', { p_account: account }), 'account delete') === true;
+      const result = await db.rpc('tabfold_account_delete', { p_account: account, p_trial_hash: trialHash });
+      return check(result, 'account delete') === true;
+    },
+
+    async teamSyncPruneEnded(endedBefore: number): Promise<number> {
+      const result = await db.rpc('tabfold_team_sync_prune', { p_ended_before: new Date(endedBefore).toISOString() });
+      return Number(check(result, 'team sync prune') ?? 0);
     },
   };
 }

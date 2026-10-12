@@ -214,8 +214,14 @@ export interface Store {
   accountByCustomer(customerId: string): Promise<Account | null>;
   /** Sets the account's Stripe customer, unless it has one. */
   setCustomer(account: string, customerId: string): Promise<void>;
-  /** `tabfold_start_trial`: starts the trial now, only if it never started. True if it did. */
-  startTrial(account: string): Promise<boolean>;
+  /**
+   * `tabfold_start_trial`, atomically: starts the trial now, only if it never started for this
+   * account and no account with this email had one (`trialHash`, the email's trial fingerprint, is
+   * not in `trial_used`); then records the fingerprint. True if it started.
+   */
+  startTrial(account: string, trialHash: string): Promise<boolean>;
+  /** Whether an account with this email (by its trial fingerprint) ever had a trial, deleted accounts included. */
+  trialUsed(trialHash: string): Promise<boolean>;
   /**
    * `tabfold_verify_email`: the email was just proved with a code. The first time, unlinks every
    * device token and profile key of the account (atomically with marking it). True if it was.
@@ -333,9 +339,16 @@ export interface Store {
    * `tabfold_account_delete` (1.0), atomically: the account and everything kept for it (devices and
    * profile keys, synced copy, backups, AI usage, subscriptions and purchases as stored here, shares,
    * its team membership, a team it owns with that team's people, invitations and folders), its
-   * sign-in code and the checkouts its computers started. False if there was no such account.
+   * sign-in code and the checkouts its computers started. If the account had a trial, its email's
+   * trial fingerprint (`trialHash`) stays in `trial_used`, so the trial can't start again. False if
+   * there was no such account.
    */
-  accountDelete(account: string): Promise<boolean>;
+  accountDelete(account: string, trialHash: string): Promise<boolean>;
+  /**
+   * `tabfold_team_sync_prune`: deletes the shared folders (team sync items and state) of every team
+   * whose subscription isn't live and ended before this time (ms). The number of teams emptied.
+   */
+  teamSyncPruneEnded(endedBefore: number): Promise<number>;
 }
 
 export interface Deps {
@@ -596,6 +609,27 @@ async function codeHash(deps: Deps, email: string, code: string): Promise<string
   return hmacSha256Hex(deps.config.codeSecret, `${email}:${code}`);
 }
 
+/**
+ * An email's trial fingerprint: HMAC-SHA256 of `trial:<email>` (trimmed, lower-cased), keyed with the
+ * code secret, in hex. One-way: the address can't be read back from it, and without the secret it
+ * can't even be checked against a guess. Kept in `trial_used` once the email has had a trial, also
+ * after its account is deleted, so the 7-day trial can't be started again with the same email.
+ * Changing the secret (CODE_SECRET, or the service role key while CODE_SECRET isn't set) makes the
+ * kept fingerprints unrecognisable: set CODE_SECRET once and keep it.
+ */
+export async function trialFingerprint(secret: string, email: string): Promise<string> {
+  if (!secret) throw new Error('CODE_SECRET is not set');
+  return hmacSha256Hex(secret, `trial:${email.trim().toLowerCase()}`);
+}
+
+const fingerprintOf = (deps: Deps, account: Account) => trialFingerprint(deps.config.codeSecret, account.email);
+
+/** This account, or an earlier (deleted) account with the same email, had a trial. */
+async function hadTrial(deps: Deps, account: Account): Promise<boolean> {
+  if (account.trialStartedAt !== null) return true;
+  return deps.store.trialUsed(await fingerprintOf(deps, account));
+}
+
 // ---- Who is asking ----
 
 const notSignedIn = () => new HttpError(401, 'not-signed-in', 'This computer isn’t signed in to Tabfold Pro.');
@@ -645,10 +679,15 @@ async function planOf(deps: Deps, account: Account | null): Promise<PlanState> {
     deps.store.purchaseList(account.id),
     teamInputOf(deps, account.id),
   ]);
-  return planFor(
+  const plan = planFor(
     { account: { email: account.email, trialStartedAt: account.trialStartedAt }, subscriptions, purchases, team },
     deps.now(),
   );
+  // Where a trial could be offered, say whether this email already had one (on a deleted account).
+  if (!plan.trialUsed && plan.status === null && !plan.team && deps.config.codeSecret) {
+    if (await deps.store.trialUsed(await fingerprintOf(deps, account))) return { ...plan, trialUsed: true };
+  }
+  return plan;
 }
 
 /** `{ plan, runs }`, as `GET /me` and the sign-in routes answer. */
@@ -939,13 +978,16 @@ interface TrialResult {
   trialUsed: boolean;
 }
 
-/** Starts the 7-day Pro AI trial if this email never had one and has no live subscription. */
+/**
+ * Starts the 7-day Pro AI trial if this email never had one (on this account or a deleted one with
+ * the same email) and has no live subscription.
+ */
 async function startTrial(deps: Deps, account: Account): Promise<TrialResult> {
   const plan = await planOf(deps, account);
-  const hadTrial = account.trialStartedAt !== null;
+  const used = await hadTrial(deps, account);
   // A team already gives Pro AI: the trial keeps for later.
-  if (plan.status !== null || plan.team || hadTrial) return { account, trialStarted: false, trialUsed: hadTrial };
-  const started = await deps.store.startTrial(account.id);
+  if (plan.status !== null || plan.team || used) return { account, trialStarted: false, trialUsed: used };
+  const started = await deps.store.startTrial(account.id, await fingerprintOf(deps, account));
   const fresh = (await deps.store.accountById(account.id)) ?? account;
   return { account: fresh, trialStarted: started, trialUsed: !started };
 }
@@ -965,7 +1007,7 @@ async function signinFinish(req: Request, deps: Deps): Promise<Reply> {
   // The code proved the email: an invitation to a team sent to it is accepted now.
   await joinInvitedTeam(deps, account);
   let trialStarted = false;
-  let trialUsed = account.trialStartedAt !== null;
+  let trialUsed = await hadTrial(deps, account);
   if (body.startTrial === true) ({ account, trialStarted, trialUsed } = await startTrial(deps, account));
   return ok({ ...(await planReply(deps, account)), trialStarted, trialUsed });
 }
@@ -1183,7 +1225,7 @@ async function syncPost(req: Request, deps: Deps): Promise<Reply> {
   }
   if (result < 0) throw new Error(`Unexpected sync write result ${result}`);
   await backUpToday(deps, account);
-  await pruneOldBackups(deps);
+  await dailyPrune(deps);
   return ok({ version: result });
 }
 
@@ -1216,14 +1258,26 @@ const oldestKeptDay = (now: number) => dayOf(now - LIMITS.backupDays * DAY_MS);
 /**
  * Once a day, whichever sync write gets there first: backups older than 30 days go for every
  * account, including accounts whose plan ended and that no longer write (theirs would otherwise
- * stay). Never fails the write.
+ * stay); and the shared folders of teams whose plan ended more than 30 days ago go too (they stay
+ * readable for those 30 days, so people can keep a copy). Never fails the write.
  */
-async function pruneOldBackups(deps: Deps): Promise<void> {
+async function dailyPrune(deps: Deps): Promise<void> {
   try {
-    if ((await deps.store.rateTake('prune:backups', 1, DAY_MS / 1000)) > 0) return;
-    await deps.store.backupPruneAll(oldestKeptDay(deps.now()));
+    if ((await deps.store.rateTake('prune:daily', 1, DAY_MS / 1000)) > 0) return;
   } catch (error) {
     deps.log?.(`Pruning old backups failed: ${describe(error)}`);
+    return;
+  }
+  const now = deps.now();
+  try {
+    await deps.store.backupPruneAll(oldestKeptDay(now));
+  } catch (error) {
+    deps.log?.(`Pruning old backups failed: ${describe(error)}`);
+  }
+  try {
+    await deps.store.teamSyncPruneEnded(now - LIMITS.teamReadableMs);
+  } catch (error) {
+    deps.log?.(`Pruning ended teams’ folders failed: ${describe(error)}`);
   }
 }
 
@@ -1686,7 +1740,8 @@ async function cancelSubscription(deps: Deps, stored: Subscription): Promise<voi
  * kept for it go in one step (Store.accountDelete): its computers are signed out, its synced copy,
  * backups, shares (their links stop working), AI usage and a Pro for life purchase go, and a team it
  * owns ends for everyone in it. A member's team gets one seat fewer, as when someone leaves.
- * Stripe keeps its own records of payments.
+ * Stripe keeps its own records of payments. If the account had a trial, the email's trial
+ * fingerprint stays (see trialFingerprint), so the same email can't start another.
  */
 async function accountDelete(req: Request, deps: Deps): Promise<Reply> {
   const { account } = await signedIn(req, deps);
@@ -1694,9 +1749,10 @@ async function accountDelete(req: Request, deps: Deps): Promise<Reply> {
   const typed = typeof body.confirm === 'string' ? body.confirm.trim().toLowerCase() : '';
   if (!typed || typed !== account.email) throw new HttpError(400, 'invalid', 'Type your account’s email to confirm.');
   const membership = await deps.store.teamOf(account.id);
+  // Worked out first: if the secret is missing, nothing is cancelled or deleted.
+  const trialHash = await fingerprintOf(deps, account);
   for (const subscription of await deps.store.subscriptionList(account.id)) await cancelSubscription(deps, subscription);
-  await deps.store.accountDelete(account.id);
+  await deps.store.accountDelete(account.id, trialHash);
   if (membership && membership.role === 'member') await matchSeats(deps, membership.team, 'left');
-  deps.log?.(membership?.role === 'owner' ? 'An account was deleted, and the team it owned ended' : 'An account was deleted');
   return ok({ ok: true });
 }

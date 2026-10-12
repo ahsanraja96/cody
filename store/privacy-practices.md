@@ -103,7 +103,7 @@ All of Tabfold's code, fonts and icons are in the package. The content security 
 
 | Category | Tick? | What and why | Privacy policy section |
 | --- | --- | --- | --- |
-| Personally identifiable information | **Yes** | The email address of a Tabfold account (paid plans and the trial), to sign in with emailed codes and to tie a plan, sync and a team to it. Team members see each other's emails. | Your Tabfold account; Teams |
+| Personally identifiable information | **Yes** | The email address of a Tabfold account (paid plans and the trial), to sign in with emailed codes and to tie a plan, sync and a team to it. Team members see each other's emails. For an email that had the trial, a one-way fingerprint (HMAC) stays after the account is deleted, so the trial is once per email. | Your Tabfold account; What else the server keeps; Teams |
 | Health information | No | | |
 | Financial and payment information | **Yes** | For paid plans, the server keeps a record of the account's subscriptions and Pro for life payment (Stripe's ids, plan, status, dates, seats). Card details are typed on Stripe's own page and never reach Tabfold. | Payments; What else the server keeps |
 | Authentication information | **Yes** | The 6-digit sign-in code the person types (kept on the server only as a keyed hash, for 10 minutes) and each computer's random device token (kept only as a SHA-256 fingerprint). | Your email and signing in |

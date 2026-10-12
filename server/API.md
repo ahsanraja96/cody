@@ -231,7 +231,7 @@ reaches the extension.
 | `EMAIL_FROM` | Sender, e.g. `Tabfold <hello@tabfold.app>` (a domain verified in Resend) |
 | `ANTHROPIC_API_KEY` | For Pro AI |
 | `ALLOWED_ORIGINS` | `chrome-extension://<id>` of the store copy (and the development copy), comma separated |
-| `CODE_SECRET` | Optional: the key for hashing sign-in codes (defaults to the service role key) |
+| `CODE_SECRET` | Optional but recommended: the key for hashing sign-in codes and (1.0) the trial fingerprints (defaults to the service role key); set it once and keep it |
 | `PUBLIC_URL` | Optional: the function's public URL (defaults to `$SUPABASE_URL/functions/v1/tabfold`) |
 | `STRIPE_API_BASE` | Test only: a fake Stripe for the end-to-end test |
 
@@ -396,15 +396,38 @@ that wait for it to sign in). A member's team then gets one seat fewer, as when 
 Afterwards: every computer that was signed in is a token the server doesn't know (`GET /me` answers
 Free; Pro routes 401). Stripe's `customer.subscription.deleted` events find no account and change
 nothing. Invitations other teams sent to the email are theirs and stay on their lists. Signing in
-again with the same email makes a new, empty account (with no record of the old one's trial). The
-Stripe customer and its payment records stay in Stripe.
+again with the same email makes a new, empty account, which can't start the trial again if the old
+one had it (below). The Stripe customer and its payment records stay in Stripe.
 
-Not signed in: 401. The server logs that an account was deleted, never which.
+Not signed in: 401. The server's log has a line only when something fails (never the email).
 
-### Backups older than 30 days, for every account
+### One trial per email, also after deleting the account
 
-Once a day (the first sync write of the day), backups older than 30 days are deleted for every
-account, including accounts whose plan ended and that no longer write or list backups.
+The server keeps a one-way **trial fingerprint** of every email that had the trial: HMAC-SHA256 of
+`trial:<email>` (trimmed, lower-cased), keyed with `CODE_SECRET` (else the service role key), in hex,
+in the `trial_used` table (migration `20261014000000_v10_trials.sql`). No email is kept in clear, and
+the key isn't in the database. It's written when a trial starts (`tabfold_start_trial`, atomically
+with the check) and when an account that had a trial is deleted (`tabfold_account_delete`, which
+covers trials started before 1.0), and it stays after the account is gone.
+
+`POST /signin/finish` with `startTrial`, and `POST /trial`, start no trial when the email's
+fingerprint is there (`trialStarted: false, trialUsed: true`); the plan's `trialUsed` says so too
+wherever a trial could be offered. Changing `CODE_SECRET` (or the service role key while it isn't
+set) makes the kept fingerprints unrecognisable, so set it once and keep it.
+
+### Once a day: old backups, and ended teams' folders
+
+The first sync write of each day (`POST /sync`, any account) runs a clean-up:
+
+- backups older than 30 days are deleted for every account, including accounts whose plan ended
+  and that no longer write or list backups;
+- the shared folders (team sync items and version) of every team whose plan ended more than 30 days
+  ago are deleted (`tabfold_team_sync_prune`): its subscription isn't active, trialing or past due,
+  and its end (else its cancellation time, else its period's end) is more than 30 days back. Until
+  then `GET /team/sync` keeps working for its people, so they can keep a copy. The team, its people
+  and invitations stay; if the owner starts the plan again, its folders start empty.
+
+Each part is logged when it fails and never fails the sync write.
 
 ### Shares carry a folder's note
 
