@@ -3,7 +3,7 @@ import { extUrl } from '../extUrl';
 import { api, ProError } from './api';
 import { PRO_CONFIG, proConfigured } from './config';
 import { refreshPlan } from './plan';
-import { checkoutNotice, checkoutState, needsSignIn } from './state';
+import { checkoutNotice, checkoutState, lastCheckoutAt, needsSignIn } from './state';
 import type { BillingInterval, CheckoutPlan, CheckoutState, PlanState, Tier } from './types';
 
 /**
@@ -196,6 +196,8 @@ export async function openCheckout(
   }
   const url = pageUrl(answer?.url);
   if (!url) throw new ProError('server', 'Tabfold’s server sent an unexpected answer.');
+  // This computer's token is what the payment signs in: kept for a day even while not signed in.
+  await lastCheckoutAt.set(Date.now());
   const tab = await openTab(url, source);
   if (tab?.id === undefined) return { opened: false, reason: TAB_FAILED };
   await setCheckout({

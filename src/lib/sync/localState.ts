@@ -17,6 +17,8 @@ export interface SyncLocalState {
   lastVersion: number | null;
   /** Fingerprint of the folders and site kinds here after the last run (0.6). */
   lastFolders?: string | null;
+  /** Fingerprint of the folders' notes this computer shared after the last run (1.0, `SyncPlan.notesHash`). */
+  lastNotes?: string | null;
   /** Below 1 after Chrome refused a write as too big. */
   budgetFactor: number;
   /** Failed runs in a row, and when to try again. */

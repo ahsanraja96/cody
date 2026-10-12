@@ -29,6 +29,7 @@ import { singleFlight } from './singleFlight';
 import { takeSnapshot } from './snapshots';
 import { restoreWindows } from './restore';
 import { addToWeeklyNumbers, countFold } from './weeklyNumbers';
+import { noteOpenedByTabfold } from './openedByTabfold';
 import { copiesOf, placeFoldedTabs } from './foldBack';
 import { ensureRoomFor } from './room';
 import { refuseToOpen, type RestoreTab, type RestoreWindow } from './restorePlan';
@@ -289,8 +290,11 @@ export async function recordUndo(input: {
   putBack?: LastAction['putBack'];
   /** Tabs this action wrote outside its fold (new copies in a team's fold): Undo removes them (1.0). */
   alsoRemove?: string[];
-  /** Saved tabs whose rows moved on (into a team's fold): Undo reopens them from these (1.0). */
-  reopenExtra?: NonNullable<LastAction['reopenOnly']>;
+  /**
+   * Saved tabs whose rows moved on (into a team's fold): Undo reopens them from these (1.0), unless
+   * their open tab (`sourceTabId`) never closed.
+   */
+  reopenExtra?: Array<NonNullable<LastAction['reopenOnly']>[number] & { sourceTabId?: number }>;
   /** Folders this action made ("Fold into › New folder…"): Undo deletes them again (1.0). */
   foldersMade?: string[];
   /** What this action added to the weekly numbers (1.0). */
@@ -308,7 +312,9 @@ export async function recordUndo(input: {
             sourceWindowId: s.sourceWindowId,
             ...(s.incognito ? { incognito: true as const } : {}),
           })),
-        ...(input.reopenExtra ?? []),
+        ...(input.reopenExtra ?? [])
+          .filter((item) => item.sourceTabId === undefined || !stillOpen.has(item.sourceTabId))
+          .map(({ sourceTabId: _tab, ...item }) => item),
       ]
     : [];
   const patches = input.patches ?? [];
@@ -617,10 +623,12 @@ async function reopenClosedTabs(tabs: NonNullable<LastAction['reopenTabs']>): Pr
         if (windowId === undefined) {
           const created = await browser.windows.create({ url: item.url, focused: false, incognito });
           if (created?.id !== undefined) newWindows.set(key, created.id);
+          await noteOpenedByTabfold((created?.tabs ?? []).map((t) => t.id));
           continue;
         }
       }
       const created = await browser.tabs.create({ windowId, url: item.url, active: false, index: item.index, pinned: item.pinned });
+      await noteOpenedByTabfold([created.id]);
       if (created.id !== undefined && item.groupId !== undefined && item.groupId >= 0 && !item.pinned) {
         await browser.tabs.group({ groupId: item.groupId, tabIds: [created.id] }).catch(() => undefined);
       }

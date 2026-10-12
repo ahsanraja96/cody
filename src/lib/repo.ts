@@ -15,7 +15,7 @@ import {
 import { cleanKeywords } from './keywords';
 import { CURRENT_PLAN, FREE_LIMITS, sessionLimitReached, tagsAllowed, UNSORTED_NAME, type Plan } from './limits';
 import { newId } from './format';
-import { getDeviceId, snapshotMirror } from './state';
+import { clearLocal10State, getDeviceId, snapshotMirror } from './state';
 import { clearSyncedData } from './sync/clear';
 import { clearCloudSyncedData } from './sync/cloud';
 import { forgetTeamSyncState } from './sync/team';
@@ -1215,8 +1215,9 @@ export async function clearAllData(database: TabfoldDB = db): Promise<void> {
     ]);
     await bumpSearchVersion(database);
   });
-  // The user asked for this: nothing to recover from, and no copy of the last snapshot kept.
-  await Promise.all([resetDataGuard(database), snapshotMirror.set(null)]).catch(() => undefined);
+  // The user asked for this: nothing to recover from, and no copy of the last snapshot kept; and
+  // nothing 1.0 keeps beside the list either (window names, weekly numbers, recent folders…).
+  await Promise.all([resetDataGuard(database), snapshotMirror.set(null), clearLocal10State()]).catch(() => undefined);
   // Gone from Chrome sync too ("Removes all folded tabs here and from Chrome sync"), and from the
   // Tabfold account for Pro.
   await clearSyncedData();

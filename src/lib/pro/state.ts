@@ -107,6 +107,13 @@ export const aiRuns = item<AiRuns>(AI_RUNS);
 /** The Stripe Checkout tab Tabfold is watching (session storage: gone when the browser closes). */
 export const checkoutState = item<CheckoutState>(CHECKOUT, 'session');
 
+/**
+ * When this computer last started a Stripe checkout (local: it survives a restart). For a day the
+ * server may still sign this computer in to the account that paid, so its device token is kept even
+ * while `GET /me` says it isn't signed in.
+ */
+export const lastCheckoutAt = item<number>('lastCheckoutAt');
+
 /** One-shot news for the pages about a checkout: the person closed it without paying. */
 export const checkoutNotice = item<{ kind: 'closed'; at: number }>(CHECKOUT_NOTICE, 'session');
 

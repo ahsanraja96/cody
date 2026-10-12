@@ -549,6 +549,27 @@ export function encodeNoteItem(notes: readonly SyncNote[], limits: SyncLimits = 
   return { v: 1, n: kept.map((e) => JSON.parse(e.text) as PackedNote) };
 }
 
+/**
+ * The same `tf.f` item with the folders' stars (field [6], 1.0): exactly the entries `plain` kept,
+ * so the item never drops a folder for a star. Null when no kept folder is starred, or when the
+ * stars don't fit in the item.
+ */
+export function withStars(plain: FolderItem | null, folders: readonly SyncFolder[], limits: SyncLimits = SYNC_LIMITS): FolderItem | null {
+  if (!plain) return null;
+  const stars = new Map(folders.filter((f) => f.starredAt && f.starredAt > 0).map((f) => [f.id, Math.floor(f.starredAt! / 1000)]));
+  if (stars.size === 0) return null;
+  let any = false;
+  const f = plain.f.map((entry) => {
+    const star = stars.get(entry[0]);
+    if (!star) return entry;
+    any = true;
+    return [...entry.slice(0, 6), star] as unknown as PackedFolder;
+  });
+  if (!any) return null;
+  const item: FolderItem = { ...plain, f };
+  return itemBytes(FOLDERS_KEY, item) <= limits.quotaBytesPerItem - 64 ? item : null;
+}
+
 /** Tombstones younger than 30 days, one per id (the latest), newest first, at most 300 (Chrome sync). */
 export function pruneTombstones(tombstones: Tombstone[], now: number, limits: SyncLimits = SYNC_LIMITS): Tombstone[] {
   const byId = new Map<string, Tombstone>();
@@ -569,10 +590,16 @@ export interface PackOptions {
   budgetFactor?: number;
   /** Chrome sync's limits unless given. */
   limits?: SyncLimits;
-  /** The `tf.f` item (folders and site kinds), already within one item's quota; it takes room from the records. */
+  /**
+   * The `tf.f` item (folders and site kinds) as 0.6 writes it (no 1.0 fields), already within one
+   * item's quota; it takes room from the records. 0.6 and 1.0 computers pack the same records.
+   */
   folderItem?: FolderItem | null;
-  /** The `tf.n` item (folders' notes, 1.0), already within one item's quota; it takes room from the records too. */
-  noteItem?: NoteItem | null;
+  /**
+   * 1.0 additions, written only with the room the records leave (never at their cost): the same
+   * `tf.f` with stars (field [6]), and the notes item (`tf.n`).
+   */
+  extras?: { folderItem?: FolderItem | null; noteItem?: NoteItem | null };
 }
 
 export interface PackResult {
@@ -585,6 +612,8 @@ export interface PackResult {
   hash: string | null;
   /** Bytes used, as Chrome counts them. */
   bytes: number;
+  /** Which 1.0 additions fitted: the stars in `tf.f`, the notes item. */
+  extras?: { stars: boolean; notes: boolean };
 }
 
 /** Split encoded entries into chunks under the chunk size. */
@@ -623,13 +652,12 @@ export function pack(candidates: SyncRecord[], tombstoneList: Tombstone[], optio
   let tombstoneBytes = 0;
   tombstoneChunks.forEach((chunk, i) => (tombstoneBytes += tombstoneKey(i).length + 2 + byteLength(chunk.join(','))));
 
-  const folderItem = options.folderItem ?? null;
-  const folderBytes = folderItem ? itemBytes(FOLDERS_KEY, folderItem) : 0;
-  const noteItem = options.noteItem ?? null;
-  const noteBytes = noteItem ? itemBytes(NOTES_KEY, noteItem) : 0;
+  const plainFolderItem = options.folderItem ?? null;
+  const folderBytes = plainFolderItem ? itemBytes(FOLDERS_KEY, plainFolderItem) : 0;
   const metaReserve = 160;
-  const budget = Math.floor((limits.quotaBytes - limits.reserveBytes) * factor) - metaReserve - tombstoneBytes - folderBytes - noteBytes;
-  const maxChunks = limits.maxItems - 1 - tombstoneChunks.length - (folderItem ? 1 : 0) - (noteItem ? 1 : 0);
+  // Exactly as 0.6 counts: the records' room never depends on what only 1.0 writes.
+  const budget = Math.floor((limits.quotaBytes - limits.reserveBytes) * factor) - metaReserve - tombstoneBytes - folderBytes;
+  const maxChunks = limits.maxItems - 1 - tombstoneChunks.length - (plainFolderItem ? 1 : 0);
 
   const sorted = [...candidates].sort(compareRecords);
   const recordChunks: string[][] = [];
@@ -658,9 +686,27 @@ export function pack(candidates: SyncRecord[], tombstoneList: Tombstone[], optio
     // Otherwise this one doesn't fit; a smaller, older one still may.
   }
 
+  // 1.0 additions, in what the records left: the stars first, then the notes (one more item).
+  let left = budget - used;
+  let folderItem = plainFolderItem;
+  const starred = options.extras?.folderItem ?? null;
+  if (plainFolderItem && starred) {
+    const extra = itemBytes(FOLDERS_KEY, starred) - folderBytes;
+    if (extra <= left) {
+      folderItem = starred;
+      left -= Math.max(0, extra);
+    }
+  }
+  let noteItem = options.extras?.noteItem ?? null;
+  if (noteItem) {
+    const noteBytes = itemBytes(NOTES_KEY, noteItem);
+    if (noteBytes <= left && recordChunks.length < maxChunks) left -= noteBytes;
+    else noteItem = null;
+  }
+
   const floorSeconds = Math.floor(Math.max(0, options.floor) / 1000);
   if (included.length === 0 && tombstones.length === 0 && floorSeconds === 0 && !folderItem && !noteItem) {
-    return { items: {}, records: [], tombstones: [], hash: null, bytes: 0 };
+    return { items: {}, records: [], tombstones: [], hash: null, bytes: 0, extras: { stars: false, notes: false } };
   }
   const items: Record<string, unknown> = {};
   recordChunks.forEach((chunk, i) => (items[recordKey(i)] = JSON.parse(`[${chunk.join(',')}]`)));
@@ -674,7 +720,7 @@ export function pack(candidates: SyncRecord[], tombstoneList: Tombstone[], optio
   items[META_KEY] = meta;
   let bytes = 0;
   for (const [key, value] of Object.entries(items)) bytes += itemBytes(key, value);
-  return { items, records: included, tombstones, hash, bytes };
+  return { items, records: included, tombstones, hash, bytes, extras: { stars: folderItem !== plainFolderItem, notes: !!noteItem } };
 }
 
 function contentHash(recordChunks: string[], tombstoneChunks: string[], floorSeconds: number): string {

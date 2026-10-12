@@ -10,14 +10,15 @@ import { route } from '@/lib/background/router';
 import { handleUndo } from '@/lib/background/save';
 import { resetTitleCache } from '@/lib/background/titles';
 import { applyToolbarSetting, refreshWindowHint, resetToolbarRuntime } from '@/lib/background/toolbar';
-import { matchScore, resetWindowNamesRuntime, restoreWindowNames, windowUrlKeys } from '@/lib/background/windowNames';
+import { forgetOpenedByTabfold } from '@/lib/background/openedByTabfold';
+import { matchScore, refreshNamedWindows, resetWindowNamesRuntime, restoreWindowNames, setWindowName, windowUrlKeys } from '@/lib/background/windowNames';
 import { db } from '@/lib/db';
 import { CATEGORIES, KIND_GROUP_COLORS } from '@/lib/categories';
 import { cleanFolderNote } from '@/lib/folders';
 import type { Command, CommandResults } from '@/lib/messages';
 import { planState } from '@/lib/pro/state';
 import { FREE_PLAN } from '@/lib/pro/types';
-import { saveCapture } from '@/lib/repo';
+import { clearAllData, saveCapture } from '@/lib/repo';
 import { updateSettings, type AutoFoldRule } from '@/lib/settings';
 import {
   autoFoldNotice,
@@ -154,12 +155,14 @@ describe('fold back into its folder', () => {
     expect(await placement()).toEqual({ 'https://loose.com': null, 'https://recipe.com': RECIPES.id });
   });
 
-  it('a team folder’s group folds back into the team folder (shared, as added by this person); Undo takes it back', async () => {
+  it('a team folder’s group (opened from it) folds back into the team folder (shared, as added by this person); Undo takes it back', async () => {
     await planState.set({ ...FREE_PLAN, tier: 'pro-ai', email: 'ada@example.com', team: { id: 'team1', name: 'Truewidgets', role: 'member', seats: 3 } });
     const team = folder('teamfolder01', 'Launch', { teamId: 'team1' });
     await db.folders.put(team);
     const { windowId, tabIds } = chrome.openWindow(['https://launch.com', 'https://mine.com'], { focused: true });
-    chrome.makeGroup([tabIds[0]!], { title: 'Launch' });
+    const group = chrome.makeGroup([tabIds[0]!], { title: 'Launch' });
+    // Only "Open all" from the team folder links the group to it (a name alone never shares tabs).
+    await groupFolders.set({ [group]: team.id });
     const outcome = await handleFold({ windowId });
     expect(outcome.backIntoFolders).toEqual([{ folderId: team.id, name: 'Launch', tabs: 1 }]);
     const shared = (await db.tabs.where('folderId').equals(team.id).toArray())[0]!;
@@ -170,6 +173,37 @@ describe('fold back into its folder', () => {
     expect(await handleUndo(outcome.actionId!)).toEqual({ undone: true });
     expect(chrome.webTabs().map((t) => t.url).sort()).toEqual(['https://launch.com', 'https://mine.com']);
     expect(await db.tabs.where('folderId').equals(team.id).count()).toBe(0);
+  });
+
+  it('by name alone, a group never goes into a team folder, and a group made by Tidy (or looking like one) into no folder', async () => {
+    await planState.set({ ...FREE_PLAN, tier: 'pro-ai', email: 'ada@example.com', team: { id: 'team1', name: 'Truewidgets', role: 'member', seats: 3 } });
+    await db.folders.bulkPut([folder('teamdocs0001', 'Docs', { teamId: 'team1', color: 'cyan' }), folder('mydev0000001', 'Dev', { color: 'blue' })]);
+    const { windowId, tabIds } = chrome.openWindow(
+      ['https://docs.google.com/document/d/tax', 'https://docs.google.com/spreadsheets/d/budget', 'https://example.com/team', 'https://example.com/dev'],
+      { focused: true },
+    );
+    chrome.makeGroup([tabIds[2]!], { title: 'Docs' });
+    // Tidy makes a "Docs" group (cyan) of the two Google Docs.
+    expect(await send({ type: 'window-tidy', windowId })).toMatchObject({ groups: 1 });
+    // After a restart (no memory of Tidy): a group titled and coloured like a kind of site isn't a folder's either.
+    chrome.makeGroup([tabIds[3]!], { title: 'Dev', color: 'blue' });
+    const outcome = await handleFold({ windowId });
+    expect(outcome.backIntoFolders).toBeUndefined();
+    expect(await db.tabs.where('folderId').anyOf(['teamdocs0001', 'mydev0000001']).count()).toBe(0);
+  });
+
+  it('a tab that never closed isn’t opened twice by Undo (it went into a team folder)', async () => {
+    await planState.set({ ...FREE_PLAN, tier: 'pro-ai', email: 'ada@example.com', team: { id: 'team1', name: 'Truewidgets', role: 'member', seats: 3 } });
+    const team = folder('teamfolder01', 'Launch', { teamId: 'team1' });
+    await db.folders.put(team);
+    const { windowId, tabIds } = chrome.openWindow(['https://stays.com', 'https://goes.com'], { focused: true });
+    const group = chrome.makeGroup(tabIds, { title: 'Launch' });
+    await groupFolders.set({ [group]: team.id });
+    chrome.refuseClose.add(tabIds[0]!);
+    const outcome = await handleFold({ windowId });
+    expect(outcome.failedToClose.map((t) => t.url)).toEqual(['https://stays.com']);
+    expect(await handleUndo(outcome.actionId!)).toEqual({ undone: true });
+    expect(chrome.webTabs().map((t) => t.url).sort()).toEqual(['https://goes.com', 'https://stays.com']);
   });
 
   it('a rule never shares tabs with a team: a team folder’s group folds by kind of site then', async () => {
@@ -228,6 +262,15 @@ describe('Fold into a folder', () => {
     expect(await handleUndo(outcome.actionId!)).toEqual({ undone: true });
     expect((await db.folders.get(made.id))!.deletedAt).toBeGreaterThan(0);
     expect(chrome.webTabs()).toHaveLength(2);
+  });
+
+  it('"New folder…" with nothing to fold leaves no empty folder behind', async () => {
+    await planState.set({ ...FREE_PLAN, tier: 'pro' });
+    const { windowId } = chrome.openWindow([{ url: 'https://pinned.com', pinned: true }, 'chrome://newtab/'], { focused: true });
+    const outcome = await send({ type: 'fold', windowId, newFolderName: 'Empty' });
+    expect(outcome.savedTabs).toBe(0);
+    expect(outcome.intoFolder).toBeUndefined();
+    expect(await db.folders.count()).toBe(0);
   });
 
   it('Free: a 4th folder is refused before anything closes', async () => {
@@ -465,6 +508,33 @@ describe('a window has more than N tabs', () => {
     expect(await autoFoldNotice.get()).not.toHaveProperty('windowName');
   });
 
+  it('an Undo of its fold stays undone, and tabs Tabfold opens (a 40-tab folder) aren’t folded until looked at', async () => {
+    await updateSettings({ autoFold: [cap(3)] });
+    const { windowId } = chrome.openWindow(
+      [
+        { url: 'https://a.com', lastAccessed: 1 },
+        { url: 'https://b.com', lastAccessed: 2 },
+        { url: 'https://c.com', lastAccessed: 3 },
+        { url: 'https://d.com', lastAccessed: 4, active: true },
+      ],
+      { focused: true },
+    );
+    expect(await windowCapTick()).toBe(1);
+    expect(await handleUndo((await autoFoldNotice.get())!.actionId!)).toEqual({ undone: true });
+    expect(chrome.webTabs()).toHaveLength(4);
+    // The tab Undo reopened doesn't count until the person looks at it.
+    expect(await windowCapTick()).toBe(0);
+
+    const rows = await folded(Array.from({ length: 40 }, (_, i) => `https://big${i}.com`), CLIENT);
+    await send({ type: 'open-tabs', tabRecordIds: rows.map((r) => r.id), asGroup: { name: 'Client sites', color: 'green' }, folderId: CLIENT.id, windowId });
+    expect(chrome.webTabs()).toHaveLength(44);
+    expect(await windowCapTick()).toBe(0);
+    // Looked at: it counts (and the window is over its cap again).
+    const reopened = chrome.webTabs().find((t) => t.url === 'https://a.com')!;
+    await forgetOpenedByTabfold(reopened.id);
+    expect(await windowCapTick()).toBe(1);
+  });
+
   it('runs from "Run now" on Free too', async () => {
     await updateSettings({ autoFold: [cap(2)] });
     chrome.openWindow(['https://a.com', 'https://b.com', 'https://c.com'], { focused: true });
@@ -475,6 +545,33 @@ describe('a window has more than N tabs', () => {
 // ---------------------------------------------------------------------------------------------
 
 describe('named windows', () => {
+  it('a remembered name that wasn’t found keeps its name, even if its old window id came back', async () => {
+    const now = Date.now();
+    // After a restart, the "Trip" window got the id the "Client work" window had last session.
+    const trip = chrome.openWindow(['https://lisbon.com', 'https://porto.com'], { focused: true });
+    await namedWindows.set([
+      { name: 'Client work', urls: ['https://a.com', 'https://b.com', 'https://c.com'].map(urlKey), windowId: trip.windowId, at: now - DAY },
+      { name: 'Trip', urls: ['https://lisbon.com', 'https://porto.com'].map(urlKey), windowId: 9999, at: now - DAY },
+    ]);
+    expect(await restoreWindowNames(now)).toBe(1);
+    expect(await windowNames.get()).toEqual({ [trip.windowId]: 'Trip' });
+    await refreshNamedWindows(now + 1000);
+    const stored = await namedWindows.get();
+    expect(stored.map((e) => [e.name, e.windowId]).sort()).toEqual([['Client work', undefined], ['Trip', trip.windowId]]);
+    // Naming that window again leaves the other remembered name alone.
+    await setWindowName(trip.windowId, 'Holiday', now + 2000);
+    expect((await namedWindows.get()).map((e) => e.name).sort()).toEqual(['Client work', 'Holiday']);
+  });
+
+  it('a window named another way (after a live folder) never takes over a remembered name', async () => {
+    const now = Date.now();
+    const w = chrome.openWindow(['https://x.com', 'https://y.com'], { focused: true });
+    await namedWindows.set([{ name: 'Client work', urls: ['https://a.com', 'https://b.com'].map(urlKey), windowId: w.windowId, at: now - DAY }]);
+    await windowNames.set(w.windowId, 'Recipes');
+    await refreshNamedWindows(now);
+    expect((await namedWindows.get())[0]).toMatchObject({ name: 'Client work', urls: ['https://a.com', 'https://b.com'].map(urlKey) });
+  });
+
   it('a name is kept for the session and remembered with the window’s pages; "" takes it away', async () => {
     const { windowId } = chrome.openWindow(['https://a.com', 'https://b.com/', 'chrome://newtab/'], { focused: true });
     await send({ type: 'window-rename', windowId, name: '  Client   work ' });
@@ -501,7 +598,7 @@ describe('named windows', () => {
       { name: 'Weak', urls: ['https://w1.com', 'https://w2.com', 'https://w3.com', 'https://w4.com', 'https://w5.com'].map(urlKey), windowId: 4, at: now },
     ]);
     const client = chrome.openWindow(['https://a.com', 'https://b.com', 'https://x.com']);
-    const trip = chrome.openWindow(['https://lisbon.com', 'https://porto.com']);
+    const trip = chrome.openWindow(['https://lisbon.com']);
     const old = chrome.openWindow(['https://old.com', 'https://old2.com']);
     const weak = chrome.openWindow(['https://w1.com', 'https://z.com', 'https://zz.com', 'https://zzz.com', 'https://zzzz.com']);
     expect(await restoreWindowNames(now)).toBe(2);
@@ -511,14 +608,20 @@ describe('named windows', () => {
     const stored = await namedWindows.get();
     expect(stored.map((e) => e.name)).toEqual(['Client work', 'Trip', 'Weak']);
     expect(stored.find((e) => e.name === 'Client work')!.windowId).toBe(client.windowId);
+    // Not found: no longer tied to a window id (ids repeat after a restart).
+    expect(stored.find((e) => e.name === 'Weak')!.windowId).toBeUndefined();
     // Run again: nothing changes (one window per name).
     expect(await restoreWindowNames(now)).toBe(0);
   });
 
-  it('matches at least half of the smaller set, and 2 pages (1 when either has a single page)', () => {
+  it('matches at least half of the remembered pages and at least 2 (or one page exactly)', () => {
     expect(matchScore(['a', 'b', 'c', 'd'], ['a', 'b', 'x'])).toBe(2);
     expect(matchScore(['a', 'b', 'c', 'd'], ['a', 'x', 'y'])).toBe(0);
-    expect(matchScore(['a'], ['a', 'x', 'y'])).toBe(1);
+    expect(matchScore(['a', 'b', 'c', 'd', 'e'], ['a', 'b', 'x'])).toBe(0);
+    expect(matchScore(['a', 'b'], ['a', 'b', 'c', 'd', 'e', 'f'])).toBe(2);
+    expect(matchScore(['a'], ['a'])).toBe(1);
+    expect(matchScore(['a'], ['a', 'x', 'y'])).toBe(0);
+    expect(matchScore(['a', 'x'], ['a'])).toBe(0);
     expect(matchScore(['a', 'b', 'c', 'd', 'e'], ['a', 'v', 'w', 'x', 'y'])).toBe(0);
     expect(matchScore([], ['a'])).toBe(0);
     expect(windowUrlKeys([{ url: 'https://a.com', index: 1 }, { url: 'chrome://newtab/', index: 0 }, { url: 'https://a.com/', index: 2 }])).toEqual([urlKey('https://a.com')]);
@@ -613,6 +716,28 @@ describe('weekly numbers', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+
+describe('Clear everything', () => {
+  it('takes what 1.0 keeps beside the list too: window names, weekly numbers, recent folders, team stars…', async () => {
+    const { windowId } = chrome.openWindow(['https://a.com', 'https://b.com'], { focused: true });
+    await send({ type: 'window-rename', windowId, name: 'Client work' });
+    await weeklyStats.set({ '2026-10-05': { folded: 3, freedBytes: 1, cameBack: 1 } });
+    await weeklySummarySeen.set('2026-10-12');
+    await recentFolders.set({ clientsites1: 1 });
+    await starredTeamFolders.set({ teamfolder01: 1 });
+    await groupFolders.set({ 5: 'clientsites1' });
+    await pendingFoldInto.set({ tabId: 1, at: 1 });
+    await clearAllData();
+    expect(await namedWindows.get()).toEqual([]);
+    expect(await windowNames.get()).toEqual({});
+    expect(await weeklyStats.get()).toEqual({});
+    expect(await weeklySummarySeen.get()).toBeUndefined();
+    expect(await recentFolders.get()).toEqual({});
+    expect(await starredTeamFolders.get()).toEqual({});
+    expect(await groupFolders.get()).toEqual({});
+    expect(await pendingFoldInto.get()).toBeUndefined();
+  });
+});
 
 describe('the toolbar button and the side panel', () => {
   it('opens the side panel or the popup, as the setting says', async () => {

@@ -224,12 +224,10 @@ async function runFoldInto(options: FoldOptions, madeFolderId: string | null): P
     newTabsLeftOpen: 0,
     memory: memoryReading(null, null),
   };
-  if (madeFolderId) {
-    const made = await db.folders.get(madeFolderId);
-    if (made) outcome.intoFolder = { folderId: made.id, name: made.name };
-  }
   if (plan.windows.length === 0) {
-    // Only pinned, playing, blank or Tabfold pages: nothing to fold, nothing closes.
+    // Only pinned, playing, blank or Tabfold pages: nothing to fold, nothing closes, and a folder
+    // made for this fold ("Fold into › New folder…") isn't left behind empty.
+    if (madeFolderId) await db.folders.delete(madeFolderId).catch(() => undefined);
     await report({ phase: 'done', finishedAt: Date.now(), outcome });
     return { outcome, savedTabIds: [], existingCopies: [] };
   }

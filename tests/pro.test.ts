@@ -311,15 +311,21 @@ describe('the Chrome profile key', () => {
     expect(paths()).toEqual(['GET /me', 'POST /signin/profile']);
   });
 
-  it('an unknown key is tried once per worker start, and Free stays without a token', async () => {
+  it('an unknown key is tried once (not again after the worker restarts), and Free stays without a token', async () => {
     await fakeBrowser.storage.sync.set({ [PROFILE_KEY]: 'unknown-key-'.padEnd(43, 'u') });
     expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'free', email: null });
     expect(await peekDeviceToken()).toBeNull();
     await refreshPlan({ force: true });
     expect(server.requests).toHaveLength(1);
+    // 1.0: the server's refusal is remembered on this computer, so a fresh worker doesn't ask again.
     resetPlanRuntime();
     await refreshPlan({ force: true });
-    expect(server.requests).toHaveLength(2);
+    expect(server.requests).toHaveLength(1);
+    // A new key (another computer signed in) is tried.
+    server.account(EMAIL, { tier: 'pro', interval: 'month', status: 'active' });
+    server.profileKeys.set(PROFILE, EMAIL);
+    await fakeBrowser.storage.sync.set({ [PROFILE_KEY]: PROFILE });
+    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'pro', email: EMAIL });
   });
 
   it('follows the key arriving through Chrome sync (another computer signed in)', async () => {

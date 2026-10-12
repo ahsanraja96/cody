@@ -42,8 +42,6 @@ export function windowUrlKeys(tabs: ReadonlyArray<Pick<Browser.tabs.Tab, 'url' |
   return keys;
 }
 
-const sameName = (a: string, b: string) => a.toLocaleLowerCase() === b.toLocaleLowerCase();
-
 function prune(entries: NamedWindow[], now: number): NamedWindow[] {
   return entries.filter((e) => e.name && e.at >= now - NAMED_WINDOW_TTL_MS);
 }
@@ -67,14 +65,17 @@ async function windowOf(windowId: number): Promise<Browser.windows.Window | null
 
 /**
  * Name a window, or take its name away (''). The name is remembered across restarts with the
- * window's pages (not for Incognito windows). Another remembered window with the same name is
- * forgotten: one window per name.
+ * window's pages (not for Incognito windows). Only this window's own remembered entry (the one for
+ * the name it has now) is replaced: another remembered window that happens to carry the same
+ * window id (ids repeat after a restart) keeps its name and is no longer tied to that id.
  */
 export function setWindowName(windowId: number, name: string, now = Date.now()): Promise<void> {
   return serial(async () => {
     const clean = cleanWindowName(name);
+    const previous = (await windowNames.get())[windowId];
     await windowNames.set(windowId, clean);
-    const entries = prune(await namedWindows.get(), now).filter((e) => e.windowId !== windowId && !(clean && sameName(e.name, clean)));
+    const entries = prune(await namedWindows.get(), now).filter((e) => !(e.windowId === windowId && previous !== undefined && e.name === previous));
+    for (const entry of entries) if (entry.windowId === windowId) delete entry.windowId;
     if (clean) {
       const window = await windowOf(windowId);
       if (window && !window.incognito) entries.push({ name: clean, urls: windowUrlKeys(window.tabs ?? []), windowId, at: now });
@@ -95,14 +96,14 @@ export function refreshNamedWindows(now = Date.now()): Promise<boolean> {
     if (entries.length !== stored.length) changed = true;
     for (const entry of entries) {
       if (entry.windowId === undefined) continue;
-      const name = names[entry.windowId];
       const window = open.get(entry.windowId);
-      if (!name || !window || window.incognito) continue;
+      // Only the window that has this very name now: an id from an earlier session, or a window
+      // named some other way (after a live folder), never takes over a remembered name.
+      if (names[entry.windowId] !== entry.name || !window || window.incognito) continue;
       const urls = windowUrlKeys(window.tabs ?? []);
       // A window with no pages for now (only a New Tab) keeps the pages it had.
       const nextUrls = urls.length ? urls : entry.urls;
-      if (name !== entry.name || JSON.stringify(nextUrls) !== JSON.stringify(entry.urls) || now - entry.at > 60 * 60_000) {
-        entry.name = name;
+      if (JSON.stringify(nextUrls) !== JSON.stringify(entry.urls) || now - entry.at > 60 * 60_000) {
         entry.urls = nextUrls;
         entry.at = now;
         changed = true;
@@ -115,16 +116,16 @@ export function refreshNamedWindows(now = Date.now()): Promise<boolean> {
 
 /**
  * How well a remembered window matches an open one: the pages they share, when that's at least
- * half of the smaller set and at least 2 pages (1 when either has a single page); else 0.
+ * half of the remembered window's pages and at least 2 (or a 1-page window that is exactly a
+ * 1-page remembered one); else 0.
  */
 export function matchScore(remembered: readonly string[], open: readonly string[]): number {
-  if (remembered.length === 0 || open.length === 0) return 0;
-  const set = new Set(open);
-  const shared = new Set(remembered.filter((k) => set.has(k))).size;
-  const smaller = Math.min(new Set(remembered).size, set.size);
-  if (shared * 2 < smaller) return 0;
-  if (shared >= 2 || (smaller === 1 && shared >= 1)) return shared;
-  return 0;
+  const mine = new Set(remembered);
+  const theirs = new Set(open);
+  if (mine.size === 0 || theirs.size === 0) return 0;
+  const shared = [...mine].filter((k) => theirs.has(k)).length;
+  if (mine.size === 1 && theirs.size === 1) return shared;
+  return shared >= 2 && shared * 2 >= mine.size ? shared : 0;
 }
 
 /**
@@ -154,27 +155,49 @@ export function restoreWindowNames(now = Date.now()): Promise<number> {
     pairs.sort((a, b) => b.score - a.score || b.entry.at - a.entry.at);
     const usedWindows = new Set<number>();
     const usedEntries = new Set<NamedWindow>();
+    const usedNames = new Set(taken);
     let named = 0;
     for (const pair of pairs) {
-      if (usedWindows.has(pair.windowId) || usedEntries.has(pair.entry)) continue;
+      const key = pair.entry.name.toLocaleLowerCase();
+      if (usedWindows.has(pair.windowId) || usedEntries.has(pair.entry) || usedNames.has(key)) continue;
       usedWindows.add(pair.windowId);
       usedEntries.add(pair.entry);
+      usedNames.add(key);
       await windowNames.set(pair.windowId, pair.entry.name);
       pair.entry.windowId = pair.windowId;
       pair.entry.at = now;
       named += 1;
     }
-    if (named || entries.length !== stored.length) await namedWindows.set(entries);
+    // A remembered window not found isn't tied to a window id any more: ids repeat after a restart,
+    // and another window may have that one now.
+    let unlinked = false;
+    for (const entry of entries) {
+      if (usedEntries.has(entry) || entry.windowId === undefined || names[entry.windowId] === entry.name) continue;
+      delete entry.windowId;
+      unlinked = true;
+    }
+    if (named || unlinked || entries.length !== stored.length) await namedWindows.set(entries);
     return named;
   });
 }
 
-/** A reopened fold's window had a name: the new window gets it (unless it already has one). */
+/**
+ * A reopened fold's window had a name: the new window gets it (unless it already has one), and it
+ * is that remembered window from now on (a remembered one of that name with no open window goes).
+ */
 export async function nameReopenedWindow(windowId: number, name: string, now = Date.now()): Promise<void> {
   const clean = cleanWindowName(name);
   if (!clean) return;
   if ((await windowNames.get())[windowId]) return;
   await setWindowName(windowId, clean, now);
+  await serial(async () => {
+    const names = await windowNames.get();
+    const open = new Set((await getNormalWindows()).map((w) => w.id));
+    const entries = await namedWindows.get();
+    const live = (e: NamedWindow) => e.windowId !== undefined && open.has(e.windowId) && names[e.windowId] === e.name;
+    const kept = entries.filter((e) => e.windowId === windowId || e.name !== clean || live(e));
+    if (kept.length !== entries.length) await namedWindows.set(kept);
+  });
 }
 
 // ---------------------------------------------------------------------------------------------

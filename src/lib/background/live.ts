@@ -15,6 +15,7 @@ import { chunk, refuseToOpen } from './restorePlan';
 import { requirePaid } from './room';
 import { closeTabsSafely, recordChangeUndo, takeClosingByTabfold } from './save';
 import { countCameBack } from './weeklyNumbers';
+import { noteOpenedByTabfold } from './openedByTabfold';
 
 /**
  * Live folders (Mx-Live boards, Pro): a folder open as a Chrome tab group that saves itself. The
@@ -435,6 +436,7 @@ async function openLive(folderId: string, newWindow: boolean | undefined, foldOt
         const active = first && offset === 0;
         try {
           const tab = await browser.tabs.create({ windowId, url: record.url, active });
+          await noteOpenedByTabfold([tab.id]);
           let id = tab.id;
           if (id !== undefined && settings.lazyRestore && !active) {
             // Muted while it loads once in the background, then asleep until clicked.

@@ -295,6 +295,7 @@ export async function syncOnce(
     limits,
     folders: localFolders?.folders,
     room: deps.room ? await deps.room() : undefined,
+    lastNotes: state.lastNotes ?? null,
   });
 
   const folderChanges = plan.folders ? plan.folders.write.length + plan.folders.drop.length > 0 : false;
@@ -412,6 +413,7 @@ export async function syncOnce(
     lastHash: copyHash(plan.packed.items),
     lastVersion: await getSearchVersion(deps.database),
     lastFolders: (await readLocalFolders(deps, scope))?.hash ?? null,
+    lastNotes: plan.notesHash,
     failures: 0,
     retryAt: 0,
     partialRuns: 0,

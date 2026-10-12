@@ -6,7 +6,7 @@ import { listLiveFolders, noteRecentFolders, setTabsFolder, type TabPatch } from
 import type { FoldOutcome } from '../messages';
 import { planState } from '../pro/state';
 import { findSavedCopies, type RemovedTabs, type SaveResult } from '../repo';
-import { getDeviceId, groupFolders, liveFolders, type LastAction } from '../state';
+import { getDeviceId, groupFolders, liveFolders, tidyGroups, type LastAction } from '../state';
 import { placeTabs } from '../teamFolders';
 import { teamOfSession } from '../teams';
 import type { FolderRecord, TabRecord } from '../types';
@@ -32,13 +32,22 @@ export async function rememberGroupFolders(groupIds: number[], folderId: string)
   await groupFolders.set(next);
 }
 
-/** tabGroups.onRemoved: the group is gone, and so is its link. Cheap when there's none. */
+/** tabGroups.onRemoved: the group is gone, and so is its link (or its "made by Tidy" mark). Cheap when there's none. */
 export async function forgetGroupFolder(groupId: number): Promise<void> {
-  const current = await groupFolders.get();
-  if (!(String(groupId) in current)) return;
-  const next = { ...current };
-  delete next[String(groupId)];
-  await groupFolders.set(next);
+  const [current, tidied] = await Promise.all([groupFolders.get(), tidyGroups.get()]);
+  if (String(groupId) in current) {
+    const next = { ...current };
+    delete next[String(groupId)];
+    await groupFolders.set(next);
+  }
+  if (tidied.includes(groupId)) await tidyGroups.set(tidied.filter((id) => id !== groupId));
+}
+
+/** "Tidy into groups" made these groups: they're never a folder's group by name. */
+export async function rememberTidyGroups(groupIds: number[]): Promise<void> {
+  if (groupIds.length === 0) return;
+  const current = await tidyGroups.get();
+  await tidyGroups.set([...new Set([...current, ...groupIds])].slice(-200));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -82,8 +91,11 @@ export interface PlaceOutcome {
   putBack: RemovedTabs;
   /** New copies in a team's fold: Undo removes them. */
   alsoRemove: string[];
-  /** Saved tabs that went on into a team's fold: Undo reopens them from these (their saved rows moved). */
-  reopenOnly: NonNullable<LastAction['reopenOnly']>;
+  /**
+   * Saved tabs that went on into a team's fold: Undo reopens them from these (their saved rows
+   * moved), with the open tab each came from, so one that never closed isn't opened twice.
+   */
+  reopenOnly: Array<NonNullable<LastAction['reopenOnly']>[number] & { sourceTabId?: number }>;
   backIntoFolders: NonNullable<FoldOutcome['backIntoFolders']>;
   intoFolder?: NonNullable<FoldOutcome['intoFolder']>;
 }
@@ -100,11 +112,11 @@ interface Bucket {
 async function groupTargets(groups: Map<number, GroupLike>, folders: FolderRecord[]): Promise<Map<number, FolderRecord>> {
   const targets = new Map<number, FolderRecord>();
   if (groups.size === 0 || folders.length === 0) return targets;
-  const [links, live] = await Promise.all([groupFolders.get(), liveFolders.get()]);
+  const [links, live, tidied] = await Promise.all([groupFolders.get(), liveFolders.get(), tidyGroups.get()]);
   const liveGroups = new Set(Object.values(live).map((l) => l.groupId));
   for (const group of groups.values()) {
     if (liveGroups.has(group.id)) continue;
-    const folder = folderForGroup(group, links, folders);
+    const folder = folderForGroup(group, links, folders, tidied);
     if (folder) targets.set(group.id, folder);
   }
   return targets;
@@ -170,6 +182,7 @@ export async function placeFoldedTabs(input: PlaceInput): Promise<PlaceOutcome> 
   }
 
   const windowSources = result.windowSources;
+  const sourceTabOf = new Map([...result.tabIdMap].map(([tabId, savedId]) => [savedId, tabId]));
   const used: string[] = [];
   for (const { folder, saved, copies } of buckets.values()) {
     let count = 0;
@@ -197,6 +210,7 @@ export async function placeFoldedTabs(input: PlaceInput): Promise<PlaceOutcome> 
             title: row.title,
             pinned: row.pinned,
             sourceWindowId: windowSources.get(row.windowId),
+            sourceTabId: sourceTabOf.get(row.id),
             ...(row.incognito ? { incognito: true as const } : {}),
           });
         }

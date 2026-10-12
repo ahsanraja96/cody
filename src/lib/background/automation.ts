@@ -27,6 +27,7 @@ import { refuseToOpen } from './restorePlan';
 import { freeLimitsNow, limitCode } from './room';
 import { recordChangeUndo } from './save';
 import { countCameBack } from './weeklyNumbers';
+import { noteOpenedByTabfold, openedByTabfoldNow, resetOpenedByTabfoldRuntime } from './openedByTabfold';
 
 /**
  * Snooze and Fold automatically (Mx-Auto board).
@@ -191,7 +192,8 @@ async function reopen(rows: TabRecord[]): Promise<TabRecord[]> {
         continue;
       }
       try {
-        await browser.tabs.create({ windowId, url: row.url, active: false });
+        const created = await browser.tabs.create({ windowId, url: row.url, active: false });
+        await noteOpenedByTabfold([created.id]);
         opened.push(row);
         here += 1;
       } catch {
@@ -364,8 +366,12 @@ interface Foldable {
 /** Per window a rule may look at: how many tabs count toward "a window has more than N tabs" (every tab but pinned ones). */
 type WindowCounts = Map<number, number>;
 
-/** Open tabs a rule may fold, with when each was last looked at (and, per window, the tabs that count toward a cap). */
-async function foldableTabs(settings: Settings, now: number, counts?: WindowCounts): Promise<Foldable[]> {
+/**
+ * Open tabs a rule may fold, with when each was last looked at (and, per window, the tabs that count
+ * toward a cap). `skip`: tabs that neither count nor fold (ones Tabfold opened that the person
+ * hasn't looked at yet, for the cap).
+ */
+async function foldableTabs(settings: Settings, now: number, counts?: WindowCounts, skip: ReadonlySet<number> = new Set()): Promise<Foldable[]> {
   const windows = await getNormalWindows();
   const incognito = settings.foldIncognito && (await incognitoAllowed());
   const liveGroups = new Set(Object.values(await liveFolders.get()).map((l) => l.groupId));
@@ -373,9 +379,9 @@ async function foldableTabs(settings: Settings, now: number, counts?: WindowCoun
   const tabs: Array<{ tab: Browser.tabs.Tab; url: string }> = [];
   for (const window of windows) {
     if (window.incognito && !incognito) continue;
-    if (counts && window.id !== undefined) counts.set(window.id, (window.tabs ?? []).filter((t) => !t.pinned).length);
+    if (counts && window.id !== undefined) counts.set(window.id, (window.tabs ?? []).filter((t) => !t.pinned && !(t.id !== undefined && skip.has(t.id))).length);
     for (const tab of window.tabs ?? []) {
-      if (tab.id === undefined || tab.pinned || tab.audible) continue;
+      if (tab.id === undefined || tab.pinned || tab.audible || skip.has(tab.id)) continue;
       if (tab.active && window.focused) continue;
       if (tab.groupId !== undefined && tab.groupId >= 0 && liveGroups.has(tab.groupId)) continue;
       const url = rawTabUrl(tab);
@@ -437,7 +443,9 @@ function pickForRule(rule: AutoFoldRule, tabs: Foldable[], now: number, counts: 
  */
 async function runRule(rule: AutoFoldRule, settings: Settings, now: number): Promise<number> {
   const counts: WindowCounts = new Map();
-  const tabs = pickForRule(rule, await foldableTabs(settings, now, counts), now, counts);
+  // Tabs Tabfold just opened (an Undo, Open all, Reopen…) aren't over anyone's cap until looked at.
+  const skip = rule.when.type === 'window-cap' ? await openedByTabfoldNow() : new Set<number>();
+  const tabs = pickForRule(rule, await foldableTabs(settings, now, counts, skip), now, counts);
   const mark = async (folded: number) => {
     const last = await autoFoldLast.get();
     await autoFoldLast.set({ ...last, [rule.id]: { at: now, folded } });
@@ -545,6 +553,7 @@ export function resetAutomationRuntime(): void {
   trackActivations = false;
   clearTimeout(capTimer);
   capTimer = undefined;
+  resetOpenedByTabfoldRuntime();
 }
 
 /** `autofold-run`: run one rule now, whatever its schedule. On Free only "not looked at for N days" rules run. */

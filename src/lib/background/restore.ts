@@ -30,6 +30,7 @@ import {
   type RestoreWindow,
 } from './restorePlan';
 import { rememberGroupFolders } from './foldBack';
+import { noteOpenedByTabfold } from './openedByTabfold';
 import { takeSnapshot } from './snapshots';
 import { countCameBack } from './weeklyNumbers';
 import { nameReopenedWindow } from './windowNames';
@@ -242,6 +243,8 @@ export async function restoreWindows(windows: RestoreWindow[], options: RestoreO
           const active = activateFirst && isFirst && offset === 0;
           try {
             const created = await browser.tabs.create({ windowId, url: tab.url, active, pinned: tab.pinned });
+            // Tabfold opened it: a window's tab cap leaves it alone until the person looks at it.
+            await noteOpenedByTabfold([created.id]);
             let id = created.id;
             if (id !== undefined && options.lazy && !active) {
               // Muted while it loads once in the background, so restoring never blasts audio.
@@ -483,6 +486,7 @@ export async function handleOpenSavedTab(
       return { opened: true };
     }
     const created = await browser.tabs.create({ url: tab.url, active, windowId: target });
+    if (!active) await noteOpenedByTabfold([created.id]);
     if (active && created.windowId !== undefined) await browser.windows.update(created.windowId, { focused: true });
     await markOpened([tab.id]).catch(() => undefined);
     if (!incognito) void countCameBack(1);

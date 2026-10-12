@@ -4,8 +4,9 @@ import { route } from '@/lib/background/router';
 import type { SiteKinds } from '@/lib/categories';
 import { TabfoldDB } from '@/lib/db';
 import { addFolder, installPlacementStamp } from '@/lib/folders';
-import { DEVICE_TOKEN_KEY, PROFILE_KEY } from '@/lib/pro/account';
-import { planState } from '@/lib/pro/state';
+import { DEVICE_TOKEN_KEY, peekDeviceToken, PROFILE_KEY } from '@/lib/pro/account';
+import { refreshPlan, resetPlanRuntime } from '@/lib/pro/plan';
+import { lastCheckoutAt, planState } from '@/lib/pro/state';
 import { saveCapture } from '@/lib/repo';
 import { chromeSyncArea, syncOnce, type SiteKindsStore, type SyncArea, type SyncDeps, type SyncRunResult } from '@/lib/sync/engine';
 import { defaultSyncState, type SyncLocalState, type SyncStateStore } from '@/lib/sync/localState';
@@ -27,7 +28,7 @@ import {
 } from '@/lib/sync/records';
 import type { FolderRecord } from '@/lib/types';
 import { capturedWindow } from './fixtures';
-import { EMAIL, installPro, signedIn, type FakeServer } from './proServer';
+import { EMAIL, giveToken, installPro, signedIn, type FakeServer } from './proServer';
 
 // 1.0 sync: a folder's star in `tf.f` (field [6]) and folders' notes in `tf.n`, between two
 // computers sharing one Chrome sync, an older version's copy, the team's copy; and deleting the
@@ -240,13 +241,24 @@ describe('folders’ notes in tf.n', () => {
     expect(await settle(a, b)).toBe(0);
   });
 
-  it('an older version removing tf.n gets it back once, then nothing more', async () => {
+  it('an older version removing tf.n: not written back for that alone; back with the next change or a new note', async () => {
     const work = await a.folder('Work');
     await a.update(work.id, { note: 'Keep me', noteAt: clock });
     await settle(a, b);
+    // 0.6 removes keys it doesn't know whenever it writes.
     await fakeBrowser.storage.sync.remove(NOTES_KEY);
-    expect((await a.sync()).wrote).toBe(true);
+    expect((await a.sync()).wrote).toBe(false);
+    expect((await chromeSyncArea.getAll())[NOTES_KEY]).toBeUndefined();
+    expect(await settle(a, b)).toBe(0);
+    // The next real change carries it again.
+    await saveCapture([capturedWindow(['https://new.com'])], { source: 'save-all', deviceId: 'device-a', now: clock }, { dedupe: true }, a.db);
+    await settle(a, b);
     expect(decodeNoteItem((await chromeSyncArea.getAll())[NOTES_KEY])).toEqual([{ folderId: work.id, note: 'Keep me', noteAt: toSyncTime((await a.get(work.id)).noteAt!) }]);
+    // A new note goes at once.
+    await fakeBrowser.storage.sync.remove(NOTES_KEY);
+    await a.update(work.id, { note: 'Changed', noteAt: clock });
+    expect((await a.sync()).wrote).toBe(true);
+    expect(decodeNoteItem((await chromeSyncArea.getAll())[NOTES_KEY])![0]!.note).toBe('Changed');
     expect(await settle(a, b)).toBe(0);
   });
 
@@ -266,7 +278,7 @@ describe('folders’ notes in tf.n', () => {
     expect(encodeNoteItem(many, CLOUD_LIMITS)!.n).toHaveLength(500);
     expect(encodeNoteItem(many, SYNC_LIMITS)!.n.length).toBeLessThan(500);
     // tf.n takes room from the records, and joins the copy's fingerprint.
-    const packed = pack([], [], { floor: 0, noteItem: item });
+    const packed = pack([], [], { floor: 0, extras: { noteItem: item } });
     expect(packed.items[NOTES_KEY]).toEqual(item);
     expect(copyHash(packed.items)).not.toBe(copyHash(pack([], [], { floor: 0 }).items));
     expect(unpack(packed.items).notes).toHaveLength(2);
@@ -351,5 +363,49 @@ describe('Delete my Tabfold account', () => {
 
   it('needs to be signed in', async () => {
     expect(await route({ type: 'account-delete', confirm: EMAIL })).toMatchObject({ ok: false, code: 'not-signed-in' });
+  });
+});
+
+describe('signed out from elsewhere (the account deleted on another computer)', () => {
+  let server: FakeServer;
+  let restore: () => void;
+  beforeEach(() => {
+    ({ server, restore } = installPro());
+  });
+  afterEach(() => restore());
+
+  it('drops its device token when the server no longer knows it, and asks nothing more', async () => {
+    await signedIn(server, 'pro');
+    // Deleted elsewhere: the server forgets every computer of the account.
+    server.tokens.clear();
+    expect(await refreshPlan({ force: true })).toMatchObject({ tier: 'free', email: null });
+    expect(await peekDeviceToken()).toBeNull();
+    const asked = server.requests.length;
+    resetPlanRuntime();
+    await refreshPlan({ force: true });
+    expect(server.requests).toHaveLength(asked);
+  });
+
+  it('keeps a token a checkout from here may still sign in (a day), or a payment waiting for a code', async () => {
+    const token = await giveToken();
+    await lastCheckoutAt.set(Date.now());
+    await refreshPlan({ force: true });
+    expect(await peekDeviceToken()).toBe(token);
+
+    await lastCheckoutAt.set(Date.now() - 25 * 60 * 60_000);
+    server.paidElsewhere.set(token, 'someone@example.com');
+    resetPlanRuntime();
+    await refreshPlan({ force: true });
+    expect(await peekDeviceToken()).toBe(token);
+
+    server.paidElsewhere.clear();
+    resetPlanRuntime();
+    await refreshPlan({ force: true });
+    expect(await peekDeviceToken()).toBeNull();
+  });
+
+  it('a computer that never signed in still asks nothing', async () => {
+    await refreshPlan({ force: true });
+    expect(server.requests).toHaveLength(0);
   });
 });
