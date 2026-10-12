@@ -221,5 +221,3 @@ Look daily:
 - Once a day, the first sync of the day deletes backups older than 30 days (every account) and the
   folders of teams whose plan ended more than 30 days ago (the team itself stays, so its owner can
   start it again). With no paying user syncing on a day, they go the next day someone does.
-- The older drafts in `docs/privacy.md` and `docs/store-listing.md` describe 0.x and are replaced by
-  `web/privacy.html` and `store/`.
