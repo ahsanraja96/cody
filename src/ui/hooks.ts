@@ -613,3 +613,34 @@ export function useWeeklySummary(): (WeekStats & { week: string }) | null {
     [stats, now, seen, settings.weeklySummary],
   );
 }
+
+import { pendingFoldInto as pendingFoldIntoState, recentFolders as recentFoldersState, type PendingFoldInto } from '@/lib/state';
+
+/** Folders used lately (folder id → when), for "Fold into" lists. */
+export function useRecentFolders(): Record<string, number> {
+  return useStored(recentFoldersState.get, recentFoldersState.watch) ?? {};
+}
+
+/** A tab waiting for "Choose a folder…" (right-click › Fold this tab into). */
+export function usePendingFoldInto(): PendingFoldInto | undefined {
+  return useStored(pendingFoldIntoState.get, pendingFoldIntoState.watch);
+}
+
+/**
+ * The folders "Fold into" offers, in order: starred first, then used lately (newest first), then
+ * the rest by their order. Personal and team folders alike (a team folder shares what goes in).
+ */
+export function foldIntoOrder(
+  folders: readonly FolderRecord[],
+  teamStars: Readonly<Record<string, number>>,
+  recent: Readonly<Record<string, number>>,
+): FolderRecord[] {
+  const live = folders.filter((f) => !f.deletedAt);
+  const star = (f: FolderRecord) => (f.teamId ? (teamStars[f.id] ?? 0) : (f.starredAt ?? 0));
+  return [...live].sort(
+    (a, b) =>
+      Number(star(b) > 0) - Number(star(a) > 0) ||
+      (recent[b.id] ?? 0) - (recent[a.id] ?? 0) ||
+      a.order - b.order,
+  );
+}

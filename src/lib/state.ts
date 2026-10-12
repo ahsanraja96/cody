@@ -465,3 +465,33 @@ export const weeklySummarySeen = {
   set: (week: string) => browser.storage.local.set({ [WEEKLY_SUMMARY_SEEN]: week }),
   watch: (callback: (value: string | undefined) => void) => watchKey('local', WEEKLY_SUMMARY_SEEN, callback),
 };
+
+/**
+ * Right-click › "Fold this tab into › Choose a folder…" (1.0): the worker opens the side panel (or
+ * the popup) and leaves the tab here; that page shows the folder picker for it, then clears it.
+ */
+export interface PendingFoldInto {
+  tabId: number;
+  at: number;
+}
+
+const PENDING_FOLD_INTO = 'pendingFoldInto';
+export const pendingFoldInto = {
+  get: () => getKey<PendingFoldInto>('session', PENDING_FOLD_INTO),
+  set: (value: PendingFoldInto | null) =>
+    value ? browser.storage.session.set({ [PENDING_FOLD_INTO]: value }) : browser.storage.session.remove(PENDING_FOLD_INTO),
+  watch: (callback: (value: PendingFoldInto | undefined) => void) => watchKey('session', PENDING_FOLD_INTO, callback),
+};
+
+/**
+ * Folders used lately (folded or moved into), folder id → when (1.0): "Fold into" lists and the
+ * right-click menu show starred folders, then these, newest first. The worker keeps the newest 30.
+ */
+const RECENT_FOLDERS = 'recentFolders';
+export const recentFolders = {
+  get: async (): Promise<Record<string, number>> =>
+    ((await browser.storage.local.get(RECENT_FOLDERS))[RECENT_FOLDERS] as Record<string, number> | undefined) ?? {},
+  set: (value: Record<string, number>) => browser.storage.local.set({ [RECENT_FOLDERS]: value }),
+  watch: (callback: (value: Record<string, number>) => void) =>
+    watchKey('local', RECENT_FOLDERS, (value) => callback((value as Record<string, number> | undefined) ?? {})),
+};
