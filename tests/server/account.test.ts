@@ -129,6 +129,23 @@ describe('POST /account/delete', () => {
     expect(accountOf(EMAIL)).toBeNull();
   });
 
+  it('takes a subscription Stripe doesn’t know (a test-mode id after switching to live keys) as ended', async () => {
+    const subscription = subscriptionOf(EMAIL);
+    server.stripe.subscriptions.delete(subscription.id);
+    const res = await deleteAccount();
+    expect(res.status).toBe(200);
+    expect(accountOf(EMAIL)).toBeNull();
+    expect(server.stripe.requests.filter((r) => r.path === `/v1/subscriptions/${subscription.id}`).map((r) => r.method)).toEqual(['GET']);
+  });
+
+  it('still stops on any other Stripe error, deleting nothing', async () => {
+    const get = server.deps.payments.getSubscription;
+    server.deps.payments.getSubscription = vi.fn().mockRejectedValue(new PaymentsError('Stripe answered 500', 500));
+    expect((await deleteAccount()).status).toBe(502);
+    expect(accountOf(EMAIL)).not.toBeNull();
+    server.deps.payments.getSubscription = get;
+  });
+
   it('deletes nothing when Stripe can’t be reached, so the person can try again', async () => {
     const cancel = server.deps.payments.cancelSubscription;
     server.deps.payments.cancelSubscription = vi.fn().mockRejectedValue(new PaymentsError('Stripe could not be reached'));

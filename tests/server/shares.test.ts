@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { cleanNote, cutWhole, LIMITS, newShareId, pageAddress, readShare, sha256Hex } from '../../server/supabase/functions/tabfold/app.ts';
+import { cleanNote, cutWhole, LIMITS, newShareId, pageAddress, rateKey, readShare, sha256Hex } from '../../server/supabase/functions/tabfold/app.ts';
 import { createServer, EXTENSION, newToken, NOW, type Server } from './fakes';
 
 // Shared folders: the owner's routes (Pro), and the public read the `web/` page makes.
@@ -257,7 +257,7 @@ describe('GET /public/shares/<id>', () => {
     expect((await server.request('POST', `/public/shares/${id}`, { key: null, body: {} })).status).toBe(405);
   });
 
-  it('allows 60 reads a minute per address, keyed by a hash of it', async () => {
+  it('allows 60 reads a minute per address, counted against an HMAC of it', async () => {
     for (let i = 0; i < 60; i++) expect((await publicRead(id)).status).toBe(200);
     const res = await publicRead(id);
     expect(res.status).toBe(429);
@@ -268,14 +268,17 @@ describe('GET /public/shares/<id>', () => {
     server.clock.now = NOW + MINUTE;
     expect((await publicRead(id)).status).toBe(200);
     const keys = [...server.store.rates.keys()];
-    expect(keys).toContain(`share-read:${await sha256Hex('203.0.113.7')}`);
-    expect(keys).toContain(`share-read:${await sha256Hex('198.51.100.1')}`);
+    const ipKey = (ip: string) => rateKey(server.deps.config.codeSecret, 'share-read', ip);
+    expect(keys).toContain(await ipKey('203.0.113.7'));
+    expect(keys).toContain(await ipKey('198.51.100.1'));
+    // A keyed HMAC, not a plain SHA-256 that anyone could match by hashing every IPv4 address.
+    expect(keys).not.toContain(`share-read:${await sha256Hex('203.0.113.7')}`);
     expect(JSON.stringify(keys)).not.toContain('203.0.113.7');
   });
 
   it('prefers Cloudflare’s address over X-Forwarded-For', async () => {
     await publicRead(id, { 'cf-connecting-ip': '192.0.2.5', 'x-forwarded-for': '203.0.113.7' });
-    expect([...server.store.rates.keys()]).toContain(`share-read:${await sha256Hex('192.0.2.5')}`);
+    expect([...server.store.rates.keys()]).toContain(await rateKey(server.deps.config.codeSecret, 'share-read', '192.0.2.5'));
   });
 });
 

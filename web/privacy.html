@@ -34,7 +34,8 @@
         every computer you sign in on has them.</li>
       <li>Tabfold never reads what’s on the pages you visit. It has no ads, no analytics and no tracking, and we never
         sell your data.</li>
-      <li>You can delete it all: “Clear everything” on your computer, and “Delete my Tabfold account…” for the server.</li>
+      <li>You can delete your data: “Clear everything” or removing Tabfold on your computer, and “Delete my Tabfold
+        account…” for the server.</li>
     </ul>
   </section>
 
@@ -92,8 +93,9 @@
     <li>How many AI requests your account made each month.</li>
     <li>Your plan as Stripe last described it: Stripe’s ids for you, your subscriptions and a Pro for life payment, the
       plan, its status, seats and dates.</li>
-    <li>Short-lived counters that stop floods (codes asked for, checkouts started, visits to shared pages), kept under
-      scrambled emails, tokens and addresses for at most a day.</li>
+    <li>Short-lived counters that stop floods (codes asked for, checkouts started, visits to shared pages), for at most a
+      day. Each is filed under a fingerprint of the email, computer or IP address made with a secret key (HMAC-SHA256),
+      never the email or address itself, so it can’t be turned back into one.</li>
   </ul>
   <p>The server’s own logs record errors only, never your tokens, codes or tab titles. Supabase also keeps short technical
     logs of requests (which can include your IP address) to run and protect its service.</p>
@@ -130,7 +132,7 @@
 
   <h2 id="teams">Teams</h2>
   <p>On a Teams plan, the owner invites people by email. Everyone in the team sees the team’s name, its members’ and
-    invitees’ email addresses, and the team folders, with who added each tab. Team folders are kept on Tabfold’s server for
+    invitees’ email addresses, and the team folders, with who added each tab (by email). Team folders are kept on Tabfold’s server for
     the team, without daily backups, while its plan is on. When the plan ends they stay readable for 30 days, so people
     can keep a copy, and then they’re deleted (sooner if the team’s owner deletes their account). Whoever leaves or is
     removed can keep a copy of the team folders on their computer.</p>
@@ -164,21 +166,31 @@
   <h2 id="delete">Deleting your data</h2>
   <ul>
     <li><b>One tab:</b> × in the list.</li>
-    <li><b>Everything on a computer:</b> Settings › “Clear everything” removes your folded tabs, snapshots and settings
-      from that computer and Tabfold’s copy in Chrome sync. With a paid plan it also empties your account’s synced copy;
-      its backups are then deleted within 30 days.</li>
+    <li><b>Your tabs on a computer:</b> Settings › “Clear everything” removes your folded tabs, folders and snapshots
+      from that computer, puts the settings back to their defaults, and removes Tabfold’s copy in Chrome sync. With a paid
+      plan it also empties your account’s synced copy; its backups are then deleted within 30 days. You stay signed in.
+      Removing Tabfold (below) deletes everything it kept on that computer.</li>
     <li><b>Your account:</b> Settings › “Delete my Tabfold account…”, after typing your email. Your subscriptions are
       cancelled at once, with no further charges. Your account, synced tabs, backups, shared links (they stop working),
-      AI counts and a Pro for life purchase are deleted, and every computer is signed out. A team you own ends for
-      everyone in it; a team you’re in carries on without you. The folded tabs on your computers stay there.</li>
+      AI counts and a Pro for life purchase are deleted, and every computer is signed out: your other computers find out
+      at their next plan check and stop contacting Tabfold’s server. A team you own ends for everyone in it; a team
+      you’re in carries on without you. The folded tabs on your computers stay there.</li>
     <li><b>Removing Tabfold:</b> Chrome deletes what Tabfold kept on that computer. Settings › “Remove Tabfold…” first
       offers to reopen your tabs, save them to Chrome bookmarks or download them. To remove the copy in Chrome sync too,
       use “Clear everything” first.</li>
   </ul>
-  <p>What stays after you delete your account: if you had the trial, the fingerprint of your email (above), so the trial
-    can’t be started again with it; Stripe’s records of your payments (as payment and tax rules require); Resend’s and
-    our hosting providers’ short-lived logs; invitations someone else sent to your email, on their team’s list until they
-    cancel them; and copies other people saved from your shared folders or kept from a team, which are theirs.</p>
+  <p>What stays after you delete your account:</p>
+  <ul>
+    <li>If you had the trial, the fingerprint of your email (above), so the trial can’t be started again with it.</li>
+    <li>Tabs you added to the folders of a team you were in keep your email as who added them, in that team’s folders,
+      until someone in the team removes them or the team’s folders are deleted (30 days after its plan ends, or when its
+      owner deletes their account). A team’s folders are stored as its members’ computers send them, and our server can’t
+      edit them.</li>
+    <li>Stripe’s records of your payments, as payment and tax rules require.</li>
+    <li>Resend’s and our hosting providers’ short-lived logs.</li>
+    <li>Invitations someone else sent to your email, on their team’s list until they cancel them.</li>
+    <li>Copies other people saved from your shared folders or kept from a team, which are theirs.</li>
+  </ul>
 
   <h2 id="rights">Your rights</h2>
   <p>You can see and export what Tabfold keeps (Settings › Export…), correct or delete it as above, and ask us anything

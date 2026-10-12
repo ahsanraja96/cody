@@ -103,12 +103,12 @@ All of Tabfold's code, fonts and icons are in the package. The content security 
 
 | Category | Tick? | What and why | Privacy policy section |
 | --- | --- | --- | --- |
-| Personally identifiable information | **Yes** | The email address of a Tabfold account (paid plans and the trial), to sign in with emailed codes and to tie a plan, sync and a team to it. Team members see each other's emails. For an email that had the trial, a one-way fingerprint (HMAC) stays after the account is deleted, so the trial is once per email. | Your Tabfold account; What else the server keeps; Teams |
+| Personally identifiable information | **Yes** | The email address of a Tabfold account (paid plans and the trial), to sign in with emailed codes and to tie a plan, sync and a team to it. Team members see each other's emails, and a team's folders show who added each tab (their email; it stays in that team's folders after the person deletes their account, until the team removes the tabs or its folders are deleted). For an email that had the trial, a one-way fingerprint (HMAC) stays after the account is deleted, so the trial is once per email. Flood limits count by an HMAC of the email, never the email. | Your Tabfold account; What else the server keeps; Teams |
 | Health information | No | | |
 | Financial and payment information | **Yes** | For paid plans, the server keeps a record of the account's subscriptions and Pro for life payment (Stripe's ids, plan, status, dates, seats). Card details are typed on Stripe's own page and never reach Tabfold. | Payments; What else the server keeps |
 | Authentication information | **Yes** | The 6-digit sign-in code the person types (kept on the server only as a keyed hash, for 10 minutes) and each computer's random device token (kept only as a SHA-256 fingerprint). | Your email and signing in |
 | Personal communications | No | | |
-| Location | No | No location is collected. The server's flood limit for shared pages counts visits against a one-way hash of the IP address, for at most a day. | What else the server keeps |
+| Location | No | No location is collected. The server's flood limit for shared pages counts visits against an HMAC of the IP address keyed with a server secret (never the address), for at most a day. | What else the server keeps |
 | Web history | **Yes** | The titles and addresses of the tabs the person folds, and when: kept on the computer; the newest go to their own Chrome sync; with a paid plan they sync through Tabfold's server; titles and sites go to the AI features. This is the product's function. | Using Tabfold for free; Chrome sync; Your folded tabs; The AI features |
 | User activity | No | | |
 | Website content | No | Tabfold never reads what's on pages: no host permissions, no content scripts. | What Tabfold never does |
