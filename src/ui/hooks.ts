@@ -601,7 +601,8 @@ export function useStarredTeamFolders(): Record<string, number> {
 
 /** Is this folder starred for this person (a personal folder's `starredAt`, or a team folder's own star)? */
 export function isStarred(folder: FolderRecord, teamStars: Readonly<Record<string, number>>): boolean {
-  return folder.teamId ? !!teamStars[folder.id] : !!folder.starredAt;
+  // The worker's own rule (src/lib/folderOrder.ts), so the screens and the right-click menu agree.
+  return folderStarred(folder, teamStars);
 }
 
 /** Last week's summary to show now ("Last week you folded 340 tabs…"), or null. */
@@ -630,22 +631,10 @@ export function usePendingFoldInto(): PendingFoldInto | undefined {
 
 /**
  * The folders "Fold into" offers, in order: starred first, then used lately (newest first), then
- * the rest by their order. Personal and team folders alike (a team folder shares what goes in).
+ * the rest by their order. The worker's own order (src/lib/folderOrder.ts), re-exported.
  */
-export function foldIntoOrder(
-  folders: readonly FolderRecord[],
-  teamStars: Readonly<Record<string, number>>,
-  recent: Readonly<Record<string, number>>,
-): FolderRecord[] {
-  const live = folders.filter((f) => !f.deletedAt);
-  const star = (f: FolderRecord) => (f.teamId ? (teamStars[f.id] ?? 0) : (f.starredAt ?? 0));
-  return [...live].sort(
-    (a, b) =>
-      Number(star(b) > 0) - Number(star(a) > 0) ||
-      (recent[b.id] ?? 0) - (recent[a.id] ?? 0) ||
-      a.order - b.order,
-  );
-}
+export { foldIntoOrder } from '@/lib/folderOrder';
+import { folderStarred } from '@/lib/folderOrder';
 
 // ---- 1.0 screens (UI) ---------------------------------------------------------------------------
 
