@@ -18,10 +18,8 @@ Fold your tabs into one list, free the memory they used, and find any tab again.
 ```
 
 118 characters. The store also takes the summary from the manifest (`description` in
-`wxt.config.ts`), which says today: "Save and restore tabs and whole windows, free memory, and find any
-tab by title, address or keyword." (100 characters, also fine). To use the line above, change the
-manifest's `description` to it before building the store zip; if the dashboard shows an editable
-summary field, paste it there too, so the two match.
+`wxt.config.ts`), which says the same; if the dashboard shows an editable summary field, paste it
+there too, so the two match.
 
 ## Category and language
 

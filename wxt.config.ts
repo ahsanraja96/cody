@@ -50,7 +50,7 @@ export default defineConfig({
     name: 'Tabfold',
     short_name: 'Tabfold',
     description:
-      'Save and restore tabs and whole windows, free memory, and find any tab by title, address or keyword.',
+      'Fold your tabs into one list, free the memory they used, and find any tab again. Folders, side panel, search and sync.',
     // Minimal permissions: no host permissions and no content scripts. Tabfold never reads web pages.
     // system.memory reads the computer's free memory before and after a fold (no install warning).
     permissions: ['tabs', 'tabGroups', 'storage', 'unlimitedStorage', 'alarms', 'contextMenus', 'favicon', 'system.memory'],
