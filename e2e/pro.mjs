@@ -457,7 +457,19 @@ const afterLive = (await idb('tabs')).filter((t) => t.folderId === checkoutFolde
 check('…and keeps them in the folder (4 now)', afterLive.length === 4, `${afterLive.length}`);
 check('the folder isn’t live any more', !!(await until(async () => !(await textOf(list)).includes('Go to window'), 5000)));
 
-// 4e. Share a folder (Pro): a public page anyone can open, "Save to my Tabfold", Stop sharing.
+// 4e. Share a folder (Pro): a public page anyone can open, with the folder's note, "Save to my
+// Tabfold", Stop sharing.
+const NOTE = 'Docs and dashboards for the launch';
+const pressEnter = async (p) => {
+  await p.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await p.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+};
+await folderMenu(list, 'Checkout app', 'Add a note');
+await until(() => list.evaluate(() => document.activeElement?.getAttribute('aria-label') === 'Note for Checkout app'), 4000);
+await list.send('Input.insertText', { text: NOTE });
+await pressEnter(list);
+check('⋯ › Add a note puts a note on the folder', !!(await until(async () => (await folderNamed('Checkout app'))?.note === NOTE, 6000, 200)));
+check('…shown under the folder’s name', await has(list, NOTE, 3000));
 await folderMenu(list, 'Checkout app', 'Share…');
 check('Share… asks first', (await has(list, 'Share “Checkout app”')) && (await has(list, 'Create link', 2000)));
 await click(list, 'Create link', 'dialog[open] button');
@@ -469,6 +481,7 @@ check('the link is on the share site', info?.ok && info.data?.url === `${SHARE_S
 const publicPage = await open(`${SHARE_SITE}/s/${shared}`);
 check('the public page shows the folder and its pages', (await has(publicPage, 'Checkout app', 10_000)) && (await has(publicPage, 'Route Handlers | Next.js', 4000)) && (await has(publicPage, 'Webhooks | Stripe Documentation', 2000)));
 check('…with Open all and Copy links', (await has(publicPage, 'Open all 4')) && (await has(publicPage, 'Copy links', 2000)));
+check('…and the folder’s note under its name', await has(publicPage, NOTE, 3000));
 await shot(publicPage, 'share-public.png');
 const foldersBefore = (await liveFolders()).length;
 await publicPage.evaluate(() => document.getElementById('save')?.click());
@@ -478,6 +491,7 @@ const savedCopy = await until(async () => {
   return folders.length === foldersBefore + 1 ? folders.find((f) => f.name === 'Checkout app' && f.id !== checkoutFolder?.id) : null;
 }, 8000, 300);
 check('…as a new folder with the 4 tabs', !!savedCopy && (await idb('tabs')).filter((t) => t.folderId === savedCopy.id).length === 4);
+check('…keeping the note', savedCopy?.note === NOTE, JSON.stringify(savedCopy?.note));
 const viewed = await send({ type: 'share-info', folderId: checkoutFolder?.id });
 check('the server counts the public page’s views', viewed?.ok && viewed.data?.views >= 1, JSON.stringify(viewed?.data));
 await list.send('Page.bringToFront');
@@ -794,6 +808,53 @@ check('…the folder is Sara’s own now, with both tabs', !!kept && !kept.teamI
 check('Ana still has the team folder and both tabs', (await idb('tabs')).filter((t) => t.folderId === teamFolder?.id).length === 2);
 await saraBrowser.close();
 rmSync(saraDir, { recursive: true, force: true });
+
+// 10e. Deleting an account (Settings › Delete my Tabfold account…): everything on the server goes,
+// this computer signs out and keeps its tabs, and the email can't start a second free trial.
+const LEAVER = 'leaver@example.com';
+await ui.send('Page.bringToFront');
+await signOut(ui);
+await go('#/pro');
+await click(ui, 'Start 7-day free trial');
+check('a new account starts the trial', (await enterCode(ui, LEAVER)) && !!(await waitPlan((p) => p.email === LEAVER && !!p.trial)));
+const tabsBeforeDelete = (await idb('tabs')).length;
+await go('#/settings');
+check('Settings offers Delete my Tabfold account…', await has(ui, 'Delete my Tabfold account…'));
+await click(ui, 'Delete my Tabfold account…');
+check('…which asks first', await has(ui, 'Delete your Tabfold account?'));
+const typeInDelete = async (text) => {
+  await ui.evaluate(() => {
+    const dialog = [...document.querySelectorAll('dialog[open]')].find((d) => d.innerText.includes('Delete your Tabfold account?'));
+    const field = dialog?.querySelector('input[type=email]');
+    field?.focus();
+    field?.select();
+  });
+  await ui.send('Input.insertText', { text });
+};
+const deleteButton = () =>
+  ui.evaluate(() => {
+    const dialog = [...document.querySelectorAll('dialog[open]')].find((d) => d.innerText.includes('Delete your Tabfold account?'));
+    const button = [...(dialog?.querySelectorAll('button') ?? [])].find((b) => b.innerText.trim() === 'Delete my account');
+    return button ? { disabled: button.disabled } : null;
+  });
+await typeInDelete('someone-else@example.com');
+check('…and only goes ahead with the account’s own email typed', (await deleteButton())?.disabled === true);
+await typeInDelete(LEAVER);
+await until(async () => (await deleteButton())?.disabled === false, 3000);
+await ui.evaluate(() => {
+  const dialog = [...document.querySelectorAll('dialog[open]')].find((d) => d.innerText.includes('Delete your Tabfold account?'));
+  [...(dialog?.querySelectorAll('button') ?? [])].find((b) => b.innerText.trim() === 'Delete my account')?.click();
+});
+check('“Your Tabfold account was deleted…”', await has(ui, 'Your Tabfold account was deleted. Your folded tabs stay on this computer.', 10_000));
+check('…this computer is signed out, on Free', !!(await waitPlan((p) => p.email === null && p.tier === 'free', 10_000)));
+check('…the server has no account for the email any more', !accountOf(LEAVER));
+check('…and the folded tabs stay here', (await idb('tabs')).length === tabsBeforeDelete);
+await go('#/pro');
+await click(ui, 'Start 7-day free trial');
+check('the same email can’t start a second trial', (await enterCode(ui, LEAVER)) && (await has(ui, 'You’ve had your free trial', 8000)));
+check('…it signs in on Free', !!(await waitPlan((p) => p.email === LEAVER && p.tier === 'free' && !p.trial)));
+await shot(ui, 'trial-used.png');
+await ui.evaluate(() => document.querySelector('dialog[open]')?.close());
 
 // 11. Remove Tabfold: take your tabs with you first (Reopen all; we never press Remove here).
 await ui.send('Page.bringToFront');
