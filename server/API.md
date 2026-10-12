@@ -369,3 +369,21 @@ its pages' titles and addresses; nothing else.
 
 The Stripe webhook also handles `checkout.session.async_payment_succeeded` (a Pro for life payment
 that completed before it was paid); `server/scripts/stripe-setup.mjs` adds it to the endpoint.
+
+## 1.0 additions
+
+### `POST /account/delete` (signed in)
+
+Body `{ confirm }`: the account's email, as the person typed it (compared ignoring case and spaces at
+the ends); a mismatch is `400 invalid` "Type your account’s email to confirm." Deletes the account:
+cancels its Stripe subscriptions at once (no further charges; Stripe keeps its own payment records),
+ends a team it owns (the team's subscription is cancelled and its members lose the team at once) or
+leaves the team it's in, and deletes its devices (every computer is signed out), synced copy, backups,
+shares (their links stop working), invitations it sent, sign-in codes and AI usage. A Pro for life
+purchase goes with it. → `{ ok: true }`.
+
+### Shares carry a folder's note
+
+`POST /shares` and `PUT /shares/<id>` take an optional `note` (one line, at most 140 characters after
+squeezing whitespace; longer is cut, never mid-character); `GET /shares/<id>` and
+`GET /public/shares/<id>` return `note` ('' when none).

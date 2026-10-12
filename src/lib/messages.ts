@@ -266,7 +266,14 @@ export type Command =
   /** Name a window ("Client work"; '' takes the name away). Remembered across restarts. */
   | { type: 'window-rename'; windowId: number; name: string }
   /** Put the weekly summary away for this week (×). */
-  | { type: 'weekly-summary-dismiss' };
+  | { type: 'weekly-summary-dismiss' }
+  /**
+   * Delete the Tabfold account (1.0, Settings › "Delete my Tabfold account…"): `confirm` is the
+   * account's email, typed by the person. The server (`POST /account/delete`) cancels its Stripe
+   * subscriptions at once, ends a team it owns, and deletes its devices, synced copy, backups,
+   * shares and team membership; then this computer signs out. The folded tabs here stay.
+   */
+  | { type: 'account-delete'; confirm: string };
 
 /** One fold in "Make room", oldest first. */
 export interface RoomFold {
@@ -480,6 +487,7 @@ export interface CommandResults {
   'window-tidy': { grouped: number; groups: number; actionId: string | null };
   'window-rename': { ok: true };
   'weekly-summary-dismiss': { ok: true };
+  'account-delete': { deleted: true };
 }
 
 /**

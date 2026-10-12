@@ -21,6 +21,7 @@ import { dismissRecovery, recoverFromMirror, takeSnapshot } from './snapshots';
 import { suspendInactive, suspendTab } from './suspend';
 import { handleTidyCommand } from './tidy';
 import { handleWindowsCommand } from './windows';
+import { notBuilt } from './notBuilt';
 
 /** Where a command came from: the Tabfold tab that sent it (none for the popup). */
 export interface CommandSource {
@@ -133,6 +134,8 @@ async function dispatch(command: Command, source: CommandSource): Promise<Comman
     case 'window-rename':
     case 'weekly-summary-dismiss':
       return handleWindowsCommand(command);
+    case 'account-delete':
+      return notBuilt(command.type);
   }
 }
 
