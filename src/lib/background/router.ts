@@ -20,6 +20,7 @@ import { handleTeamCommand } from './teams';
 import { dismissRecovery, recoverFromMirror, takeSnapshot } from './snapshots';
 import { suspendInactive, suspendTab } from './suspend';
 import { handleTidyCommand } from './tidy';
+import { handleWindowsCommand } from './windows';
 
 /** Where a command came from: the Tabfold tab that sent it (none for the popup). */
 export interface CommandSource {
@@ -127,6 +128,11 @@ async function dispatch(command: Command, source: CommandSource): Promise<Comman
     case 'team-keep-copy':
     case 'team-gone-dismiss':
       return handleTeamCommand(command);
+    case 'copies-close':
+    case 'window-tidy':
+    case 'window-rename':
+    case 'weekly-summary-dismiss':
+      return handleWindowsCommand(command);
   }
 }
 

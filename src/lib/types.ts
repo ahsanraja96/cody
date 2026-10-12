@@ -175,7 +175,20 @@ export interface FolderRecord {
    * folders don't count toward any Free limit.
    */
   teamId?: string;
+  /**
+   * Starred (1.0): first in the popup, the side panel, "Fold into" lists and the right-click menu.
+   * When it was starred (ms), 0 or missing when not. Personal folders sync it (`tf.f`); a team
+   * folder's star is the person's own (`starredTeamFolders` in src/lib/state.ts), never the team's.
+   */
+  starredAt?: number;
+  /** A one-line note under the folder's name (1.0), at most 140 characters; '' or missing when none. */
+  note?: string;
+  /** When the note last changed (ms): when two computers disagree, the newest note wins. */
+  noteAt?: number;
 }
+
+/** A folder's note: at most this many characters. */
+export const FOLDER_NOTE_MAX = 140;
 
 export type SnapshotReason =
   | 'timer'

@@ -112,9 +112,21 @@ export type Command =
       intoFolderId?: string;
       /** Who asked: a person (default), or an auto-fold rule (shown in its notice). */
       source?: 'person' | 'rule';
+      /**
+       * "Fold into a folder › New folder…" (1.0): make this folder and fold into it (Free: 3
+       * folders, `folder-limit`). Ignored with `intoFolderId`.
+       */
+      newFolderName?: string;
     }
   /** Open folded tabs ("Open all" on a group). With `asGroup`, they open as one Chrome tab group. */
-  | { type: 'open-tabs'; tabRecordIds: string[]; asGroup?: { name: string; color: TabGroupColor }; windowId?: number }
+  | {
+      type: 'open-tabs';
+      tabRecordIds: string[];
+      asGroup?: { name: string; color: TabGroupColor };
+      windowId?: number;
+      /** Opened from this folder (1.0): its group folds back into the folder (`groupFolders`). */
+      folderId?: string;
+    }
   /** Push folded tabs to Chrome sync now (normally it runs a few seconds after each change). */
   | { type: 'sync-now' }
   // ---- Pro and Pro AI (src/lib/pro) ----
@@ -165,7 +177,11 @@ export type Command =
    * `teamId` (the plan's team), a team folder: everyone in the team sees it; no limit.
    */
   | { type: 'folder-create'; name: string; color?: TabGroupColor; tabRecordIds?: string[]; teamId?: string }
-  | { type: 'folder-update'; id: string; name?: string; color?: TabGroupColor }
+  /**
+   * Rename, recolour, star or note a folder. `starred` (1.0): a personal folder's star syncs; a team
+   * folder's is this person's own. `note` (1.0): one line, at most 140 characters ('' removes it).
+   */
+  | { type: 'folder-update'; id: string; name?: string; color?: TabGroupColor; starred?: boolean; note?: string }
   /** The folders' order in the left column, top first. */
   | { type: 'folder-reorder'; ids: string[] }
   /** Delete a folder; its tabs go back to their kind of site (Undo with `undo`). */
@@ -234,7 +250,23 @@ export type Command =
   /** "Keep a copy" after leaving a team: its folders become the person's own. */
   | { type: 'team-keep-copy'; teamId: string }
   /** Let a former team's folders go from this computer (the notice's ×). */
-  | { type: 'team-gone-dismiss'; teamId: string };
+  | { type: 'team-gone-dismiss'; teamId: string }
+  // ---- 1.0: open tabs (src/lib/background/windows.ts) ----
+  /**
+   * "Close the copies": close the extra copies of pages open more than once (src/lib/openCopies.ts),
+   * in one window or everywhere. Undo (`undo`) reopens them where they were.
+   */
+  | { type: 'copies-close'; windowId?: number }
+  /**
+   * "Tidy into groups": a window's loose tabs become Chrome tab groups by kind of site (the person's
+   * moved sites respected), groups of 2 or more only; pinned tabs and existing groups stay as they
+   * are. Undo (`undo`) ungroups them.
+   */
+  | { type: 'window-tidy'; windowId: number }
+  /** Name a window ("Client work"; '' takes the name away). Remembered across restarts. */
+  | { type: 'window-rename'; windowId: number; name: string }
+  /** Put the weekly summary away for this week (×). */
+  | { type: 'weekly-summary-dismiss' };
 
 /** One fold in "Make room", oldest first. */
 export interface RoomFold {
@@ -365,6 +397,13 @@ export interface FoldOutcome extends SaveOutcome {
    */
   stayedOpen: { pinned: number; audible: number; apps?: number; incognito?: number };
   memory: MemoryReading;
+  /**
+   * Tab groups that went back into their folder (1.0, src/lib/foldBack.ts): "Folded 12 tabs · 5 went
+   * back into Client sites". Counts tabs saved into the folder (copies already there aren't).
+   */
+  backIntoFolders?: Array<{ folderId: string; name: string; tabs: number }>;
+  /** Folded into this folder (`intoFolderId` or `newFolderName`). */
+  intoFolder?: { folderId: string; name: string };
 }
 
 export interface CommandResults {
@@ -437,6 +476,10 @@ export interface CommandResults {
   'team-sync-now': { ok: boolean };
   'team-keep-copy': { folders: number; tabs: number };
   'team-gone-dismiss': { ok: true };
+  'copies-close': { closed: number; actionId: string | null };
+  'window-tidy': { grouped: number; groups: number; actionId: string | null };
+  'window-rename': { ok: true };
+  'weekly-summary-dismiss': { ok: true };
 }
 
 /**

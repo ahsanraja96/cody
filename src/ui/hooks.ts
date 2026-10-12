@@ -576,3 +576,40 @@ export function useTeam(plan: PlanState): TeamView {
     };
   }, [plan.email, plan.team, details]);
 }
+
+// ---- 1.0 contracts ------------------------------------------------------------------------------
+import {
+  groupFolders as groupFoldersState,
+  starredTeamFolders as starredTeamFoldersState,
+  weeklyStats as weeklyStatsState,
+  weeklySummarySeen as weeklySummarySeenState,
+  type WeekStats,
+} from '@/lib/state';
+import { summaryToShow } from '@/lib/weekly';
+
+/** Chrome tab groups opened from a folder, by group id (they fold back into it). */
+export function useGroupFolders(): Record<string, string> {
+  return useStored(groupFoldersState.get, groupFoldersState.watch) ?? {};
+}
+
+/** Team folders this person starred (folder id → when). Personal folders carry `starredAt`. */
+export function useStarredTeamFolders(): Record<string, number> {
+  return useStored(starredTeamFoldersState.get, starredTeamFoldersState.watch) ?? {};
+}
+
+/** Is this folder starred for this person (a personal folder's `starredAt`, or a team folder's own star)? */
+export function isStarred(folder: FolderRecord, teamStars: Readonly<Record<string, number>>): boolean {
+  return folder.teamId ? !!teamStars[folder.id] : !!folder.starredAt;
+}
+
+/** Last week's summary to show now ("Last week you folded 340 tabs…"), or null. */
+export function useWeeklySummary(): (WeekStats & { week: string }) | null {
+  const [settings] = useSettings();
+  const stats = useStored(weeklyStatsState.get, weeklyStatsState.watch);
+  const seen = useStored(weeklySummarySeenState.get, weeklySummarySeenState.watch);
+  const now = useNow(true, 60 * 60_000);
+  return useMemo(
+    () => (stats ? summaryToShow(stats, now, seen, settings.weeklySummary) : null),
+    [stats, now, seen, settings.weeklySummary],
+  );
+}

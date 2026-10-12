@@ -390,3 +390,78 @@ export const tidyState = {
   set: (value: TidyState | null) => (value === null ? browser.storage.local.remove(TIDY) : browser.storage.local.set({ [TIDY]: value })),
   watch: (callback: (value: TidyState | undefined) => void) => watchKey('local', TIDY, callback),
 };
+
+// ---------------------------------------------------------------------------------------------
+// 1.0: fold back into a folder, named windows, starred team folders, the weekly summary
+
+/**
+ * Chrome tab groups opened from a folder ("Open all (a copy) as a tab group"), by group id: folding
+ * them puts their tabs, including ones added since, back into that folder (src/lib/foldBack.ts).
+ * In chrome.storage.session: group ids don't survive a restart (then the group's title matches).
+ */
+const GROUP_FOLDERS = 'groupFolders';
+export const groupFolders = {
+  get: async (): Promise<Record<string, string>> =>
+    ((await browser.storage.session.get(GROUP_FOLDERS))[GROUP_FOLDERS] as Record<string, string> | undefined) ?? {},
+  set: (value: Record<string, string>) => browser.storage.session.set({ [GROUP_FOLDERS]: value }),
+  watch: (callback: (value: Record<string, string>) => void) =>
+    watchKey('session', GROUP_FOLDERS, (value) => callback((value as Record<string, string> | undefined) ?? {})),
+};
+
+/**
+ * A window the person named ("Client work"), remembered across Chrome restarts: window ids change
+ * then, so a window gets its name back when most of its tabs match `urls` (urlKeys, at most 30).
+ * `windowNames` (session, by window id) stays the live map the screens read.
+ */
+export interface NamedWindow {
+  name: string;
+  urls: string[];
+  /** The window it was last seen as (this browser session). */
+  windowId?: number;
+  at: number;
+}
+
+const NAMED_WINDOWS = 'namedWindows';
+export const namedWindows = {
+  get: async (): Promise<NamedWindow[]> => ((await browser.storage.local.get(NAMED_WINDOWS))[NAMED_WINDOWS] as NamedWindow[] | undefined) ?? [],
+  set: (value: NamedWindow[]) => browser.storage.local.set({ [NAMED_WINDOWS]: value }),
+};
+
+/** Team folders this person starred (a team folder's star is personal, never shared with the team). */
+const STARRED_TEAM_FOLDERS = 'starredTeamFolders';
+export const starredTeamFolders = {
+  get: async (): Promise<Record<string, number>> =>
+    ((await browser.storage.local.get(STARRED_TEAM_FOLDERS))[STARRED_TEAM_FOLDERS] as Record<string, number> | undefined) ?? {},
+  set: (value: Record<string, number>) => browser.storage.local.set({ [STARRED_TEAM_FOLDERS]: value }),
+  watch: (callback: (value: Record<string, number>) => void) =>
+    watchKey('local', STARRED_TEAM_FOLDERS, (value) => callback((value as Record<string, number> | undefined) ?? {})),
+};
+
+/** One week's numbers for the weekly summary (weeks start Monday 00:00, local time). */
+export interface WeekStats {
+  /** Tabs folded (by the person, a rule, a snooze, Fold into). */
+  folded: number;
+  /** Memory those folds gave back (the fold outcome's `freedBytes`). */
+  freedBytes: number;
+  /** Folded tabs opened again from Tabfold, and snoozed tabs that came back. */
+  cameBack: number;
+}
+
+/** By week: the Monday's date, "2026-10-05". The last 8 weeks are kept. */
+export type WeeklyStats = Record<string, WeekStats>;
+
+const WEEKLY_STATS = 'weeklyStats';
+export const weeklyStats = {
+  get: async (): Promise<WeeklyStats> => ((await browser.storage.local.get(WEEKLY_STATS))[WEEKLY_STATS] as WeeklyStats | undefined) ?? {},
+  set: (value: WeeklyStats) => browser.storage.local.set({ [WEEKLY_STATS]: value }),
+  watch: (callback: (value: WeeklyStats) => void) =>
+    watchKey('local', WEEKLY_STATS, (value) => callback((value as WeeklyStats | undefined) ?? {})),
+};
+
+/** The weekly summary put away (×) for this week: the Monday's date. */
+const WEEKLY_SUMMARY_SEEN = 'weeklySummarySeen';
+export const weeklySummarySeen = {
+  get: () => getKey<string>('local', WEEKLY_SUMMARY_SEEN),
+  set: (week: string) => browser.storage.local.set({ [WEEKLY_SUMMARY_SEEN]: week }),
+  watch: (callback: (value: string | undefined) => void) => watchKey('local', WEEKLY_SUMMARY_SEEN, callback),
+};

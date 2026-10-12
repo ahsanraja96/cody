@@ -38,10 +38,18 @@ export interface Settings {
   foldIncognito: boolean;
   /** Before 0.6 (By site / By project). Unused: folders replaced projects. */
   groupBy: 'site' | 'project';
-  /** Fold automatically (Mx-Auto board). Free runs only the first enabled rule, and only an `idle` one. */
+  /** Fold automatically (Mx-Auto board). Free runs only the first enabled rule, and only an `idle` or `window-cap` one. */
   autoFold: AutoFoldRule[];
   /** Pro AI's weekly tidy-up card (Mondays). */
   tidyUp: boolean;
+  /**
+   * What Tabfold's toolbar button (and its Open Tabfold shortcut) opens (1.0): the popup, or the side
+   * panel, which stays open while you browse. The worker applies it (`action.setPopup` and
+   * `sidePanel.setPanelBehavior`) at start and whenever it changes.
+   */
+  toolbarOpens: 'popup' | 'side-panel';
+  /** The Monday "Last week you folded 340 tabs…" card and popup line (1.0, Free). */
+  weeklySummary: boolean;
 }
 
 /**
@@ -49,11 +57,14 @@ export interface Settings {
  * - `idle`: tabs not looked at for `days` days (Chrome's tab.lastAccessed).
  * - `time`: every chosen weekday (0 Sunday … 6 Saturday) at `hour`:`minute`, everything open.
  * - `site-idle`: tabs from these sites not looked at for `minutes` minutes.
+ * - `window-cap` (1.0): a window with more than `max` tabs folds the ones looked at longest ago until
+ *   it has `max` (checked when tabs open, and by the 5-minute alarm). Free's one rule may be this one.
  */
 export type AutoFoldWhen =
   | { type: 'idle'; days: number }
   | { type: 'time'; hour: number; minute: number; weekdays: number[] }
-  | { type: 'site-idle'; hosts: string[]; minutes: number };
+  | { type: 'site-idle'; hosts: string[]; minutes: number }
+  | { type: 'window-cap'; max: number };
 
 /** Where a rule's tabs go: their kind of site (no folder), a folder, or (time rules) one new fold. */
 export type AutoFoldInto = { type: 'site' } | { type: 'folder'; folderId: string };
@@ -99,6 +110,8 @@ export const DEFAULT_SETTINGS: Settings = {
   groupBy: 'site',
   autoFold: [],
   tidyUp: true,
+  toolbarOpens: 'popup',
+  weeklySummary: true,
 };
 
 export const AUTO_SUSPEND_CHOICES = [5, 10, 15, 30, 60, 120, 240];

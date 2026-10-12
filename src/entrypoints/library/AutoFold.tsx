@@ -78,6 +78,8 @@ export function describeRule(rule: AutoFoldRule, folders: readonly FolderRecord[
         into,
       };
     }
+    case 'window-cap':
+      return { when: `A window has more than ${count(rule.when.max, 'tab')}`, which: 'the ones I haven’t looked at longest', into };
   }
 }
 

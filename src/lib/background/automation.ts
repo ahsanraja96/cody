@@ -296,6 +296,7 @@ export function ruleLabel(rule: AutoFoldRule): string {
   const when = rule.when;
   if (when.type === 'idle') return `your ${when.days}-day rule`;
   if (when.type === 'site-idle') return when.hosts.length === 1 ? `your ${when.hosts[0]} rule` : 'your sites rule';
+  if (when.type === 'window-cap') return `your ${when.max}-tab rule`;
   const days = [...new Set(when.weekdays)].sort().join(',');
   if (days === '1,2,3,4,5') return 'your weekday rule';
   if (days === '0,6') return 'your weekend rule';
@@ -307,6 +308,7 @@ function validRule(rule: AutoFoldRule): boolean {
   const when = rule.when;
   if (when.type === 'idle') return Number.isFinite(when.days) && when.days > 0;
   if (when.type === 'site-idle') return when.hosts.length > 0 && Number.isFinite(when.minutes) && when.minutes > 0;
+  if (when.type === 'window-cap') return Number.isInteger(when.max) && when.max >= 2;
   return Array.isArray(when.weekdays) && when.weekdays.length > 0 && Number.isFinite(when.hour) && Number.isFinite(when.minute);
 }
 
@@ -390,6 +392,8 @@ function pickForRule(rule: AutoFoldRule, tabs: Foldable[], now: number): Foldabl
   if (when.type === 'site-idle') {
     return tabs.filter((t) => t.seen <= now - when.minutes * MINUTE && when.hosts.some((h) => hostMatchesDomain(t.host, h.toLowerCase().replace(/^www\./, ''))));
   }
+  // TODO(1.0 core): per window, fold the tabs looked at longest ago beyond `max`.
+  if (when.type === 'window-cap') return [];
   return tabs;
 }
 
