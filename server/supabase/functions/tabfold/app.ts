@@ -574,7 +574,11 @@ function originAllowed(origin: string, allowedOrigins: string[]): boolean {
 
 // ---- Hashes, codes, emails ----
 
-/** Hex SHA-256: tokens, profile keys and rate-limit keys are only ever stored like this. */
+/**
+ * Hex SHA-256: device tokens and profile keys (32 random bytes or more, so they can't be guessed
+ * back) are only ever stored like this. Emails and IP addresses never are: they get a keyed HMAC
+ * (rateKey, trialFingerprint).
+ */
 export async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -623,6 +627,20 @@ export async function trialFingerprint(secret: string, email: string): Promise<s
 }
 
 const fingerprintOf = (deps: Deps, account: Account) => trialFingerprint(deps.config.codeSecret, account.email);
+
+/** What a rate limit counts by: an email, a computer (its token's hash), or a visitor's IP address. */
+export type RateKind = 'email' | 'token' | 'checkout' | 'share-read';
+
+/**
+ * A rate limit's key: `<kind>:` and an HMAC-SHA256 of the value (an email, a device token's hash,
+ * an IP address), keyed with the code secret like the trial fingerprint. One-way: without the
+ * secret, a stored key can't be turned back into the email or address, even by trying every IPv4
+ * address. The rows last at most a day (`tabfold_rate_take`).
+ */
+export async function rateKey(secret: string, kind: RateKind, value: string): Promise<string> {
+  if (!secret) throw new Error('CODE_SECRET is not set');
+  return `${kind}:${await hmacSha256Hex(secret, `rate:${kind}:${value}`)}`;
+}
 
 /** This account, or an earlier (deleted) account with the same email, had a trial. */
 async function hadTrial(deps: Deps, account: Account): Promise<boolean> {
@@ -935,8 +953,8 @@ async function signinStart(req: Request, deps: Deps): Promise<Reply> {
   if (!email) throw new HttpError(400, 'invalid-email', 'That doesn’t look like an email address.');
   const purpose = body.purpose;
   if (purpose !== 'signin' && purpose !== 'trial') throw badRequest('“purpose” must be signin or trial.');
-  await rateLimit(deps, `token:${tokenHash}`, LIMITS.codesPerTokenPerHour, 'codes');
-  await rateLimit(deps, `email:${await sha256Hex(email)}`, LIMITS.codesPerEmailPerHour, 'codes');
+  await rateLimit(deps, await rateKey(deps.config.codeSecret, 'token', tokenHash), LIMITS.codesPerTokenPerHour, 'codes');
+  await rateLimit(deps, await rateKey(deps.config.codeSecret, 'email', email), LIMITS.codesPerEmailPerHour, 'codes');
   const code = newCode(deps.random ? (bytes) => deps.random!(bytes) : undefined);
   await deps.store.codePut(email, await codeHash(deps, email, code), deps.now() + LIMITS.codeMs);
   try {
@@ -1127,7 +1145,7 @@ async function checkout(req: Request, deps: Deps): Promise<Reply> {
       input.trialEnd = Math.floor(plan.trial.endsAt / 1000);
     }
   }
-  await rateLimit(deps, `checkout:${tokenHash}`, LIMITS.checkoutsPerTokenPerHour, 'checkouts');
+  await rateLimit(deps, await rateKey(deps.config.codeSecret, 'checkout', tokenHash), LIMITS.checkoutsPerTokenPerHour, 'checkouts');
   const session = await deps.payments.createCheckout(input);
   await deps.store.pendingPut(session.id, tokenHash);
   return ok({ url: session.url, sessionId: session.id });
@@ -1708,7 +1726,8 @@ function clientAddress(req: Request): string {
 
 /** The public page's data: no token, any site may read it, and each read counts a view. */
 async function publicShare(req: Request, deps: Deps, param: string): Promise<Reply> {
-  const wait = await deps.store.rateTake(`share-read:${await sha256Hex(clientAddress(req))}`, LIMITS.shareReadsPerMinute, 60);
+  const key = await rateKey(deps.config.codeSecret, 'share-read', clientAddress(req));
+  const wait = await deps.store.rateTake(key, LIMITS.shareReadsPerMinute, 60);
   if (wait > 0) {
     throw new HttpError(429, 'rate-limited', 'That’s a lot of visits just now. Try again in a minute.', { retryAfter: Math.ceil(wait) });
   }
@@ -1728,9 +1747,16 @@ const ENDED_STATUSES = ['canceled', 'incomplete_expired'];
  */
 async function cancelSubscription(deps: Deps, stored: Subscription): Promise<void> {
   if (ENDED_STATUSES.includes(stored.status)) return;
-  const current = await deps.payments.getSubscription(stored.id);
-  if (ENDED_STATUSES.includes(current.status)) return;
-  await deps.payments.cancelSubscription(stored.id);
+  try {
+    const current = await deps.payments.getSubscription(stored.id);
+    if (ENDED_STATUSES.includes(current.status)) return;
+    await deps.payments.cancelSubscription(stored.id);
+  } catch (error) {
+    // Stripe doesn't know it (a test-mode id after switching to live keys, say): nothing can charge
+    // it, so it counts as ended. Anything else stops the deletion, to be tried again.
+    if (isNamed(error, 'PaymentsError') && (error as { status?: unknown }).status === 404) return;
+    throw error;
+  }
 }
 
 /**

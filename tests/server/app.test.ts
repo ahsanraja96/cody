@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanEmail, countTabs, LIMITS, newCode, sha256Hex } from '../../server/supabase/functions/tabfold/app.ts';
+import { cleanEmail, countTabs, LIMITS, newCode, rateKey, sha256Hex } from '../../server/supabase/functions/tabfold/app.ts';
 import { createStripe, signWebhook } from '../../server/supabase/functions/tabfold/stripe.ts';
 import { createServer, DAY, EXTENSION, keyOf, newToken, NOW, PUBLIC_URL, type Server } from './fakes';
 
@@ -275,10 +275,15 @@ describe('sign-in codes', () => {
     expect(res.json.message).toContain('40 minutes');
   });
 
-  it('keeps only hashes in the rate limits', async () => {
+  it('keeps only keyed fingerprints (HMAC) in the rate limits, never the email or a plain hash of it', async () => {
     await start(token, 'sam@example.com');
     const keys = [...server.store.rates.keys()];
-    expect(keys).toEqual([`token:${await sha256Hex(token)}`, `email:${await sha256Hex('sam@example.com')}`]);
+    const secret = server.deps.config.codeSecret;
+    expect(keys).toEqual([await rateKey(secret, 'token', await sha256Hex(token)), await rateKey(secret, 'email', 'sam@example.com')]);
+    expect(keys[1]).toMatch(/^email:[0-9a-f]{64}$/);
+    expect(keys[1]).not.toBe(`email:${await sha256Hex('sam@example.com')}`);
+    // Another secret, other keys: without it a key can't be checked against a guessed email.
+    expect(await rateKey('another secret', 'email', 'sam@example.com')).not.toBe(keys[1]);
   });
 
   it('answers 502 send-failed when the email can’t be sent', async () => {
@@ -531,7 +536,7 @@ describe('POST /checkout', () => {
     expect(res.status).toBe(429);
     expect(res.json).toEqual({ error: 'rate-limited', message: expect.stringContaining('45 minutes'), retryAfter: 45 * 60 });
     expect(server.stripe.sessions.size).toBe(20);
-    expect([...server.store.rates.keys()]).toEqual([`checkout:${await sha256Hex(laptop)}`]);
+    expect([...server.store.rates.keys()]).toEqual([await rateKey(server.deps.config.codeSecret, 'checkout', await sha256Hex(laptop))]);
     expect((await checkout(newToken('other'))).status).toBe(200);
     server.clock.now = NOW + HOUR;
     expect((await checkout(laptop)).status).toBe(200);

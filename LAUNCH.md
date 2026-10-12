@@ -54,9 +54,9 @@ here) give you their keys.
   comes in step 8, once the store gives the extension its id. Never set `STRIPE_API_BASE` on the real
   server. `supabase secrets list` shows the names.
 - [ ] `CODE_SECRET`: a long random string (`openssl rand -hex 32`), set **once, before the first
-  trial**, and kept in your password manager. It keys the sign-in codes and the trial fingerprints
-  (one trial per email, even after an account is deleted); changing it later lets emails that had
-  the trial start it again. You also need it to delete an account by hand (server/README.md, "What
+  trial**, and kept in your password manager. It keys the sign-in codes, the rate limits' keys and
+  the trial fingerprints (one trial per email, even after an account is deleted); changing it later
+  lets emails that had the trial start it again. You also need it to delete an account by hand (server/README.md, "What
   the server keeps").
 - [ ] `supabase functions deploy tabfold --no-verify-jwt`, then
   `https://<project id>.supabase.co/functions/v1/tabfold/me` in a browser answers
@@ -221,3 +221,10 @@ Look daily:
 - Once a day, the first sync of the day deletes backups older than 30 days (every account) and the
   folders of teams whose plan ended more than 30 days ago (the team itself stays, so its owner can
   start it again). With no paying user syncing on a day, they go the next day someone does.
+- A team's folders are stored as its members' computers send them; the server can't edit them. So
+  when someone deletes their account, the tabs they added to a team keep their email as "added by"
+  until the team removes them or its folders are deleted. The privacy policy says so.
+- Rate limits are counted under an HMAC (keyed with `CODE_SECRET`) of the email, computer or IP
+  address, never the value itself or a plain hash of it.
+- A subscription Stripe doesn't know (for example a test-mode id left over after switching to live
+  keys) counts as ended when its account is deleted, so the deletion goes through.

@@ -338,8 +338,8 @@ its pages' titles and addresses; nothing else.
 - `GET /public/shares/<id>` (no token; CORS `*`) → `{ name, color, tabs: [{ title, url }], updatedAt }`;
   each read counts a view. 404 when there's no such share. At most 60 reads a minute per address
   (429).
-  The address is `CF-Connecting-IP`, else the first `X-Forwarded-For` entry, kept only as a hash
-  in the rate limit. Times (`updatedAt`) are ms.
+  The address is `CF-Connecting-IP`, else the first `X-Forwarded-For` entry, kept only as a keyed
+  HMAC in the rate limit (1.0; see "Rate-limit keys"). Times (`updatedAt`) are ms.
 - A share outlives the plan (people may already have the link), but only Pro can change it.
 
 ## AI tasks (Pro AI), in addition to organise, name and context
@@ -414,6 +414,20 @@ covers trials started before 1.0), and it stays after the account is gone.
 fingerprint is there (`trialStarted: false, trialUsed: true`); the plan's `trialUsed` says so too
 wherever a trial could be offered. Changing `CODE_SECRET` (or the service role key while it isn't
 set) makes the kept fingerprints unrecognisable, so set it once and keep it.
+
+### Rate-limit keys
+
+Every rate limit's key is `<kind>:` and an HMAC-SHA256 of what it counts by, keyed with
+`CODE_SECRET` (else the service role key) like the trial fingerprint: `email:` (codes per email),
+`token:` and `checkout:` (per computer, of its token's hash), `share-read:` (per visitor IP address).
+Before 1.0 these were plain SHA-256, which can be matched by hashing every IPv4 address; old rows
+expire within a day. A team's invitation limit is `invite:<team id>`.
+
+### Deleting an account when Stripe doesn't know a subscription
+
+If Stripe answers 404 for a subscription stored for the account (for example a test-mode id after
+switching to live keys), it counts as ended and the deletion goes on; any other Stripe error stops
+it (502, nothing deleted).
 
 ### Once a day: old backups, and ended teams' folders
 

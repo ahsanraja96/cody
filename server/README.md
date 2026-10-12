@@ -183,7 +183,7 @@ supabase secrets set SHARE_BASE_URL=https://tabfold.app
 | `ANTHROPIC_API_KEY` | Anthropic API key | Pro AI |
 | `ALLOWED_ORIGINS` | `chrome-extension://<id>`, comma separated for more than one (no spaces) | Everything (the extension is turned away without it) |
 | `SHARE_BASE_URL` | The public site's address, e.g. `https://tabfold.app` (no slash at the end). Defaults to `https://tabfold.app` | Shared folder links, the link in team invitations |
-| `CODE_SECRET` | A long random string (e.g. `openssl rand -hex 32`) for hashing sign-in codes and the trial fingerprints. Defaults to the project's service role key. Set it once and never change it: a new one makes the kept trial fingerprints unrecognisable, so emails that had the trial could start it again | Recommended |
+| `CODE_SECRET` | A long random string (e.g. `openssl rand -hex 32`) for hashing sign-in codes, the trial fingerprints and the rate limits' keys. Defaults to the project's service role key. Set it once and never change it: a new one makes the kept trial fingerprints unrecognisable, so emails that had the trial could start it again | Recommended |
 | `PUBLIC_URL` | Optional: the server's address, if it isn't `https://<project id>.supabase.co/functions/v1/tabfold` | — |
 | `STRIPE_API_BASE` | Tests only: points the server at a pretend Stripe. Never set it on the real server | — |
 
@@ -311,8 +311,9 @@ Thinking tokens bill as output and are the biggest AI cost; the server already a
 - For each signed-in computer, and each Chrome profile key, only a scrambled form (SHA-256) of its
   token, and when it was last seen.
 - The latest sign-in code for an email, scrambled (HMAC), for 10 minutes; deleted once used.
-- Counters for how many codes were asked for and checkouts started in the last hour, under
-  scrambled emails and tokens.
+- Counters for how many codes were asked for and checkouts started in the last hour, filed under
+  an HMAC of the email or computer keyed with `CODE_SECRET` (never the email itself), for at most a
+  day.
 - Which computer started a checkout, for a day, and Stripe's event ids, for 30 days.
 - The account's folded tabs (addresses, titles, keywords, folders and their notes), as the
   extension syncs them, plus one backup a day for 30 days. Older backups are deleted automatically,
@@ -321,12 +322,15 @@ Thinking tokens bill as output and are the biggest AI cost; the server already a
 - How many AI runs the account used each month.
 - A Pro for life purchase: when, and its Stripe payment's id.
 - Teams: the team's name, who is in it (their accounts), the emails invited and when, and the
-  team's shared folders (as the extension syncs them; no backups). When a team's plan ends, its
-  folders stay readable for 30 days, then the daily clean-up deletes them.
+  team's shared folders (as the extension syncs them, including the email of whoever added each
+  tab; no backups). When a team's plan ends, its folders stay readable for 30 days, then the daily
+  clean-up deletes them. The server can't edit a team's folders: when someone deletes their
+  account, the tabs they added keep their email until the team removes them or the folders go.
 - Shared folders: the name, colour, note, page titles and addresses the owner shared, how many
   times the page was opened, and when it changed. Anyone with the link can see them, until the owner
-  stops sharing. The public page's visits are counted against a scrambled (SHA-256) address, for a
-  minute, to stop floods; the address itself isn't kept.
+  stops sharing. The public page's visits are counted, to stop floods, against an HMAC of the
+  visitor's IP address keyed with `CODE_SECRET` (so it can't be matched by hashing every address),
+  for a minute (the row goes within a day); the address itself isn't kept.
 
 For the AI, only tab titles (cut to 200 characters) and sites go to Anthropic, never addresses or
 page content, and at most 300 tabs at a time; the tidy-up also sends folder names, Copy as context
