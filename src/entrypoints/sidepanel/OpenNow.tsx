@@ -204,7 +204,11 @@ function WindowBlock({
             </span>
             {count}
             <span className="flex-1" />
-            {!expanded && <SiteStrip tabs={info.tabs} size={12} />}
+            {!expanded && (
+              <span className="flex max-[340px]:hidden">
+                <SiteStrip tabs={info.tabs} size={12} />
+              </span>
+            )}
           </button>
         )}
         {info.folds ? (
