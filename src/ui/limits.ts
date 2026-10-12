@@ -30,9 +30,9 @@ function approx(bytes: number): string {
 
 /**
  * "Folded 23 tabs at 18:00 (your weekday rule) · freed ~1.1 GB" (Mx-Auto). A window-cap rule's fold
- * says which window when the worker names it (1.0: "Folded 6 tabs in Client work (your 25-tab rule)").
+ * says which window when it folded inside one named window (1.0: "Folded 6 tabs in Client work (your 25-tab rule)").
  */
-export function autoFoldText(notice: AutoFoldNotice & { windowName?: string }): string {
+export function autoFoldText(notice: AutoFoldNotice): string {
   const tabs = `${notice.folded.toLocaleString()} ${notice.folded === 1 ? 'tab' : 'tabs'}`;
   const where = notice.windowName?.trim() ? `in ${notice.windowName.trim()}` : `at ${clock(notice.at)}`;
   return `Folded ${tabs} ${where}${notice.label ? ` (${notice.label})` : ''}${notice.freedBytes > 0 ? ` · freed ${approx(notice.freedBytes)}` : ''}`;

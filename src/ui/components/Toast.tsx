@@ -106,12 +106,13 @@ function ToastView({ item }: { item: ToastItem }) {
   return (
     <div
       role={item.tone === 'error' ? 'alert' : undefined}
-      className="anim-in pointer-events-auto flex h-11 max-w-[min(560px,100%)] min-w-0 items-center gap-2.5 rounded-card bg-inverse pr-1.5 pl-3.5 text-on-inverse shadow-pop"
+      className="anim-in pointer-events-auto flex min-h-11 max-w-[min(560px,100%)] min-w-0 items-center gap-2.5 rounded-card bg-inverse py-1 pr-1.5 pl-3.5 text-on-inverse shadow-pop"
     >
       <span className="flex shrink-0" aria-hidden>
         {icon}
       </span>
-      <span className="min-w-0 flex-1 truncate" aria-hidden={item.announce ? true : undefined}>
+      {/* Two lines at most, so a narrow page (the side panel) still says it all. */}
+      <span className="line-clamp-2 min-w-0 flex-1" aria-hidden={item.announce ? true : undefined}>
         {item.message}
       </span>
       {item.announce && <span className="sr-only">{item.announce}</span>}

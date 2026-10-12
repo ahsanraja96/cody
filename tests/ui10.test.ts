@@ -4,6 +4,7 @@ import type { FoldOutcome } from '@/lib/messages';
 import type { FolderRecord } from '@/lib/types';
 import { aboutBytes, weeklyText } from '@/ui/components/Weekly';
 import { cleanNote } from '@/ui/components/NoteField';
+import { autoFoldText } from '@/ui/limits';
 import { folderCounts, starredFirst } from '@/ui/folders';
 import {
   closedText,
@@ -64,6 +65,12 @@ describe('1.0 screens: wording', () => {
     expect(closedText(3)).toBe('Closed 3 copies');
     expect(closedText(1)).toBe('Closed 1 copy');
     expect(groupedText(18, 4)).toBe('Grouped 18 tabs into 4 groups');
+  });
+
+  it('names the window a cap rule folded in', () => {
+    const notice = { ruleId: 'r', label: 'your 25-tab rule', folded: 6, freedBytes: 0, at: Date.now(), actionId: null };
+    expect(autoFoldText({ ...notice, windowName: 'Client work' })).toBe('Folded 6 tabs in Client work (your 25-tab rule)');
+    expect(autoFoldText(notice)).toMatch(/^Folded 6 tabs at \d\d:\d\d \(your 25-tab rule\)$/);
   });
 
   it('keeps a note to one line of 140 characters', () => {
