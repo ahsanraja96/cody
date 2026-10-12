@@ -463,7 +463,44 @@ async function shotPopup() {
 
 async function shotSidePanel() {
   const name = '3-side-panel.png';
-  const panel = await openExt('sidepanel.html', 360, 764, 2);
+  // Chrome's real side panel, opened in the "Weekend" window next to the article it's shown beside
+  // (sidePanel.open needs a click: a real one, on a button put into the control page). Falls back
+  // to the panel page as a tab when Chrome won't open the panel.
+  const weekend = await control.evaluate(() =>
+    chrome.windows.getAll({ populate: true }).then((all) => {
+      const win = all.find((w) => w.tabs?.some((t) => (t.url ?? '').includes('lisbon-notes.example')));
+      const article = win?.tabs?.find((t) => (t.url ?? '').includes('lisbon-notes.example'));
+      return win && article ? { windowId: win.id, articleTabId: article.id } : null;
+    }),
+  );
+  const url = ext('sidepanel.html');
+  let panel;
+  if (weekend) {
+    await control.evaluate((id) => chrome.tabs.update(id, { active: true }), weekend.articleTabId);
+    await control.send('Page.bringToFront').catch(() => undefined);
+    const box = await control.evaluate((windowId) => {
+      const button = document.createElement('button');
+      button.id = 'tf-open-panel';
+      button.textContent = 'open panel';
+      button.style.cssText = 'position:fixed;left:10px;top:10px;width:120px;height:40px;z-index:99999';
+      button.onclick = () => void chrome.sidePanel.open({ windowId });
+      document.body.append(button);
+      const r = button.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }, weekend.windowId);
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await control.send('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
+    }
+    await control.evaluate(() => document.getElementById('tf-open-panel')?.remove());
+    const target = await until(async () => (await browser.targets()).find((t) => t.url === url), 8000, 200);
+    if (target) {
+      panel = await browser.attach(target.targetId, { width: 360, height: 764 });
+      await metrics(panel, 360, 764, 2);
+      await panel.colorScheme('light');
+    }
+  }
+  const real = !!panel;
+  panel ??= await openExt('sidepanel.html', 360, 764, 2);
   await sleep(1500);
   const text = (await textOf(panel)).trim();
   // The placeholder says only "Tabfold"; the real panel lists open and folded tabs.
@@ -473,8 +510,9 @@ async function shotSidePanel() {
     await panel.close().catch(() => undefined);
     return;
   }
-  await capture(panel, path.join(workDir, 'panel.png'));
-  await panel.close().catch(() => undefined);
+  if (!real) skipped.push(`${name}: saved, but Chrome didn't open its side panel, so the panel is shown as a tab (it lists itself)`);
+  await panel.screenshot(path.join(workDir, 'panel.png'));
+  if (!real) await panel.close().catch(() => undefined);
   const article = await browser.openPage('about:blank', { width: 920, height: 800 });
   await article.goto('https://lisbon-notes.example/alfama-in-three-days');
   await sleep(500);
@@ -591,6 +629,9 @@ async function shotPlans(list) {
   const name = '5-plans.png';
   const page = list ?? (await openExt('library.html', LIST.width, LIST.height, LIST.scale));
   await page.goto(ext('library.html#/pro'));
+  // A fresh page: nothing left over from the drag shot (only the hash changed).
+  await page.send('Page.reload').catch(() => undefined);
+  await sleep(800);
   const ready = await until(async () => /Pro AI/.test(await textOf(page)) && /\$\s?\d/.test(await textOf(page)), 10_000);
   if (!ready) {
     skipped.push(`${name}: the plans page didn't show the plans and prices`);
