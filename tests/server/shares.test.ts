@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { LIMITS, newShareId, pageAddress, readShare, sha256Hex } from '../../server/supabase/functions/tabfold/app.ts';
+import { cleanNote, cutWhole, LIMITS, newShareId, pageAddress, readShare, sha256Hex } from '../../server/supabase/functions/tabfold/app.ts';
 import { createServer, EXTENSION, newToken, NOW, type Server } from './fakes';
 
 // Shared folders: the owner's routes (Pro), and the public read the `web/` page makes.
@@ -150,7 +150,7 @@ describe('the owner’s routes', () => {
   it('GET /shares/<id> tells its owner the link, views and whether it’s live', async () => {
     await publicRead(id);
     const res = await server.request('GET', `/shares/${id}`, { key: 'proMonthly' });
-    expect(res.json).toEqual({ id, url: `https://tabfold.app/s/${id}`, views: 1, live: true, updatedAt: NOW });
+    expect(res.json).toEqual({ id, url: `https://tabfold.app/s/${id}`, views: 1, live: true, updatedAt: NOW, note: '' });
   });
 
   it('PUT /shares/<id> replaces the contents', async () => {
@@ -165,6 +165,7 @@ describe('the owner’s routes', () => {
       color: 'blue',
       tabs: [{ title: 'Only one', url: 'https://one.example.com/' }],
       updatedAt: NOW + MINUTE,
+      note: '',
     });
   });
 
@@ -226,7 +227,7 @@ describe('GET /public/shares/<id>', () => {
   it('answers anyone, with no token, and counts each read', async () => {
     const res = await publicRead(id);
     expect(res.status).toBe(200);
-    expect(res.json).toEqual({ name: 'Client sites', color: 'green', tabs: FOLDER.tabs, updatedAt: NOW });
+    expect(res.json).toEqual({ name: 'Client sites', color: 'green', tabs: FOLDER.tabs, updatedAt: NOW, note: '' });
     await publicRead(id);
     expect(server.store.shares.get(id)!.views).toBe(2);
   });
@@ -278,6 +279,61 @@ describe('GET /public/shares/<id>', () => {
   });
 });
 
+describe('a folder’s note (1.0)', () => {
+  const NOTE = 'Waiting on the client’s feedback';
+
+  it('is kept with the share, and shown to its owner and on the public page', async () => {
+    const res = await create({ ...FOLDER, note: NOTE });
+    expect(res.status).toBe(200);
+    const { id } = res.json;
+    expect(server.store.shares.get(id)!.note).toBe(NOTE);
+    expect((await publicRead(id)).json).toEqual({ name: 'Client sites', color: 'green', tabs: FOLDER.tabs, updatedAt: NOW, note: NOTE });
+    expect((await server.request('GET', `/shares/${id}`, { key: 'proMonthly' })).json.note).toBe(NOTE);
+  });
+
+  it('is replaced by PUT, and goes when a PUT has none', async () => {
+    const { id } = (await create({ ...FOLDER, note: NOTE })).json;
+    await server.request('PUT', `/shares/${id}`, { key: 'proMonthly', body: { ...FOLDER, note: 'Sent the invoice' } });
+    expect((await publicRead(id)).json.note).toBe('Sent the invoice');
+    await server.request('PUT', `/shares/${id}`, { key: 'proMonthly', body: FOLDER });
+    expect((await publicRead(id)).json.note).toBe('');
+  });
+
+  it('is one line, whitespace squeezed, without control characters', async () => {
+    const { id } = (await create({ ...FOLDER, note: '  Call   Sam\n\nthen\tsend\u2028the\u0007brief  ' })).json;
+    expect((await publicRead(id)).json.note).toBe('Call Sam then send the brief');
+  });
+
+  it('keeps 140 characters and cuts longer ones, never partway through a character', async () => {
+    expect(cleanNote('n'.repeat(140))).toBe('n'.repeat(140));
+    expect(cleanNote('n'.repeat(150))).toBe('n'.repeat(140));
+    // An emoji outside the Basic Multilingual Plane is one character (two UTF-16 units): never half of one.
+    expect(cleanNote(`${'n'.repeat(139)}😀😀`)).toBe(`${'n'.repeat(139)}😀`);
+    // A flag is two characters that only make sense together, and an accent belongs to its letter.
+    expect(cleanNote(`${'n'.repeat(139)}🇵🇹 Lisbon`)).toBe('n'.repeat(139));
+    expect(cleanNote(`${'n'.repeat(139)}e\u0301`)).toBe('n'.repeat(139));
+    expect(cleanNote(`${'n'.repeat(138)}e\u0301`)).toBe(`${'n'.repeat(138)}e\u0301`);
+    const { id } = (await create({ ...FOLDER, note: `${'é'.repeat(139)}😀😀` })).json;
+    const note: string = (await publicRead(id)).json.note;
+    expect(Array.from(note)).toHaveLength(140);
+    expect(note).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+
+  it('is empty when it isn’t text', async () => {
+    for (const note of [42, null, { text: 'x' }, ['x'], '   ']) {
+      const { id } = (await create({ ...FOLDER, note })).json;
+      expect((await publicRead(id)).json.note).toBe('');
+    }
+  });
+
+  it('cuts by whole characters', () => {
+    expect(cutWhole('abc', 3)).toBe('abc');
+    expect(cutWhole('abcd', 3)).toBe('abc');
+    expect(cutWhole('ab👍🏽', 3)).toBe('ab');
+    expect(cutWhole('ab👍🏽', 4)).toBe('ab👍🏽');
+  });
+});
+
 describe('share helpers', () => {
   it('makes uniform 10-character ids from letters and digits', () => {
     expect(newShareId()).toMatch(/^[A-Za-z0-9]{10}$/);
@@ -293,6 +349,6 @@ describe('share helpers', () => {
   });
 
   it('reads a share body', () => {
-    expect(readShare({ name: 'x', color: 'purple', tabs: [], live: 'yes' })).toEqual({ name: 'x', color: 'purple', tabs: [], live: false });
+    expect(readShare({ name: 'x', color: 'purple', tabs: [], live: 'yes' })).toEqual({ name: 'x', color: 'purple', tabs: [], live: false, note: '' });
   });
 });

@@ -24,7 +24,7 @@ import {
  * An in-memory Store for the server tests and the end-to-end Pro test (e2e/pro.mjs), with no
  * test-runner imports so plain Node can load it. Behaves like the SQL in server/supabase/migrations,
  * including its atomic functions (sync and team sync writes, team creation and joining, share
- * views). Times come from `now` (default Date.now), as the database's `now()` would.
+ * views, deleting an account). Times come from `now` (default Date.now), as the database's `now()` would.
  */
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -98,6 +98,7 @@ export class MemoryStore implements Store {
   /** By id. */
   shares = new Map<string, ShareRecord>();
   private seq = 0;
+  private accountSeq = 0;
 
   constructor(options: MemoryStoreOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -109,7 +110,8 @@ export class MemoryStore implements Store {
   account(email: string): Account {
     for (const account of this.accounts.values()) if (account.email === email) return account;
     const account: Account = {
-      id: `account-${this.accounts.size + 1}`,
+      // Numbered in the order they were made: never reused, even after an account is deleted.
+      id: `account-${++this.accountSeq}`,
       email,
       stripeCustomerId: null,
       trialStartedAt: null,
@@ -317,6 +319,10 @@ export class MemoryStore implements Store {
     for (const day of [...map.keys()]) if (day < beforeDay) map.delete(day);
   }
 
+  async backupPruneAll(beforeDay: string) {
+    for (const account of this.backups.keys()) await this.backupPrune(account, beforeDay);
+  }
+
   async aiUsage(account: string, month: string) {
     return { ...(this.usage.get(`${account}|${month}`) ?? { runs: 0, light: 0 }) };
   }
@@ -462,7 +468,42 @@ export class MemoryStore implements Store {
     const share = this.shares.get(id);
     if (!share) return null;
     share.views += 1;
-    return { name: share.name, color: share.color, tabs: copy(share.tabs), updatedAt: share.updatedAt };
+    return { name: share.name, color: share.color, tabs: copy(share.tabs), updatedAt: share.updatedAt, note: share.note ?? '' };
+  }
+
+  // ---- Deleting an account ----
+
+  /** `tabfold_account_delete`: the account and everything kept for it, as the database's cascades do. */
+  async accountDelete(account: string) {
+    const row = this.accounts.get(account);
+    if (!row) return false;
+    const tokens = new Set<string>();
+    for (const [hash, device] of [...this.devices]) {
+      if (device.accountId !== account) continue;
+      tokens.add(hash);
+      this.devices.delete(hash);
+    }
+    for (const [id, pending] of [...this.pending]) {
+      if (tokens.has(pending.tokenHash) || pending.signInEmail === row.email) this.pending.delete(id);
+    }
+    this.codes.delete(row.email);
+    for (const [id, sub] of [...this.subscriptions]) if (sub.accountId === account) this.subscriptions.delete(id);
+    for (const [id, purchase] of [...this.purchases]) if (purchase.accountId === account) this.purchases.delete(id);
+    this.sync.delete(account);
+    this.backups.delete(account);
+    for (const key of [...this.usage.keys()]) if (key.startsWith(`${account}|`)) this.usage.delete(key);
+    for (const [id, share] of [...this.shares]) if (share.accountId === account) this.shares.delete(id);
+    // A team it owns ends: its people, invitations and folders go with it.
+    for (const [teamId, team] of [...this.teams]) {
+      if (team.ownerId !== account) continue;
+      this.teams.delete(teamId);
+      this.teamSync.delete(teamId);
+      for (const [member, membership] of [...this.teamMembersByAccount]) if (membership.teamId === teamId) this.teamMembersByAccount.delete(member);
+      for (const [key, invite] of [...this.teamInviteRows]) if (invite.teamId === teamId) this.teamInviteRows.delete(key);
+    }
+    this.teamMembersByAccount.delete(account);
+    this.accounts.delete(account);
+    return true;
   }
 
   // ---- Test helpers ----
