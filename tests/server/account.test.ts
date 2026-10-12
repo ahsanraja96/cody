@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { sha256Hex } from '../../server/supabase/functions/tabfold/app.ts';
+import { sha256Hex, trialFingerprint } from '../../server/supabase/functions/tabfold/app.ts';
 import { PaymentsError } from '../../server/supabase/functions/tabfold/stripe.ts';
 import { createServer, keyOf, newToken, NOW, type Server, type UserName } from './fakes';
 
@@ -176,6 +176,56 @@ describe('POST /account/delete', () => {
     expect(res.json.plan).toMatchObject({ tier: 'free', email: EMAIL });
     expect(accountOf(EMAIL)!.id).not.toBe(old);
     expect(server.store.sync.has(accountOf(EMAIL)!.id)).toBe(false);
+  });
+});
+
+describe('one trial per email, even after deleting the account', () => {
+  const SAM = 'sam@example.com';
+  const fingerprint = (email: string) => trialFingerprint(server.deps.config.codeSecret, email);
+
+  it('keeps a one-way fingerprint of the email when the trial starts, never the address', async () => {
+    const res = await server.signIn(newToken('sam'), SAM, true);
+    expect(res.json).toMatchObject({ trialStarted: true, trialUsed: false });
+    expect([...server.store.trialHashes]).toEqual([await fingerprint(SAM)]);
+    expect(await fingerprint(SAM)).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify([...server.store.trialHashes])).not.toMatch(/sam|example|@/);
+  });
+
+  it('after deleting the account, the same email gets no new trial; another email still does', async () => {
+    const laptop = newToken('sam');
+    await server.signIn(laptop, SAM, true);
+    expect((await deleteAccount(laptop, SAM)).status).toBe(200);
+    expect(accountOf(SAM)).toBeNull();
+    expect(server.store.trialHashes.has(await fingerprint(SAM))).toBe(true);
+
+    // Signing up again with the same email (any capitals): signed in, but no trial.
+    const again = newToken('sam-again');
+    const res = await server.signIn(again, '  Sam@Example.com ', true);
+    expect(res.status).toBe(200);
+    expect(res.json).toMatchObject({ plan: { tier: 'free', trial: null, trialUsed: true, email: SAM }, trialStarted: false, trialUsed: true });
+    expect((await server.request('POST', '/trial', { key: again })).json).toMatchObject({ trialStarted: false, trialUsed: true });
+    expect(await plan(again)).toMatchObject({ tier: 'free', trialUsed: true });
+    expect(accountOf(SAM)!.trialStartedAt).toBeNull();
+
+    // Someone else is unaffected.
+    const other = await server.signIn(newToken('kim'), 'kim@example.com', true);
+    expect(other.json).toMatchObject({ plan: { tier: 'pro-ai' }, trialStarted: true, trialUsed: false });
+  });
+
+  it('covers a trial from before 1.0 (no fingerprint yet): deleting the account keeps one', async () => {
+    const email = 'trial@example.com';
+    expect(server.store.trialHashes.size).toBe(0);
+    expect((await deleteAccount('trialRunning', email)).status).toBe(200);
+    expect([...server.store.trialHashes]).toEqual([await fingerprint(email)]);
+    const res = await server.signIn(newToken('back'), email, true);
+    expect(res.json).toMatchObject({ trialStarted: false, trialUsed: true });
+  });
+
+  it('keeps nothing for an account that never had a trial: signing up again can start one', async () => {
+    expect((await deleteAccount('free', 'free@example.com')).status).toBe(200);
+    expect(server.store.trialHashes.size).toBe(0);
+    const res = await server.signIn(newToken('free-again'), 'free@example.com', true);
+    expect(res.json).toMatchObject({ trialStarted: true });
   });
 });
 

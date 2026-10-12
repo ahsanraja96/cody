@@ -41,16 +41,23 @@ Follow `server/README.md` steps 1 to 3, then 8 and 9 after Stripe, Resend and An
 here) give you their keys.
 
 - [ ] Project created; its **region** written into `[Server region]`.
-- [ ] `cd server && supabase link --project-ref <project id> && supabase db push` applies all four
-  migrations, including `20261013000000_v10.sql` (a shared folder's note, account deletion). In
-  **Database → Functions** you should see `tabfold_account_delete`.
+- [ ] `cd server && supabase link --project-ref <project id> && supabase db push` applies all five
+  migrations, including `20261013000000_v10.sql` (a shared folder's note, account deletion) and
+  `20261014000000_v10_trials.sql` (one trial per email, clearing ended teams' folders). In
+  **Database → Functions** you should see `tabfold_account_delete` and `tabfold_team_sync_prune`, and
+  in **Table Editor** a `trial_used` table.
 - [ ] Upgrade the project to **Pro** before the first paying user (Free projects pause after a week
   without activity), and keep the **spend cap** on.
 - [ ] Secrets set (server/README.md step 8): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
   `STRIPE_PORTAL_CONFIGURATION`, `RESEND_API_KEY`, `EMAIL_FROM`, `ANTHROPIC_API_KEY`,
-  `SHARE_BASE_URL=https://tabfold.app`, optionally `STRIPE_AUTOMATIC_TAX=true` and `CODE_SECRET` (a
-  long random string). `ALLOWED_ORIGINS` comes in step 8, once the store gives the extension its id.
-  Never set `STRIPE_API_BASE` on the real server. `supabase secrets list` shows the names.
+  `SHARE_BASE_URL=https://tabfold.app`, optionally `STRIPE_AUTOMATIC_TAX=true`. `ALLOWED_ORIGINS`
+  comes in step 8, once the store gives the extension its id. Never set `STRIPE_API_BASE` on the real
+  server. `supabase secrets list` shows the names.
+- [ ] `CODE_SECRET`: a long random string (`openssl rand -hex 32`), set **once, before the first
+  trial**, and kept in your password manager. It keys the sign-in codes and the trial fingerprints
+  (one trial per email, even after an account is deleted); changing it later lets emails that had
+  the trial start it again. You also need it to delete an account by hand (server/README.md, "What
+  the server keeps").
 - [ ] `supabase functions deploy tabfold --no-verify-jwt`, then
   `https://<project id>.supabase.co/functions/v1/tabfold/me` in a browser answers
   `{"error":"not-signed-in", …}`.
@@ -186,8 +193,9 @@ With the store copy, on a computer and Chrome profile you don't develop on:
   doesn't work any more.
 - [ ] **Delete the test account**: Settings › "Delete my Tabfold account…", type the email. Then: in
   Supabase **Table Editor** the `accounts` row is gone (and its `devices`, `shares`, `backups`);
-  in Stripe the subscription is **Canceled**; the shared link answers 404; the folded tabs are still
-  on the computer.
+  `trial_used` has one row (a 64-character fingerprint, no email); in Stripe the subscription is
+  **Canceled**; the shared link answers 404; the folded tabs are still on the computer. Sign in
+  again with the same email and press the trial button: it says the trial was used.
 
 ## 11. The first week
 
@@ -207,12 +215,11 @@ Look daily:
 
 ## Worth knowing
 
-- Deleting an account deletes everything it had, including its trial: the same email can sign up
-  again and start a new 7-day trial. Watch for that in the first weeks (several new accounts with
-  the same email in `accounts` over time).
-- A team's folders stay in the database after its plan ends, until its owner deletes their
-  account (members can keep a copy for 30 days). The privacy policy says so.
-- Backups older than 30 days are deleted once a day for every account, triggered by the first
-  sync of the day; with no paying user syncing on a day, they go the next day someone does.
+- One trial per email holds even after an account is deleted: the server keeps a one-way
+  fingerprint of each email that had the trial (`trial_used`), keyed with `CODE_SECRET`. The privacy
+  policy says so.
+- Once a day, the first sync of the day deletes backups older than 30 days (every account) and the
+  folders of teams whose plan ended more than 30 days ago (the team itself stays, so its owner can
+  start it again). With no paying user syncing on a day, they go the next day someone does.
 - The older drafts in `docs/privacy.md` and `docs/store-listing.md` describe 0.x and are replaced by
   `web/privacy.html` and `store/`.

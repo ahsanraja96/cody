@@ -86,6 +86,9 @@
   <h3>What else the server keeps</h3>
   <ul>
     <li>When your trial started, and when you first proved your email with a code.</li>
+    <li>If your email had the 7-day trial, a fingerprint of it: a one-way code made from the address with a secret key
+      (HMAC-SHA256). The address can’t be worked back out of it. It’s how we make sure each email gets the trial once,
+      so it stays even after you delete your account.</li>
     <li>How many AI requests your account made each month.</li>
     <li>Your plan as Stripe last described it: Stripe’s ids for you, your subscriptions and a Pro for life payment, the
       plan, its status, seats and dates.</li>
@@ -128,9 +131,9 @@
   <h2 id="teams">Teams</h2>
   <p>On a Teams plan, the owner invites people by email. Everyone in the team sees the team’s name, its members’ and
     invitees’ email addresses, and the team folders, with who added each tab. Team folders are kept on Tabfold’s server for
-    the team, without daily backups, until the team’s owner deletes their account; after the team’s plan ends they stay
-    readable for 30 days, so people can take a copy. Whoever leaves or is removed can keep a copy of the team folders on
-    their computer.</p>
+    the team, without daily backups, while its plan is on. When the plan ends they stay readable for 30 days, so people
+    can keep a copy, and then they’re deleted (sooner if the team’s owner deletes their account). Whoever leaves or is
+    removed can keep a copy of the team folders on their computer.</p>
 
   <h2 id="never">What Tabfold never does</h2>
   <ul>
@@ -172,10 +175,10 @@
       offers to reopen your tabs, save them to Chrome bookmarks or download them. To remove the copy in Chrome sync too,
       use “Clear everything” first.</li>
   </ul>
-  <p>What stays after you delete your account: Stripe keeps its records of your payments (as payment and tax rules
-    require), Resend and our hosting providers keep their short-lived logs, invitations someone else sent to your email
-    stay on their team’s list until they cancel them, and copies other people saved from your shared folders or kept from
-    a team are theirs.</p>
+  <p>What stays after you delete your account: if you had the trial, the fingerprint of your email (above), so the trial
+    can’t be started again with it; Stripe’s records of your payments (as payment and tax rules require); Resend’s and
+    our hosting providers’ short-lived logs; invitations someone else sent to your email, on their team’s list until they
+    cancel them; and copies other people saved from your shared folders or kept from a team, which are theirs.</p>
 
   <h2 id="rights">Your rights</h2>
   <p>You can see and export what Tabfold keeps (Settings › Export…), correct or delete it as above, and ask us anything

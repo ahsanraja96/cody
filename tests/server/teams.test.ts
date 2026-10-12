@@ -517,6 +517,61 @@ describe('when the team’s plan ends', () => {
     expect((await server.signIn(mike, 'mike@example.com')).json.plan.team).toBeUndefined();
     expect(server.store.teamOfEmail('mike@example.com')).toBeNull();
   });
+
+  /** Any account's sync write: the first one each day runs the daily prune. */
+  const someoneSyncs = async () => {
+    const version = (await get('proMonthly', '/sync')).json.version;
+    expect((await post('proMonthly', '/sync', { set: { 'tf.m': version }, remove: [], baseVersion: version })).status).toBe(200);
+  };
+  const teamId = () => server.store.teamOfEmail(OWNER_EMAIL)!.id;
+
+  it('deletes the folders 30 days after the plan ended (the first sync of a day), keeping the team', async () => {
+    await end();
+    server.clock.now = NOW + 29 * DAY;
+    await someoneSyncs();
+    expect(server.store.teamSync.get(teamId())?.items).toEqual({ 'tf.m': 1 });
+    server.clock.now = NOW + 31 * DAY;
+    await someoneSyncs();
+    expect(server.store.teamSync.has(teamId())).toBe(false);
+    // The server's log is for failures only.
+    expect(server.log).not.toHaveBeenCalled();
+    // The team and its people stay; starting the plan again starts with no folders.
+    expect((await team()).json.members).toHaveLength(2);
+    await buyTeam({ interval: 'month' });
+    expect((await get(sara, '/team/sync')).json).toEqual({ items: {}, version: 0 });
+  });
+
+  it('deletes the folders of a team that ended 31 days ago at the next day’s first sync', async () => {
+    const sub = teamSubscription();
+    await server.stripe.setSubscription(sub.id, { status: 'canceled', ended_at: Math.floor((NOW - 31 * DAY) / 1000) }, { event: 'customer.subscription.deleted' });
+    await server.deliverEvents();
+    await someoneSyncs();
+    expect(server.store.teamSync.has(teamId())).toBe(false);
+  });
+
+  it('never touches a live team’s folders, nor a team that ended 29 days ago', async () => {
+    // Another team that ended 29 days ago, with its own folders.
+    await server.buy('trialEnded', { tier: 'teams', interval: 'year', teamName: 'Other' });
+    const other = server.store.teamOfEmail('ended@example.com')!;
+    await post(keyOf('trialEnded'), '/team/sync', { set: { 'tf.m': 'other' }, remove: [], baseVersion: 0 });
+    await server.stripe.setSubscription(other.subscriptionId!, { status: 'canceled', ended_at: Math.floor((NOW - 29 * DAY) / 1000) }, { event: 'customer.subscription.deleted' });
+    await server.deliverEvents();
+    server.clock.now = NOW + 12 * 60 * 60 * 1000;
+    await someoneSyncs();
+    expect(server.store.teamSync.get(teamId())?.items).toEqual({ 'tf.m': 1 });
+    expect(server.store.teamSync.get(other.id)?.items).toEqual({ 'tf.m': 'other' });
+    // Two months on, the live team still has its folders (its subscription is still on).
+    server.clock.now = NOW + 60 * DAY;
+    await someoneSyncs();
+    expect(server.store.teamSync.get(teamId())?.items).toEqual({ 'tf.m': 1 });
+    expect(server.store.teamSync.has(other.id)).toBe(false);
+  });
+
+  it('still saves the sync write when pruning teams fails', async () => {
+    server.store.teamSyncPruneEnded = vi.fn().mockRejectedValue(new Error('timeout'));
+    await someoneSyncs();
+    expect(server.log).toHaveBeenCalledWith(expect.stringContaining('Pruning ended teams’ folders failed'));
+  });
 });
 
 describe('logs', () => {

@@ -1,4 +1,4 @@
-import type { Purchase, Subscription, TeamRole } from '../../server/supabase/functions/_shared/plan.ts';
+import { isLive, type Purchase, type Subscription, type TeamRole } from '../../server/supabase/functions/_shared/plan.ts';
 import {
   RUN_LIMIT_REACHED,
   SYNC_CONFLICT,
@@ -24,7 +24,7 @@ import {
  * An in-memory Store for the server tests and the end-to-end Pro test (e2e/pro.mjs), with no
  * test-runner imports so plain Node can load it. Behaves like the SQL in server/supabase/migrations,
  * including its atomic functions (sync and team sync writes, team creation and joining, share
- * views, deleting an account). Times come from `now` (default Date.now), as the database's `now()` would.
+ * views, deleting an account, the trial fingerprints, pruning ended teams' folders). Times come from `now` (default Date.now), as the database's `now()` would.
  */
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -97,6 +97,8 @@ export class MemoryStore implements Store {
   teamSync = new Map<string, SyncState>();
   /** By id. */
   shares = new Map<string, ShareRecord>();
+  /** `trial_used`: the trial fingerprints of emails that had a trial (kept after accounts are deleted). */
+  trialHashes = new Set<string>();
   private seq = 0;
   private accountSeq = 0;
 
@@ -145,11 +147,16 @@ export class MemoryStore implements Store {
     if (row && row.stripeCustomerId === null && !taken) row.stripeCustomerId = customerId;
   }
 
-  async startTrial(account: string) {
+  async startTrial(account: string, trialHash: string) {
     const row = this.accounts.get(account);
-    if (!row || row.trialStartedAt !== null) return false;
+    if (!row || row.trialStartedAt !== null || this.trialHashes.has(trialHash)) return false;
     row.trialStartedAt = this.now();
+    this.trialHashes.add(trialHash);
     return true;
+  }
+
+  async trialUsed(trialHash: string) {
+    return this.trialHashes.has(trialHash);
   }
 
   async verifyEmail(account: string) {
@@ -474,9 +481,11 @@ export class MemoryStore implements Store {
   // ---- Deleting an account ----
 
   /** `tabfold_account_delete`: the account and everything kept for it, as the database's cascades do. */
-  async accountDelete(account: string) {
+  async accountDelete(account: string, trialHash: string) {
     const row = this.accounts.get(account);
     if (!row) return false;
+    // An account that had a trial leaves its email's fingerprint behind (trials from before 1.0 too).
+    if (row.trialStartedAt !== null) this.trialHashes.add(trialHash);
     const tokens = new Set<string>();
     for (const [hash, device] of [...this.devices]) {
       if (device.accountId !== account) continue;
@@ -504,6 +513,19 @@ export class MemoryStore implements Store {
     this.teamMembersByAccount.delete(account);
     this.accounts.delete(account);
     return true;
+  }
+
+  /** `tabfold_team_sync_prune`: empties the folders of teams whose subscription ended before then. */
+  async teamSyncPruneEnded(endedBefore: number) {
+    let emptied = 0;
+    for (const team of this.teams.values()) {
+      const subscription = team.subscriptionId ? this.subscriptions.get(team.subscriptionId)?.subscription : undefined;
+      if (!subscription || isLive(subscription)) continue;
+      const endedAt = subscription.endedAt ?? subscription.cancelAt ?? subscription.currentPeriodEnd;
+      if (typeof endedAt !== 'number' || endedAt >= endedBefore) continue;
+      if (this.teamSync.delete(team.id)) emptied += 1;
+    }
+    return emptied;
   }
 
   // ---- Test helpers ----
