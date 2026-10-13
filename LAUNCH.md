@@ -64,23 +64,39 @@ here) give you their keys.
 
 ## 3. Stripe in live mode
 
-Do server/README.md step 4 in **test mode** first and run its "Test it" list end to end with the
-test card. Then live mode (server/README.md step 11):
+Tabfold sells through the **Truewidgets** Stripe account, next to its other products. That's safe:
+every Tabfold price's lookup key starts with `tabfold-`, every checkout Tabfold starts is marked
+`metadata.app = "tabfold"`, and the server ignores every other checkout and subscription in the
+account. Customers see **Truewidgets** on the checkout page, receipts and their card statement.
 
-- [ ] **Activate the account** (business details, bank account), then turn off **Test mode**.
-- [ ] **Settings → Business → Public details**: name Tabfold, support email (`[Contact email]`),
-  website `https://tabfold.app`, **Privacy policy** `https://tabfold.app/privacy`, **Terms of
-  service** `https://tabfold.app/terms`. **Settings → Branding**: icon, colours (live mode has its
-  own copy of these).
-- [ ] Products, prices, billing portal and webhook, with the **live** key:
+Done on 13 October 2026, in live mode, through the Stripe connector:
+
+- [x] Products: Tabfold Pro (`prod_VQv2070YPxI9Bo`), Tabfold Pro AI (`prod_VQv2Bsc2NmkaFB`), Tabfold
+  Pro for life (`prod_VQv46071hRdzD9`), Tabfold Teams (`prod_VQv5rIB6IfOa7O`), tax code SaaS like the
+  account's other products.
+- [x] Prices: `tabfold-pro-monthly` $5, `tabfold-pro-yearly` $48, `tabfold-pro-ai-monthly` $9,
+  `tabfold-pro-ai-yearly` $84, `tabfold-pro-lifetime` $99 once, `tabfold-teams-monthly` $10 a person,
+  `tabfold-teams-yearly` $96 a person.
+- [x] Billing portal settings "Tabfold" (`bpc_1UQ3JiINR0TE37QMiS1O1D9V`, not the account's default,
+  so Truewidgets' own portal is unchanged): invoices, card, email and address, switching between the
+  Pro and Pro AI prices, cancelling at the end of the period.
+
+Still to do:
+
+- [ ] **Test mode first**: the products above are live only. For a test run, the same with your
+  test key: `STRIPE_SECRET_KEY=sk_test_… node server/scripts/stripe-setup.mjs --webhook-url …`
+  (server/README.md step 4), then its "Test it" list with the test card.
+- [ ] **Keep Truewidgets' public details** (Settings → Business → Public details): don't rename
+  the account to Tabfold, it would change the name on the other products too. Optionally add
+  Tabfold's privacy and terms links to Tabfold's portal settings once the site is live.
+- [ ] **The webhook**, once the Supabase server exists, with the **live** key:
   `STRIPE_SECRET_KEY=sk_live_… node server/scripts/stripe-setup.mjs --webhook-url https://<project id>.supabase.co/functions/v1/tabfold/stripe/webhook`.
-  It prints the `supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_… STRIPE_PORTAL_CONFIGURATION=bpc_…`
-  line: run it, plus `supabase secrets set STRIPE_SECRET_KEY=sk_live_…`.
+  It finds the products, prices and portal settings above and only adds the webhook. It prints the
+  `supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_… STRIPE_PORTAL_CONFIGURATION=bpc_…` line: run
+  it, plus `supabase secrets set STRIPE_SECRET_KEY=sk_live_…`.
 - [ ] **Developers → Webhooks**: the endpoint is the address above and listens to
   `checkout.session.completed`, `checkout.session.async_payment_succeeded` and
   `customer.subscription.created`, `.updated`, `.deleted`.
-- [ ] **Settings → Billing → Customer portal** (live): invoices, card, the four Pro and Pro AI
-  prices to switch between, cancelling at the end of the period. The script set these; check them.
 - [ ] **Tax**: either set up Stripe Tax (**Tax**: your address, registrations, default tax
   behaviour) and `supabase secrets set STRIPE_AUTOMATIC_TAX=true`, or decide with your accountant
   that you don't need it yet. Stripe Tax collects; registering and filing is up to you.
