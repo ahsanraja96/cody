@@ -199,8 +199,8 @@ After the 1.0 branches are merged and every test passes (`npm run compile`, `npm
   own Tabfold (2-step verification on), the one-time registration fee, and the contact email
   verified. Answer the **trader** question (selling paid plans makes you a trader in the EU: your
   address and email are then shown on the listing).
-- [ ] **Items → New item**: upload `tabfold-1.0.0-chrome.zip` (the store build from step 7, made
-  against the live server). The dashboard now shows the
+- [x] **Items → New item**: upload `tabfold-1.0.0-chrome.zip` (the store build from step 7, made
+  against the live server). The extension's id is `fknkmeijgekmcahloinaaocciglmkmbi`. The dashboard now shows the
   extension's **id** (32 letters).
 - [ ] With that id, let the store copy talk to the server, and stop allowing any extension:
   `supabase secrets set ALLOWED_ORIGINS=chrome-extension://<id>` (add your development copy's id
