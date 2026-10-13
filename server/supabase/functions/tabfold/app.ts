@@ -371,7 +371,7 @@ export interface Deps {
     portalConfiguration?: string;
     /** The key for hashing sign-in codes. */
     codeSecret: string;
-    /** Where shared folders' pages live (the `web/` site, `SHARE_BASE_URL`). Default https://tabfold.app. */
+    /** Where shared folders' pages live (the `web/` site, `SHARE_BASE_URL`). Default https://tabfold.truewidgets.com. */
     shareBaseUrl?: string;
   };
   /** Server logs. Never given tokens, keys, codes or tab titles. */

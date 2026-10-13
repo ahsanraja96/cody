@@ -25,13 +25,13 @@ const FOLDER = {
 
 const create = (body: unknown = FOLDER, key = 'proMonthly') => server.request('POST', '/shares', { key, body });
 const publicRead = (id: string, headers: Record<string, string> = { 'x-forwarded-for': '203.0.113.7' }) =>
-  server.request('GET', `/public/shares/${id}`, { key: null, headers, origin: 'https://tabfold.app' });
+  server.request('GET', `/public/shares/${id}`, { key: null, headers, origin: 'https://tabfold.truewidgets.com' });
 
 describe('POST /shares', () => {
   it('shares a folder as a link', async () => {
     const res = await create();
     expect(res.status).toBe(200);
-    expect(res.json).toEqual({ id: expect.stringMatching(/^[A-Za-z0-9]{10}$/), url: `https://tabfold.app/s/${res.json.id}` });
+    expect(res.json).toEqual({ id: expect.stringMatching(/^[A-Za-z0-9]{10}$/), url: `https://tabfold.truewidgets.com/s/${res.json.id}` });
     expect(server.store.shares.get(res.json.id)).toMatchObject({
       accountId: server.store.account('pro@example.com').id,
       name: 'Client sites',
@@ -150,7 +150,7 @@ describe('the owner’s routes', () => {
   it('GET /shares/<id> tells its owner the link, views and whether it’s live', async () => {
     await publicRead(id);
     const res = await server.request('GET', `/shares/${id}`, { key: 'proMonthly' });
-    expect(res.json).toEqual({ id, url: `https://tabfold.app/s/${id}`, views: 1, live: true, updatedAt: NOW, note: '' });
+    expect(res.json).toEqual({ id, url: `https://tabfold.truewidgets.com/s/${id}`, views: 1, live: true, updatedAt: NOW, note: '' });
   });
 
   it('PUT /shares/<id> replaces the contents', async () => {
@@ -159,7 +159,7 @@ describe('the owner’s routes', () => {
       key: 'proMonthly',
       body: { name: 'Client sites (new)', color: 'blue', live: false, tabs: [{ title: 'Only one', url: 'https://one.example.com/' }] },
     });
-    expect(res.json).toEqual({ id, url: `https://tabfold.app/s/${id}`, views: 0, live: false });
+    expect(res.json).toEqual({ id, url: `https://tabfold.truewidgets.com/s/${id}`, views: 0, live: false });
     expect((await publicRead(id)).json).toEqual({
       name: 'Client sites (new)',
       color: 'blue',
@@ -236,14 +236,14 @@ describe('GET /public/shares/<id>', () => {
     const res = await publicRead(id);
     expect(res.headers.get('access-control-allow-origin')).toBe('*');
     expect(res.headers.get('access-control-allow-methods')).toBe('GET, OPTIONS');
-    const preflight = await server.request('OPTIONS', `/public/shares/${id}`, { key: null, origin: 'https://tabfold.app' });
+    const preflight = await server.request('OPTIONS', `/public/shares/${id}`, { key: null, origin: 'https://tabfold.truewidgets.com' });
     expect(preflight.status).toBe(204);
     expect(preflight.headers.get('access-control-allow-origin')).toBe('*');
     const missing = await publicRead('nothing123');
     expect(missing.status).toBe(404);
     expect(missing.headers.get('access-control-allow-origin')).toBe('*');
     // The other routes still only answer the extension.
-    const other = await server.request('GET', '/me', { origin: 'https://tabfold.app' });
+    const other = await server.request('GET', '/me', { origin: 'https://tabfold.truewidgets.com' });
     expect(other.headers.get('access-control-allow-origin')).toBeNull();
     expect((await server.request('GET', '/me', { origin: EXTENSION })).headers.get('access-control-allow-origin')).toBe(EXTENSION);
   });

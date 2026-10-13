@@ -13,8 +13,7 @@ shows its name, its note (when it has one) and its pages.
 | `privacy.html`, `terms.html` | The privacy policy and terms. Fill in the placeholders first (below). |
 | `style.css`, `favicon.svg` | Looks, light and dark (it follows the visitor's system). |
 | `config.js` | The three settings below. Edit it before you deploy. |
-| `_redirects` | Sends every `/s/<id>` to `s.html`, and `/privacy` and `/terms` to their pages (Netlify reads it). |
-| `_headers` | Security headers, and keeps shared folders out of search engines (Netlify reads it). |
+| `vercel.json` | Vercel's settings: every `/s/<id>` shows `s.html`, `/privacy` and `/terms` show their pages, security headers, and shared folders kept out of search engines. |
 
 ## Settings (`config.js`)
 
@@ -35,25 +34,35 @@ Supabase project, **Project Settings → General**). Search the two files for `c
 replace each `<span class="placeholder">[…]</span>` with plain text, and read both pages through:
 they describe what Tabfold 1.0 does, and they're plain-language drafts, not legal advice.
 
-## Deploy to Netlify
+## Deploy to Vercel
 
-1. Sign in at [netlify.com](https://netlify.com).
-2. Edit `web/config.js` (above).
-3. **Add new site → Deploy manually**, and drag the `web` folder onto the page. Netlify gives it an
-   address such as `https://tabfold-1234.netlify.app`.
+The site is the Vercel project **tabfold** in Truewidgets' Vercel team, at
+`https://tabfold.truewidgets.com`.
 
-   Or, if Tabfold's code is on GitHub: **Add new site → Import an existing project**, pick the
-   repository, set **Base directory** and **Publish directory** to `web`, and leave **Build
-   command** empty. Every push then deploys again.
-4. To use your own domain (for example `tabfold.app`): **Domain management → Add a domain**, then
-   add the DNS records Netlify shows where you bought the domain. Netlify sets up HTTPS by itself.
-5. Tell the server where the site is, from the `server` folder:
+1. Edit `web/config.js` (above).
+2. Deploy the folder, from the repository's root (with the Vercel CLI, signed in to that team):
 
    ```sh
-   supabase secrets set SHARE_BASE_URL=https://tabfold.app
+   npx vercel deploy web --prod
    ```
 
-   Shared folder links (`https://tabfold.app/s/<id>`) and the link in team invitations use it.
+   The first time, it asks to link the folder: choose the team and the existing project
+   **tabfold**. No build step: Vercel serves the files as they are, with `vercel.json`.
+
+   Or, if Tabfold's code is on GitHub: in the project's **Settings → Git**, connect the repository
+   and set **Root Directory** to `web` (Framework Preset **Other**, no build command). Every push to
+   the production branch then deploys again.
+3. The domain: the project's **Settings → Domains** has `tabfold.truewidgets.com`.
+   `truewidgets.com`'s DNS is at GoDaddy, so it needs one record there: **CNAME** `tabfold` →
+   `cname.vercel-dns.com`. Vercel sets up HTTPS by itself once the record is in.
+4. Tell the server where the site is, from the `server` folder:
+
+   ```sh
+   supabase secrets set SHARE_BASE_URL=https://tabfold.truewidgets.com
+   ```
+
+   Shared folder links (`https://tabfold.truewidgets.com/s/<id>`) and the link in team invitations
+   use it.
 
 To check it, share a folder from Tabfold Pro and open the link in a private window: you should see
 the folder's name and pages. A link to a folder that isn't shared any more says "This link doesn't
@@ -64,7 +73,7 @@ work any more".
 The button asks Tabfold to add the folder, when Tabfold is installed: the page calls
 `chrome.runtime.sendMessage(EXTENSION_ID, { type: 'tabfold-save-share', id })`. That works only if
 the extension's manifest lets this site talk to it (`"externally_connectable": { "matches":
-["https://tabfold.app/*"] }`, with your domain). Otherwise, or when Tabfold isn't installed, the
+["https://tabfold.truewidgets.com/*"] }`, with your domain). Otherwise, or when Tabfold isn't installed, the
 button opens `STORE_URL`.
 
 ## Trying it on your computer

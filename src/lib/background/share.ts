@@ -25,11 +25,11 @@ export type ShareCommand = Extract<Command, { type: 'share-create' | 'share-upda
 
 /** Where shared pages live (`<origin>/s/<id>`), set at build time (WXT_SHARE_ORIGIN). */
 export const SHARE_ORIGIN = (() => {
-  const value = ((import.meta.env.WXT_SHARE_ORIGIN as string | undefined) ?? '').trim() || 'https://tabfold.app';
+  const value = ((import.meta.env.WXT_SHARE_ORIGIN as string | undefined) ?? '').trim() || 'https://tabfold.truewidgets.com';
   try {
     return new URL(value).origin;
   } catch {
-    return 'https://tabfold.app';
+    return 'https://tabfold.truewidgets.com';
   }
 })();
 

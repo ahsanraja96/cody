@@ -1,10 +1,11 @@
-// The `tabfold` Edge Function (Deno): wires the real database, Stripe, Resend and Claude into
+// The `tabfold` Edge Function (Deno): wires the real database, Stripe, Zoho Mail and Claude into
 // app.ts. Not type-checked by the extension's build; app.ts, ai.ts, stripe.ts, mail.ts and plan.ts
 // are, through the tests.
 //
 // Secrets (`supabase secrets set ...`, see server/API.md): STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
-// STRIPE_AUTOMATIC_TAX, STRIPE_PORTAL_CONFIGURATION, RESEND_API_KEY, EMAIL_FROM, ANTHROPIC_API_KEY,
-// ALLOWED_ORIGINS, SHARE_BASE_URL, and optionally CODE_SECRET, PUBLIC_URL, STRIPE_API_BASE.
+// STRIPE_AUTOMATIC_TAX, STRIPE_PORTAL_CONFIGURATION, SMTP_USER, SMTP_PASS, EMAIL_FROM,
+// ANTHROPIC_API_KEY, ALLOWED_ORIGINS, SHARE_BASE_URL, and optionally SMTP_HOST, SMTP_PORT,
+// CODE_SECRET, PUBLIC_URL, STRIPE_API_BASE.
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by the Edge runtime.
 //
 // A missing secret only stops what needs it: without Stripe, checkout and billing answer 500 (and
@@ -13,7 +14,7 @@ import Anthropic from 'npm:@anthropic-ai/sdk@0.133';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { AiFailed, createModel, type CallJson } from './ai.ts';
 import { handle, type Deps } from './app.ts';
-import { createResendMailer, DEFAULT_SITE_URL } from './mail.ts';
+import { createSmtpMailer, DEFAULT_SITE_URL } from './mail.ts';
 import { createSupabaseStore } from './store.ts';
 import { createStripe } from './stripe.ts';
 
@@ -80,7 +81,16 @@ const deps: Deps = {
     webhookSecret: env('STRIPE_WEBHOOK_SECRET'),
     apiBase: env('STRIPE_API_BASE') || undefined,
   }),
-  mailer: createResendMailer({ apiKey: env('RESEND_API_KEY'), from: env('EMAIL_FROM'), siteUrl: SHARE_BASE_URL }),
+  // Zoho Mail over TLS on 465 (Supabase blocks outbound 25 and 587).
+  mailer: createSmtpMailer({
+    host: env('SMTP_HOST') || undefined,
+    port: Number(env('SMTP_PORT')) || undefined,
+    user: env('SMTP_USER'),
+    pass: env('SMTP_PASS'),
+    from: env('EMAIL_FROM'),
+    siteUrl: SHARE_BASE_URL,
+    connect: (hostname, port) => Deno.connectTls({ hostname, port }),
+  }),
   model: createModel(callJson),
   now: () => Date.now(),
   config: {

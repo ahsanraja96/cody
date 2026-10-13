@@ -41,7 +41,7 @@ Design: [Tabfold design canvas](https://claude.ai/artifact/MGqcUEKEqHvcmZdSboDKP
 
 - **The free list's 500 tabs**: the count turns amber from 450 ("18 spaces left"). When a fold doesn't fit, nothing is closed and Tabfold says how much room it needs; "Make room" lists the oldest folds to remove (with Undo, or export everything first). Imports and Chrome sync stop at the limit too. Nothing is ever taken away when a plan ends: folders and tabs past Free's limits stay; only adding more waits.
 - **Live folders** (Pro): open a folder as a Chrome tab group that stays connected: tabs you add to the group join the folder, tabs you close leave it, pages you move to update it. "Fold the group" closes it and keeps everything. The popup shows "Working in <folder>".
-- **Share a folder** (Pro): a public link (`https://tabfold.app/s/…`, the small static site in `web/`) showing the folder's pages with "Open all", "Copy links" and "Save to my Tabfold" (which asks the installed extension to add it as a folder). "Keep it up to date" pushes changes; "Stop sharing" makes the link stop working. Only titles and addresses are shared, never Incognito tabs.
+- **Share a folder** (Pro): a public link (`https://tabfold.truewidgets.com/s/…`, the small static site in `web/`) showing the folder's pages with "Open all", "Copy links" and "Save to my Tabfold" (which asks the installed extension to add it as a folder). "Keep it up to date" pushes changes; "Stop sharing" makes the link stop working. Only titles and addresses are shared, never Incognito tabs.
 - **Pro AI**: **Organise with AI** puts the newest 300 folded tabs into folders (existing ones when the names match, new ones marked "new"), after a preview; **smart names** for folds ("Checkout app · Stripe webhooks"); **Copy as context for AI** on a folder or group; **Ask your tabs**: a question in search ("where were the flats for our trip") gets "Best matches" with why; **the weekly tidy-up** (Mondays, can be turned off) suggests folders for month-old tabs and removing duplicates, one click each. 300 runs a month. Only titles and sites are sent, never pages, never Incognito tabs.
 - **Teams**: one person pays for the team's seats and invites people by email (Settings › Team); they join by signing in to Tabfold with that email, and everyone gets Pro AI. Team folders sit under "Team · <name>" on the left and in the list, with who added what ("Sara added 3 tabs · 2 h ago"). Moving a tab into a team folder shares it with the team; team folders sync between the members, apart from each person's own sync. The owner renames the team, removes people and manages billing; a member can leave. Whoever leaves or is removed sees it once, with "Keep a copy" to keep the team's folders as their own.
 - **Paying** happens on Stripe's own checkout page, opened in a tab; when Stripe confirms, that tab turns into a "You're on Tabfold Pro" page ("…for life", or "Your team is ready"). Plan changes, the card, invoices and cancelling go through Stripe's billing page ("Manage billing" in Settings). The account is an email address: signing in and starting the trial use a 6-digit code sent by email, no password and no card. Other computers on the same Chrome profile sign themselves in.
@@ -75,7 +75,7 @@ Load the build by hand: `chrome://extensions` → Developer mode → Load unpack
 
 ### Building with Pro switched on
 
-Pro needs the Tabfold server, a Stripe account and an email-sending account (Resend); [`server/README.md`](server/README.md) sets them all up from nothing. Then build with the server's address (in the environment or a `.env` file):
+Pro needs the Tabfold server, a Stripe account and a mailbox to send email from (Zoho Mail, over SMTP); [`server/README.md`](server/README.md) sets them all up from nothing. Then build with the server's address (in the environment or a `.env` file):
 
 ```bash
 WXT_TABFOLD_API=https://<project id>.supabase.co/functions/v1/tabfold npm run zip
@@ -83,7 +83,7 @@ WXT_TABFOLD_API=https://<project id>.supabase.co/functions/v1/tabfold npm run zi
 
 Without it the build is Free: the Pro screens still show, say "Pro isn't switched on in this build yet", and nothing talks to a server. The extension's content security policy only allows that server address; Stripe's pages open in ordinary tabs.
 
-Shared folders open on the public site in `web/` (see [`web/README.md`](web/README.md); the owner deploys it to Netlify). If it isn't at `https://tabfold.app`, build with its address so its "Save to my Tabfold" button may talk to the extension (`externally_connectable`, no install warning):
+Shared folders open on the public site in `web/` (see [`web/README.md`](web/README.md); the owner deploys it to Vercel). If it isn't at `https://tabfold.truewidgets.com`, build with its address so its "Save to my Tabfold" button may talk to the extension (`externally_connectable`, no install warning):
 
 ```bash
 WXT_TABFOLD_API=https://<project id>.supabase.co/functions/v1/tabfold WXT_SHARE_ORIGIN=https://<your share site> npm run zip
@@ -104,8 +104,8 @@ WXT_TABFOLD_API=https://<project id>.supabase.co/functions/v1/tabfold WXT_SHARE_
 | Library | `src/entrypoints/library/` | The full list (folders, kinds of site, drag and drop, menus, Ctrl+K), search and Ask, Make room, settings, plans and welcome pages. |
 | Onboarding | `src/entrypoints/onboarding/` | Opens on first install. |
 | Pro | `src/lib/pro/`, `src/lib/background/pro.ts` | The plan from Tabfold's server, sign-in (device token, Chrome profile key), the checkout and billing tabs, account sync (`src/lib/sync/`, the same format as Chrome sync with larger limits), AI requests, milestones. |
-| Server | `server/` | A Supabase Edge Function and Postgres: accounts and email codes, the trial, Stripe Checkout (subscriptions, Pro for life, team seats), the billing portal and Stripe's webhooks, teams and invitations, sync (personal and per team), daily backups, shared folders, AI limits and the Claude calls. Every secret (Stripe, Resend, Anthropic) lives only there. See `server/README.md` and `server/API.md`. |
-| Share site | `web/` | Plain HTML, CSS and JS for Netlify: a short home page and `/s/<id>`, a shared folder's page. No build step, no external scripts. |
+| Server | `server/` | A Supabase Edge Function and Postgres: accounts and email codes, the trial, Stripe Checkout (subscriptions, Pro for life, team seats), the billing portal and Stripe's webhooks, teams and invitations, sync (personal and per team), daily backups, shared folders, AI limits and the Claude calls. Every secret (Stripe, the Zoho mailbox's app password, Anthropic) lives only there. See `server/README.md` and `server/API.md`. |
+| Share site | `web/` | Plain HTML, CSS and JS for Vercel (`vercel.json`): a short home page and `/s/<id>`, a shared folder's page. No build step, no external scripts. |
 | Design tokens | `src/assets/styles.css` | CSS variables for light and dark, mapped to Tailwind utilities. |
 
 ## Measured
@@ -128,4 +128,4 @@ WXT_TABFOLD_API=https://<project id>.supabase.co/functions/v1/tabfold WXT_SHARE_
 - **The trial lives on Tabfold's server**: 7 days of Pro AI, one per email, no card. Paying for Pro AI during the trial starts billing when the trial ends.
 - **AI uses Claude Haiku 5.5** at low effort with structured outputs; a run counts only when it succeeds, and a bad answer is retried once.
 - **Folders travel with sync**: a folder's name, colour and deletion, a tab's folder and snooze, and the sites you moved all sync (Chrome sync and the Tabfold account); the newest change wins. Snoozed tabs only reopen on the computer that snoozed them. 0.5's projects became folders on update.
-- **Not yet tried against the live services**: the Stripe, Resend, Supabase and Anthropic calls are covered by unit tests and by the end-to-end test against fakes and the real server code, not yet by real accounts. Prices are in USD; Stripe Tax can add VAT and sales tax at checkout (`STRIPE_AUTOMATIC_TAX=true`, a paid Stripe feature).
+- **Not yet tried against the live services**: the Stripe, Zoho Mail, Supabase and Anthropic calls are covered by unit tests and by the end-to-end test against fakes and the real server code, not yet by real accounts. Prices are in USD; Stripe Tax can add VAT and sales tax at checkout (`STRIPE_AUTOMATIC_TAX=true`, a paid Stripe feature).

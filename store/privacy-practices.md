@@ -3,7 +3,7 @@
 What to enter on the **Privacy practices** tab of Tabfold's item in the developer dashboard, for
 1.0. Each answer is checked against the code and the built manifest
 (`.output/chrome-mv3/manifest.json` after `npx wxt build`), and matches the privacy policy
-(`web/privacy.html`, published at `https://tabfold.app/privacy`; the section names below are its
+(`web/privacy.html`, published at `https://tabfold.truewidgets.com/privacy`; the section names below are its
 headings).
 
 The 1.0 manifest asks for: `tabs`, `tabGroups`, `storage`, `unlimitedStorage`, `alarms`,
@@ -84,7 +84,7 @@ Asked for only at the moment the person chooses to import a Chrome bookmarks fol
 **externally_connectable** (if the dashboard asks)
 
 ```text
-Only Tabfold's own website (https://tabfold.app), where someone's shared folder opens, may send one message: "Save to my Tabfold", which adds that shared folder to the person's list. No other site can talk to the extension.
+Only Tabfold's own website (https://tabfold.truewidgets.com), where someone's shared folder opens, may send one message: "Save to my Tabfold", which adds that shared folder to the person's list. No other site can talk to the extension.
 ```
 
 **Host permissions:** none. Tabfold doesn't ask for access to any website and has no content scripts.
@@ -120,11 +120,11 @@ All of Tabfold's code, fonts and icons are in the package. The content security 
 - I do not use or transfer user data to determine creditworthiness or for lending purposes.
 
 They hold because the only parties that get user data are the service providers that run a feature
-the person chose (Supabase for the server, Stripe for payments, Resend for sign-in and invitation
+the person chose (Supabase for the server, Stripe for payments, Zoho Mail for sign-in and invitation
 emails, Anthropic for Pro AI), plus Google's own Chrome sync; nothing is used for ads, sold, or
 used for anything but Tabfold. See "Who handles your data" in the policy.
 
-**Privacy policy URL:** `https://tabfold.app/privacy` (your own domain if the site is elsewhere).
+**Privacy policy URL:** `https://tabfold.truewidgets.com/privacy` (your own domain if the site is elsewhere).
 Publish the site and fill in the policy's placeholders before you submit: the review opens this
 address.
 

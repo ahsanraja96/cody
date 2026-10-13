@@ -52,7 +52,7 @@ here) give you their keys.
   without activity), and keep the **spend cap** on.
 - [ ] Secrets set (server/README.md step 8): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
   `STRIPE_PORTAL_CONFIGURATION`, `RESEND_API_KEY`, `EMAIL_FROM`, `ANTHROPIC_API_KEY`,
-  `SHARE_BASE_URL=https://tabfold.app`, optionally `STRIPE_AUTOMATIC_TAX=true`. `ALLOWED_ORIGINS`
+  `SHARE_BASE_URL=https://tabfold.truewidgets.com`, optionally `STRIPE_AUTOMATIC_TAX=true`. `ALLOWED_ORIGINS`
   comes in step 8, once the store gives the extension its id. Never set `STRIPE_API_BASE` on the real
   server. `supabase secrets list` shows the names.
 - [ ] `CODE_SECRET`: a long random string (`openssl rand -hex 32`), set **once, before the first
@@ -129,7 +129,7 @@ Follow `web/README.md`.
 - [ ] In `web/config.js`: `API_URL` = `https://<project id>.supabase.co/functions/v1/tabfold`.
   Leave `EXTENSION_ID` empty and `STORE_URL` as it is until step 9.
 - [ ] Deploy the `web` folder; add the domain `tabfold.app` (**Domain management**); HTTPS is on.
-- [ ] `https://tabfold.app/privacy` and `https://tabfold.app/terms` open, with no placeholder left;
+- [ ] `https://tabfold.truewidgets.com/privacy` and `https://tabfold.truewidgets.com/terms` open, with no placeholder left;
   the home page's footer links both.
 
 ## 7. Build the store zip
@@ -143,7 +143,7 @@ After the 1.0 branches are merged and every test passes (`npm run compile`, `npm
 - [ ] Build against the live server and site:
 
   ```sh
-  WXT_TABFOLD_API=https://<project id>.supabase.co/functions/v1/tabfold WXT_SHARE_ORIGIN=https://tabfold.app npm run zip
+  WXT_TABFOLD_API=https://<project id>.supabase.co/functions/v1/tabfold WXT_SHARE_ORIGIN=https://tabfold.truewidgets.com npm run zip
   ```
 
   This makes `.output/tabfold-1.0.0-chrome.zip` from `.output/chrome-mv3`.
@@ -155,7 +155,7 @@ After the 1.0 branches are merged and every test passes (`npm run compile`, `npm
 
   Expect version `1.0.0`; permissions exactly `tabs, tabGroups, storage, unlimitedStorage, alarms,
   contextMenus, favicon, system.memory, sidePanel`; optional `bookmarks`; hosts and content scripts
-  `none`; `connect` = `'self' https://<project id>.supabase.co`; site `https://tabfold.app/*`. Anything
+  `none`; `connect` = `'self' https://<project id>.supabase.co`; site `https://tabfold.truewidgets.com/*`. Anything
   else: stop and find out why (the privacy tab in `store/privacy-practices.md` justifies exactly
   these).
 - [ ] Load `.output/chrome-mv3` unpacked in a fresh Chrome profile and fold a window once.
@@ -179,7 +179,7 @@ After the 1.0 branches are merged and every test passes (`npm run compile`, `npm
   support URLs).
 - [ ] **Privacy** tab: everything in `store/privacy-practices.md` (single purpose, one justification
   per permission, remote code: no, the data categories, the three certifications, privacy policy
-  `https://tabfold.app/privacy`).
+  `https://tabfold.truewidgets.com/privacy`).
 - [ ] **Distribution**: Public; all regions (or the ones you choose); the item itself is free (paid
   plans are sold on Stripe).
 - [ ] If there's a field for the reviewers: "Free needs no account. To try the paid features, start

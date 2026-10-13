@@ -107,8 +107,9 @@
     privacy policy. Stripe tells our server your email, which plan you bought and its status.</p>
 
   <h2 id="email">Email</h2>
-  <p>Sign-in codes and team invitations are sent by Resend (resend.com), which therefore gets the address each email goes
-    to and what it says (a code, or who invited you to which team). We don’t send newsletters or marketing email.</p>
+  <p>Sign-in codes and team invitations are sent from our mailbox at Zoho Mail (zoho.com), which therefore gets the address
+    each email goes to and what it says (a code, or who invited you to which team), and keeps a copy of each email sent, as
+    any email account does. We don’t send newsletters or marketing email.</p>
 
   <h2 id="ai">The AI features (Pro AI)</h2>
   <p>Organise with AI, smart names for folds, Copy as context, Ask your tabs and the weekly tidy-up use Claude, a model by
@@ -127,7 +128,7 @@
     appear on a public page at a link. Anyone with the link can see them until you stop sharing, and can save a copy into
     their own Tabfold; their copy is theirs. The server counts how many times the page was opened. Tabs folded from
     Incognito windows are never shared.</p>
-  <p>The shared page is on this site, which Netlify (netlify.com) hosts. It loads the folder from Tabfold’s server, sets no
+  <p>The shared page is on this site, which Vercel (vercel.com) hosts. It loads the folder from Tabfold’s server, sets no
     cookies and runs no analytics.</p>
 
   <h2 id="teams">Teams</h2>
@@ -155,9 +156,9 @@
         <tr><td>Google (Chrome sync)</td><td>Your newest folded tabs and folders, if Chrome sync is on</td><td>Your list on your other computers</td></tr>
         <tr><td>Supabase</td><td>Your account and everything it syncs</td><td>Runs Tabfold’s server and database</td></tr>
         <tr><td>Stripe</td><td>Your email, payment details and payments</td><td>Takes payments, receipts and invoices</td></tr>
-        <tr><td>Resend</td><td>Your email address and the email’s text</td><td>Sends sign-in codes and team invitations</td></tr>
+        <tr><td>Zoho Mail</td><td>Your email address and the email’s text</td><td>Sends sign-in codes and team invitations</td></tr>
         <tr><td>Anthropic</td><td>Tab titles and sites (and the extras above)</td><td>Pro AI</td></tr>
-        <tr><td>Netlify</td><td>Visits to this site</td><td>Hosts this site and shared folder pages</td></tr>
+        <tr><td>Vercel</td><td>Visits to this site</td><td>Hosts this site and shared folder pages</td></tr>
       </tbody>
     </table>
   </div>
@@ -188,7 +189,7 @@
       owner deletes their account). A team’s folders are stored as its members’ computers send them, and our server can’t
       edit them.</li>
     <li>Stripe’s records of your payments, as payment and tax rules require.</li>
-    <li>Resend’s and our hosting providers’ short-lived logs.</li>
+    <li>The copies of the emails we sent, in our Zoho mailbox, and our hosting providers’ short-lived logs.</li>
     <li>Invitations someone else sent to your email, on their team’s list until they cancel them.</li>
     <li>Copies other people saved from your shared folders or kept from a team, which are theirs.</li>
   </ul>

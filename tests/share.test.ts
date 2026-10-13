@@ -54,16 +54,16 @@ class FakeShares {
     if (path === '/shares' && method === 'POST') {
       const id = `share${String(this.next++).padStart(5, '0')}`;
       this.shares.set(id, { ...body, views: 0 });
-      return json(200, { id, url: `https://tabfold.app/s/${id}` });
+      return json(200, { id, url: `https://tabfold.truewidgets.com/s/${id}` });
     }
     const own = path.match(/^\/shares\/(\w+)$/);
     const share = own ? this.shares.get(own[1]!) : undefined;
     if (own && !share) return json(404, { error: 'server', message: 'No such share.' });
     if (own && method === 'PUT') {
       Object.assign(share!, body);
-      return json(200, { id: own[1], url: `https://tabfold.app/s/${own[1]}`, views: share!.views, live: share!.live });
+      return json(200, { id: own[1], url: `https://tabfold.truewidgets.com/s/${own[1]}`, views: share!.views, live: share!.live });
     }
-    if (own && method === 'GET') return json(200, { id: own[1], url: `https://tabfold.app/s/${own[1]}`, views: share!.views, live: share!.live, updatedAt: 1 });
+    if (own && method === 'GET') return json(200, { id: own[1], url: `https://tabfold.truewidgets.com/s/${own[1]}`, views: share!.views, live: share!.live, updatedAt: 1 });
     if (own && method === 'DELETE') {
       this.shares.delete(own[1]!);
       return json(200, { ok: true });
@@ -110,7 +110,7 @@ describe('share a folder', () => {
     await folderWith(['https://a.com', 'https://b.com']);
     await folderWith(['https://secret.com'], { incognito: true });
     const created = await route({ type: 'share-create', folderId: FOLDER.id, live: true });
-    expect(created).toEqual({ ok: true, data: { url: 'https://tabfold.app/s/share00001', shareId: 'share00001' } });
+    expect(created).toEqual({ ok: true, data: { url: 'https://tabfold.truewidgets.com/s/share00001', shareId: 'share00001' } });
     const post = server.requests.find((r) => r.method === 'POST')!;
     expect(post.auth).toMatch(/^Bearer /);
     expect(post.body).toEqual({
@@ -129,12 +129,12 @@ describe('share a folder', () => {
     server.shares.get('share00001')!.views = 4;
     expect(await route({ type: 'share-update', folderId: FOLDER.id, live: false })).toEqual({
       ok: true,
-      data: { url: 'https://tabfold.app/s/share00001', views: 4, live: false },
+      data: { url: 'https://tabfold.truewidgets.com/s/share00001', views: 4, live: false },
     });
     expect((await db.folders.get(FOLDER.id))!.shareLive).toBe(false);
     expect(await route({ type: 'share-info', folderId: FOLDER.id })).toEqual({
       ok: true,
-      data: { url: 'https://tabfold.app/s/share00001', views: 4, live: false },
+      data: { url: 'https://tabfold.truewidgets.com/s/share00001', views: 4, live: false },
     });
 
     // Sharing again keeps the same link.
@@ -232,10 +232,10 @@ describe('"Save to my Tabfold" from a shared page', () => {
   });
 
   it('answers only the share site, and only this message', async () => {
-    expect(SHARE_ORIGIN).toBe('https://tabfold.app');
-    expect(fromShareSite({ url: 'https://tabfold.app/s/x' })).toBe(true);
+    expect(SHARE_ORIGIN).toBe('https://tabfold.truewidgets.com');
+    expect(fromShareSite({ url: 'https://tabfold.truewidgets.com/s/x' })).toBe(true);
     expect(handleExternalMessage({ type: 'tabfold-save-share', id: 'share00001' }, { origin: 'https://evil.example' })).toBeUndefined();
-    expect(handleExternalMessage({ type: 'tabfold-save-share', id: 'share00001' }, { url: 'https://tabfold.app.evil.example/s' })).toBeUndefined();
+    expect(handleExternalMessage({ type: 'tabfold-save-share', id: 'share00001' }, { url: 'https://tabfold.truewidgets.com.evil.example/s' })).toBeUndefined();
     expect(handleExternalMessage({ type: 'something-else' }, site)).toBeUndefined();
     expect(await handleExternalMessage({ type: 'tabfold-save-share', id: '../me' }, site)).toMatchObject({ ok: false, reason: 'bad-request' });
     expect(await handleExternalMessage({ type: 'tabfold-save-share', id: 'missing00' }, site)).toMatchObject({ ok: false, reason: 'not-found' });

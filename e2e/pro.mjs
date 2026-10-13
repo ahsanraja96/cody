@@ -120,7 +120,7 @@ const site = http.createServer((req, res) => {
 await new Promise((r) => site.listen(0, '127.0.0.1', r));
 const page = (name) => `http://127.0.0.1:${site.address().port}/${name}`;
 
-// The public share site (web/), as Netlify serves it: /s/<id> is s.html; config.js points at the
+// The public share site (web/), as Vercel serves it: /s/<id> is s.html; config.js points at the
 // test server and this browser's Tabfold.
 const WEB = path.resolve('web');
 const siteConfig = { API_URL: API, EXTENSION_ID: '', STORE_URL: 'https://chromewebstore.google.com/' };

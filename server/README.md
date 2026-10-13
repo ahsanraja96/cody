@@ -10,17 +10,18 @@ Tabfold Free never talks to a server. Pro and Pro AI do: they use one small prog
   portal,
 - keeps each Pro account's folded tabs (sync without the 500-tab limit) and a daily backup for 30 days,
 - runs Teams: invitations by email, the team's shared folders, and seats that follow the team,
-- serves shared folders to their public page (a small static site in `web/`, on Netlify),
+- serves shared folders to their public page (a small static site in `web/`, on Vercel),
 - runs Organise with AI, smart fold names, Copy as context, Ask your tabs and the weekly tidy-up,
   sending only tab titles and sites (and folder names, a group's name or the question asked) to
   Claude,
 - deletes an account when its owner asks (1.0, Settings › "Delete my Tabfold account…").
 
 This guide sets it up from nothing. It takes about an hour. You'll need accounts at
-[supabase.com](https://supabase.com), [stripe.com](https://stripe.com), [resend.com](https://resend.com),
-[console.anthropic.com](https://console.anthropic.com) and [netlify.com](https://netlify.com), and a
-domain name you can add DNS records to (for sending the emails and for the shared folder pages),
-for example `tabfold.app`.
+[supabase.com](https://supabase.com), [stripe.com](https://stripe.com),
+[console.anthropic.com](https://console.anthropic.com) and [vercel.com](https://vercel.com), a
+mailbox on [Zoho Mail](https://www.zoho.com/mail/) that sends the emails (Truewidgets already has
+one), and a domain name you can add DNS records to (for the shared folder pages), for example
+`tabfold.truewidgets.com`.
 
 ## What's in this folder
 
@@ -32,7 +33,7 @@ for example `tabfold.app`.
 | `supabase/functions/tabfold/index.ts` | The starting point Supabase runs. It connects the pieces below. |
 | `supabase/functions/tabfold/app.ts` | The server itself: sign-in, the trial, checkout, plans, sync, backups, AI limits. |
 | `supabase/functions/tabfold/stripe.ts` | Talking to Stripe. |
-| `supabase/functions/tabfold/mail.ts` | The sign-in email, sent through Resend. |
+| `supabase/functions/tabfold/mail.ts` | The sign-in and invitation emails, sent through Zoho Mail (SMTP). |
 | `supabase/functions/tabfold/ai.ts` | What Claude is asked, and the checks on its answers. |
 | `supabase/functions/tabfold/store.ts` | Reading and writing the database. |
 | `supabase/functions/_shared/plan.ts` | The plan rules: which plan an account has, from its subscriptions, trial, Pro for life and team. |
@@ -129,15 +130,26 @@ choose whether the prices include tax or tax is added on top). Then set `STRIPE_
 in step 8. Stripe Tax calculates and collects; registering and filing returns is still up to you.
 Check with an accountant before switching on live payments.
 
-## 5. Set up Resend (the sign-in emails)
+## 5. Set up Zoho Mail (the sign-in emails)
 
-1. Sign up at resend.com.
-2. **Domains → Add domain**: add your domain (for example `tabfold.app`). Resend shows a few DNS
-   records; add them where you bought the domain, then press **Verify**. It can take a few minutes
-   to an hour.
-3. **API Keys → Create API key**, with **Sending access** only. Copy it (it starts with `re_`).
-4. Choose the sender, for example `Tabfold <hello@tabfold.app>`. The part after `@` must be the
-   domain you verified. This is `EMAIL_FROM` in step 8.
+The server sends its emails through a Zoho Mail mailbox, over SMTP with TLS on port 465 (Supabase
+blocks the other mail ports, 25 and 587). Truewidgets' domain is already set up in Zoho (its SPF and
+DKIM records), so there is nothing to verify.
+
+1. Pick the mailbox that sends, for example `hello@truewidgets.com` (an alias such as
+   `tabfold@truewidgets.com` works too: add it under **Zoho Mail → Settings → Mail accounts →
+   Email address → Add alias**). This is `SMTP_USER` (the mailbox you sign in with).
+2. In that mailbox's **Zoho Accounts → Security → App passwords**, generate one named "Tabfold
+   server". It is `SMTP_PASS`. (With two-step sign-in on, the normal password doesn't work for SMTP.)
+3. Choose the sender, for example `Tabfold <hello@truewidgets.com>`: the mailbox or one of its
+   aliases (Zoho refuses others). This is `EMAIL_FROM` in step 8.
+4. The server uses `smtp.zoho.eu` (Zoho's EU data centre, where Truewidgets' mail is: you sign in at
+   mail.zoho.eu). For an account on zoho.com set `SMTP_HOST=smtp.zoho.com`.
+
+Zoho limits how many emails one mailbox sends a day (see your plan's sending limits); Tabfold sends
+one per sign-in and per invitation. If it ever gets close, Zoho's transactional service ZeptoMail
+works with the same code: `SMTP_HOST=smtp.zeptomail.eu`, `SMTP_USER=emailapikey`, and its Send Mail
+token as `SMTP_PASS`.
 
 The email says: "Your Tabfold code is 481920. It works for 10 minutes." and what it's for (signing
 in, or starting the trial). Team invitations come from the same sender: "hello@truewidgets.com
@@ -149,11 +161,11 @@ link to the public site (`SHARE_BASE_URL`).
 On console.anthropic.com, open **API keys** and create a key for Tabfold. While you're there, set a
 monthly spend limit (**Settings → Limits**).
 
-## 7. Put the public site on Netlify
+## 7. Put the public site on Vercel
 
 Shared folders open on a small static site, in the `web/` folder. Follow `web/README.md`: set the
-server's address in `web/config.js`, drag the `web` folder onto Netlify, and give it your domain
-(for example `tabfold.app`). Its address is `SHARE_BASE_URL` in the next step.
+server's address in `web/config.js`, deploy the `web` folder to Vercel, and give it your domain
+(for example `tabfold.truewidgets.com`). Its address is `SHARE_BASE_URL` in the next step.
 
 ## 8. Add the secrets
 
@@ -166,10 +178,10 @@ Still in the `server` folder, run (one command per line is fine; values with spa
 ```sh
 supabase secrets set STRIPE_SECRET_KEY=sk_test_…
 supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_… STRIPE_PORTAL_CONFIGURATION=bpc_…
-supabase secrets set RESEND_API_KEY=re_… EMAIL_FROM="Tabfold <hello@tabfold.app>"
+supabase secrets set SMTP_USER=hello@truewidgets.com SMTP_PASS=<Zoho app password> EMAIL_FROM="Tabfold <hello@truewidgets.com>"
 supabase secrets set ANTHROPIC_API_KEY=sk-ant-…
 supabase secrets set ALLOWED_ORIGINS=chrome-extension://<Chrome id>
-supabase secrets set SHARE_BASE_URL=https://tabfold.app
+supabase secrets set SHARE_BASE_URL=https://tabfold.truewidgets.com
 ```
 
 | Secret | What it is | Needed for |
@@ -178,11 +190,14 @@ supabase secrets set SHARE_BASE_URL=https://tabfold.app
 | `STRIPE_WEBHOOK_SECRET` | The webhook's signing secret (`whsec_…`), printed by the setup script | Payments showing up |
 | `STRIPE_PORTAL_CONFIGURATION` | Billing portal settings (`bpc_…`), printed by the setup script | Optional: without it Stripe uses its default portal |
 | `STRIPE_AUTOMATIC_TAX` | `true` to add tax at checkout with Stripe Tax | Optional |
-| `RESEND_API_KEY` | Resend API key (`re_…`) | Sign-in and trial emails |
-| `EMAIL_FROM` | The sender, on your verified domain | Sign-in and trial emails |
+| `SMTP_USER` | The Zoho mailbox that sends, e.g. `hello@truewidgets.com` | Sign-in, trial and invitation emails |
+| `SMTP_PASS` | That mailbox's Zoho app password | Sign-in, trial and invitation emails |
+| `EMAIL_FROM` | The sender, e.g. `Tabfold <hello@truewidgets.com>`: the mailbox or one of its aliases | Sign-in, trial and invitation emails |
+| `SMTP_HOST` | Optional: defaults to `smtp.zoho.eu`; `smtp.zoho.com` for a zoho.com account | — |
+| `SMTP_PORT` | Optional: defaults to `465` (TLS). Supabase blocks 25 and 587 | — |
 | `ANTHROPIC_API_KEY` | Anthropic API key | Pro AI |
 | `ALLOWED_ORIGINS` | `chrome-extension://<id>`, comma separated for more than one (no spaces) | Everything (the extension is turned away without it) |
-| `SHARE_BASE_URL` | The public site's address, e.g. `https://tabfold.app` (no slash at the end). Defaults to `https://tabfold.app` | Shared folder links, the link in team invitations |
+| `SHARE_BASE_URL` | The public site's address, e.g. `https://tabfold.truewidgets.com` (no slash at the end). Defaults to `https://tabfold.truewidgets.com` | Shared folder links, the link in team invitations |
 | `CODE_SECRET` | A long random string (e.g. `openssl rand -hex 32`) for hashing sign-in codes, the trial fingerprints and the rate limits' keys. Defaults to the project's service role key. Set it once and never change it: a new one makes the kept trial fingerprints unrecognisable, so emails that had the trial could start it again | Recommended |
 | `PUBLIC_URL` | Optional: the server's address, if it isn't `https://<project id>.supabase.co/functions/v1/tabfold` | — |
 | `STRIPE_API_BASE` | Tests only: points the server at a pretend Stripe. Never set it on the real server | — |
@@ -249,7 +264,9 @@ Where to look when something's off:
 - Stripe: **Developers → Webhooks →** your endpoint shows every event sent and the server's answer.
   Stripe retries an answer other than 200 (for up to 3 days in live mode, a few hours in test mode).
 - Supabase: **Edge Functions → tabfold → Logs**.
-- Resend: **Emails** shows each email and whether it was delivered.
+- Zoho Mail: the sending mailbox's **Sent** folder has each email; bounces come back to its inbox.
+  The function's log names the step that failed (for example `SMTP answered 535 at AUTH`: a wrong app
+  password).
 
 `npm test` runs the server's own tests with a pretend database, Stripe, email service and Claude,
 so they need no accounts. `npm run e2e:pro` drives the whole thing in Chromium against a pretend
@@ -293,7 +310,7 @@ Prices change; check them again before launch.
 | Free users | Nothing: they never use the server. |
 | Supabase | $0 on the Free plan while developing and in beta; $25 a month on Pro from the day paid sync goes live. |
 | Stripe | Card fees (2.9% + 30¢ for US cards, more for international cards) plus 0.7% for subscriptions (Stripe Billing), and 0.5% more with Stripe Tax. On a $5 monthly charge that's roughly 10%; yearly plans cut this because the fixed fee is paid once. |
-| Resend | Free up to 3,000 emails a month (100 a day); $20 a month above that. One email per sign-in. |
+| Zoho Mail | Nothing extra: Truewidgets' existing mailbox. One email per sign-in or invitation, within the mailbox's daily sending limit. |
 | AI per Organise run (Claude Haiku 5.5, low effort) | About $0.002 for 100 tabs. Smart names and Copy as context are smaller calls. |
 | AI per Pro AI user | About $0.06 a month typically (30 runs); $0.60 at most, because of the 300-run monthly cap. Names and context are capped at 1,000 a month. |
 | Storage | A heavy user with 5,000 saved tabs is about 2 MB. Backups are full copies, one a day for 30 days, so an account uses up to about 31 times that: about 60 MB for a heavy user, a few MB for most. Supabase Pro includes 8 GB. |
@@ -374,7 +391,7 @@ rules usually require keeping invoices).
 
 | The extension says | Usually means |
 | --- | --- |
-| Couldn't send the code (502 `send-failed`) | Resend refused: check `RESEND_API_KEY`, that `EMAIL_FROM` uses the verified domain, and Resend's **Emails** page. |
+| Couldn't send the code (502 `send-failed`) | Zoho refused or couldn't be reached; the function's log names the step. `535 at AUTH`: `SMTP_USER` or the app password `SMTP_PASS` is wrong. `553 at MAIL FROM`: `EMAIL_FROM` isn't the mailbox or one of its aliases. `could not be reached`: check `SMTP_HOST` (`smtp.zoho.eu` or `smtp.zoho.com`) and that `SMTP_PORT` is 465. |
 | Not signed in (401) | This computer hasn't signed in, or signed out. Sign in with the email again. |
 | Needs Pro / Pro AI (402) | The plan doesn't include it. Check the subscription in Stripe and that its price has one of the lookup keys. |
 | A team member lost Pro AI | The team's subscription isn't live (check it in Stripe, under the owner's customer). |

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-// The public site (web/) has no build step: these check the files as Netlify will serve them.
+// The public site (web/) has no build step: these check the files as Vercel will serve them.
 
 interface NodeFs {
   readFileSync(path: string, encoding: 'utf8'): string;
@@ -12,12 +12,10 @@ const WEB = new URL('../../web/', import.meta.url).pathname;
 const read = (name: string) => fs.readFileSync(`${WEB}${name}`, 'utf8');
 
 describe('web/', () => {
-  it('has the pages, the settings and Netlify’s files', () => {
+  it('has the pages, the settings and Vercel’s file', () => {
     expect(fs.readdirSync(WEB).sort()).toEqual(
       [
         'README.md',
-        '_headers',
-        '_redirects',
         'config.js',
         'favicon.svg',
         'home.js',
@@ -27,12 +25,16 @@ describe('web/', () => {
         's.js',
         'style.css',
         'terms.html',
+        'vercel.json',
       ].sort(),
     );
   });
 
   it('sends every /s/<id> to s.html, and /privacy and /terms to their pages', () => {
-    expect(read('_redirects').trim().split('\n')).toEqual(['/s/*  /s.html  200', '/privacy  /privacy.html  200', '/terms  /terms.html  200']);
+    const vercel = JSON.parse(read('vercel.json'));
+    expect(vercel.rewrites).toEqual([{ source: '/s/:id', destination: '/s.html' }]);
+    // privacy.html is served at /privacy, terms.html at /terms.
+    expect(vercel.cleanUrls).toBe(true);
   });
 
   it('loads only its own files, by absolute paths (s.html is served at /s/<id>)', () => {
@@ -42,7 +44,7 @@ describe('web/', () => {
       const assets = refs.filter((ref) => /\.(js|css|svg)$/.test(ref));
       expect(assets.length, page).toBeGreaterThan(0);
       for (const asset of assets) expect(asset, `${page}: ${asset}`).toMatch(/^\/[a-z.]+$/);
-      // No inline script, style or event handler: the Content-Security-Policy in _headers allows none.
+      // No inline script, style or event handler: the Content-Security-Policy in vercel.json allows none.
       expect(html, page).not.toMatch(/<script>|<style>|\sstyle="|\son[a-z]+="/);
     }
   });
@@ -61,8 +63,12 @@ describe('web/', () => {
   });
 
   it('keeps shared folders out of search engines and sends no referrer', () => {
-    expect(read('_headers')).toMatch(/\/s\/\*\n\s+X-Robots-Tag: noindex/);
-    expect(read('_headers')).toContain('Referrer-Policy: no-referrer');
+    const headers: { source: string; headers: { key: string; value: string }[] }[] = JSON.parse(read('vercel.json')).headers;
+    const on = (source: string) => Object.fromEntries(headers.find((rule) => rule.source === source)!.headers.map((h) => [h.key, h.value]));
+    expect(on('/s/(.*)')['X-Robots-Tag']).toBe('noindex');
+    expect(on('/s(.html)?')['X-Robots-Tag']).toBe('noindex');
+    expect(on('/(.*)')['Referrer-Policy']).toBe('no-referrer');
+    expect(on('/(.*)')['Content-Security-Policy']).toContain("script-src 'self';");
     expect(read('s.html')).toContain('<meta name="robots" content="noindex">');
     expect(read('s.html')).toContain('<meta name="referrer" content="no-referrer">');
   });
@@ -81,9 +87,9 @@ describe('web/', () => {
 
   it('marks every placeholder the owner fills in, and has the ones LAUNCH.md lists', () => {
     const placeholders = (page: string) => [...read(page).matchAll(/<span class="placeholder">(\[[^\]<]+\])<\/span>/g)].map((m) => m[1]);
-    expect(new Set(placeholders('privacy.html'))).toEqual(new Set(['[Effective date]', '[Company or owner name]', '[Server region]', '[Contact email]']));
+    expect(new Set(placeholders('privacy.html'))).toEqual(new Set(['[Effective date]', '[Server region]', '[Contact email]']));
     expect(new Set(placeholders('terms.html'))).toEqual(
-      new Set(['[Effective date]', '[Company or owner name]', '[Country/State for governing law]', '[Contact email]']),
+      new Set(['[Effective date]', '[Country/State for governing law]', '[Contact email]']),
     );
     for (const page of ['privacy.html', 'terms.html']) {
       // No square-bracketed text outside a marked placeholder.

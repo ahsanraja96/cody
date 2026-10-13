@@ -23,13 +23,13 @@ function connectSources(): string {
 }
 
 /**
- * The site that shows shared folders (WXT_SHARE_ORIGIN, default https://tabfold.app). Its pages may
+ * The site that shows shared folders (WXT_SHARE_ORIGIN, default https://tabfold.truewidgets.com). Its pages may
  * ask Tabfold to "Save to my Tabfold" (externally_connectable; no install warning). Match patterns
  * take no port, so a local test server's port is dropped.
  */
 function shareMatches(): string[] {
   const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
-  const value = env.WXT_SHARE_ORIGIN?.trim() || 'https://tabfold.app';
+  const value = env.WXT_SHARE_ORIGIN?.trim() || 'https://tabfold.truewidgets.com';
   let url: URL;
   try {
     url = new URL(value);

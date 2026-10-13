@@ -74,11 +74,11 @@ Teams ($10 a person a month, or $96 a person a year): Pro AI for everyone, plus 
 Payments go through Stripe. Cancel any time. When a plan ends, nothing is taken away.
 
 PRIVACY
-Tabfold never reads what's on your pages: it has no access to websites and runs no scripts in them. On Free, your folded tabs stay on your computer, and your newest ones go to your own Chrome sync (you can turn that off). With a paid plan, your folded tabs' titles and addresses are kept on Tabfold's server to sync your computers. The AI features send only tab titles and sites, never pages, never Incognito tabs. No ads, no analytics, and your data is never sold. Privacy policy: https://tabfold.app/privacy
+Tabfold never reads what's on your pages: it has no access to websites and runs no scripts in them. On Free, your folded tabs stay on your computer, and your newest ones go to your own Chrome sync (you can turn that off). With a paid plan, your folded tabs' titles and addresses are kept on Tabfold's server to sync your computers. The AI features send only tab titles and sites, never pages, never Incognito tabs. No ads, no analytics, and your data is never sold. Privacy policy: https://tabfold.truewidgets.com/privacy
 ```
 
 Keep the prices in step with `server/scripts/stripe-setup.mjs` and the plans page. If the public site
-isn't at `https://tabfold.app`, change the privacy policy's address in the last line.
+isn't at `https://tabfold.truewidgets.com`, change the privacy policy's address in the last line.
 
 ## Other fields
 
@@ -89,7 +89,7 @@ isn't at `https://tabfold.app`, change the privacy policy's address in the last 
 | Small promo tile | `store/images/promo-small-440x280.png` |
 | Marquee promo tile | Leave empty (optional) |
 | Official URL | Leave empty, unless the site's domain is verified in Google Search Console for this developer account |
-| Homepage URL | `https://tabfold.app` (the public site; your own domain if different) |
-| Support URL | `https://tabfold.app` or a `mailto:` of `[Contact email]` |
+| Homepage URL | `https://tabfold.truewidgets.com` (the public site; your own domain if different) |
+| Support URL | `https://tabfold.truewidgets.com` or a `mailto:` of `[Contact email]` |
 | Mature content | No |
-| Privacy policy URL (Privacy tab) | `https://tabfold.app/privacy` |
+| Privacy policy URL (Privacy tab) | `https://tabfold.truewidgets.com/privacy` |

@@ -1082,8 +1082,8 @@ try {
   check('Free, signed out: no "Delete my Tabfold account…"', !(await textOf(ui)).includes('Delete my Tabfold account'));
   const policy = await ui.evaluate(() => [...document.querySelectorAll('nav[aria-label="Tabfold’s policies"] a')].map((a) => [a.textContent.trim(), a.href]));
   check(
-    '"Privacy" and "Terms" link to https://tabfold.app/privacy and /terms',
-    JSON.stringify(policy) === JSON.stringify([['Privacy', 'https://tabfold.app/privacy'], ['Terms', 'https://tabfold.app/terms']]),
+    '"Privacy" and "Terms" link to https://tabfold.truewidgets.com/privacy and /terms',
+    JSON.stringify(policy) === JSON.stringify([['Privacy', 'https://tabfold.truewidgets.com/privacy'], ['Terms', 'https://tabfold.truewidgets.com/terms']]),
     JSON.stringify(policy),
   );
   const toolbar = () =>

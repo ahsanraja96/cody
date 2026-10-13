@@ -230,8 +230,10 @@ reaches the extension.
 | `STRIPE_WEBHOOK_SECRET` | The webhook endpoint's signing secret (`whsec_…`), printed by the setup script |
 | `STRIPE_AUTOMATIC_TAX` | `true` to turn on Stripe Tax at checkout (optional) |
 | `STRIPE_PORTAL_CONFIGURATION` | Billing portal configuration id (`bpc_…`), printed by the setup script (optional) |
-| `RESEND_API_KEY` | Resend API key, for the sign-in emails |
-| `EMAIL_FROM` | Sender, e.g. `Tabfold <hello@tabfold.app>` (a domain verified in Resend) |
+| `SMTP_USER` | The Zoho Mail mailbox that sends the sign-in and invitation emails |
+| `SMTP_PASS` | Its Zoho app password |
+| `EMAIL_FROM` | Sender, e.g. `Tabfold <hello@truewidgets.com>` (the mailbox or one of its aliases) |
+| `SMTP_HOST`, `SMTP_PORT` | Optional: default `smtp.zoho.eu` and `465` (TLS; Supabase blocks 25 and 587) |
 | `ANTHROPIC_API_KEY` | For Pro AI |
 | `ALLOWED_ORIGINS` | `chrome-extension://<id>` of the store copy (and the development copy), comma separated |
 | `CODE_SECRET` | Optional but recommended: the key for hashing sign-in codes and (1.0) the trial fingerprints (defaults to the service role key); set it once and keep it |
@@ -324,7 +326,7 @@ no team: 404 `server`. An owner's route asked by a member: 403 `server`.
 ## Share a folder (Pro)
 
 A shared folder is a public, read-only page at `<SHARE_BASE_URL>/s/<id>` (default
-`https://tabfold.app`, a small static site in `web/`). Anyone with the link sees the folder's name and
+`https://tabfold.truewidgets.com`, a small static site in `web/`). Anyone with the link sees the folder's name and
 its pages' titles and addresses; nothing else.
 
 - `POST /shares` (Pro) body `{ name, color, tabs: [{ title, url }], live: boolean }` (at most 1,000
@@ -369,7 +371,7 @@ its pages' titles and addresses; nothing else.
 
 | Name | What |
 | --- | --- |
-| `SHARE_BASE_URL` | Where shared pages live, e.g. `https://tabfold.app` (the `web/` site); also the link in team invitations. Default `https://tabfold.app` |
+| `SHARE_BASE_URL` | Where shared pages live, e.g. `https://tabfold.truewidgets.com` (the `web/` site); also the link in team invitations. Default `https://tabfold.truewidgets.com` |
 
 The Stripe webhook also handles `checkout.session.async_payment_succeeded` (a Pro for life payment
 that completed before it was paid); `server/scripts/stripe-setup.mjs` adds it to the endpoint.
