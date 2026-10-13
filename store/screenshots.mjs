@@ -1,10 +1,12 @@
-// The Chrome Web Store images for Tabfold: five 1280 × 800 screenshots and the 440 × 280 small promo
-// tile, saved to store/images/ (not committed: store/.gitignore). Run from the repository root:
+// The Chrome Web Store images for Tabfold: five 1280 × 800 screenshots, the 440 × 280 small promo
+// tile and the 1400 × 560 marquee tile, saved to store/images/ (not committed: store/.gitignore). Run
+// from the repository root:
 //
 //   node store/screenshots.mjs                    builds a store-like copy into store/.build, then shoots
 //   node store/screenshots.mjs --use-build        uses .output/chrome-mv3 as it is (run `npm run build` first)
 //   node store/screenshots.mjs --use-build=<dir>  uses another build
 //   node store/screenshots.mjs --out=<dir>        writes somewhere else than store/images
+//   node store/screenshots.mjs --only=marquee     takes only the images whose label has this word
 //
 // It starts Chromium with a fresh profile (launchChrome from e2e/cdp.mjs; set CHROME_PATH if it
 // can't find one), writes realistic demo data into the extension (three folders, one starred with a
@@ -670,6 +672,33 @@ async function promoTile() {
   );
 }
 
+// The 1400 × 560 marquee promo tile: the small tile's look, with the full list beside the words.
+async function marqueeTile() {
+  const name = 'marquee-1400x560.png';
+  const shot = path.join(OUT, '1-full-list.png');
+  if (!existsSync(shot)) {
+    skipped.push(`${name}: needs 1-full-list.png in the same folder (take the full list first)`);
+    return;
+  }
+  const chip = (text) =>
+    `<span style="padding:8px 16px;border-radius:999px;background:rgba(255,255,255,.16);color:#fff;font-size:17px;font-weight:600">${text}</span>`;
+  await compose(
+    name,
+    `<!doctype html><meta charset="utf-8"><body style="margin:0;width:1400px;height:560px;overflow:hidden;position:relative;background:linear-gradient(150deg,#5b66dd 0%,#4f5bd5 45%,#3d48b8 100%);${FONT}">
+    <div style="position:absolute;left:72px;top:64px;display:flex;align-items:center;gap:14px;color:#fff;font-weight:650;font-size:32px">
+      <span style="width:52px;height:52px;border-radius:14px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center">${LOGO.replace('width="18" height="18"', 'width="28" height="28"')}</span>Tabfold
+    </div>
+    <div style="position:absolute;left:72px;top:160px;width:500px;color:#fff;font-size:54px;line-height:1.1;font-weight:650;letter-spacing:-.02em">Fold your tabs, find them later.</div>
+    <div style="position:absolute;left:72px;top:300px;width:470px;color:rgba(255,255,255,.85);font-size:21px;line-height:1.45">One list with folders, the memory back, and any tab again in a second, on every computer.</div>
+    <div style="position:absolute;left:72px;top:420px;display:flex;gap:10px">${chip('Folders')}${chip('Side panel')}${chip('Search')}${chip('Sync')}</div>
+    <div style="position:absolute;left:640px;top:72px;width:704px;height:440px;border-radius:14px;overflow:hidden;background:#fff;box-shadow:0 2px 8px rgba(10,12,40,.18),0 30px 70px rgba(10,12,40,.35)">
+      <img src="${pathToFileURL(shot).href}" style="display:block;width:704px;height:440px" alt="">
+    </div>
+    </body>`,
+    { width: 1400, height: 560 },
+  );
+}
+
 let list = null;
 for (const [label, step] of [
   ['full list', async () => (list = await shotFullList())],
@@ -678,7 +707,10 @@ for (const [label, step] of [
   ['folders and drag', () => shotFoldersDrag(list)],
   ['plans', () => shotPlans(list)],
   ['promo tile', promoTile],
+  ['marquee tile', marqueeTile],
 ]) {
+  // --only=marquee (or any part of a label) takes just those images, from the ones already in --out.
+  if (typeof flag('only') === 'string' && !label.includes(flag('only'))) continue;
   try {
     await step();
   } catch (error) {

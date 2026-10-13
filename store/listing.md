@@ -87,7 +87,7 @@ isn't at `https://tabfold.truewidgets.com`, change the privacy policy's address 
 | Store icon | `public/icon/128.png` (128 × 128, artwork 96 × 96 with transparent padding) |
 | Screenshots | `store/images/1-full-list.png` … `5-plans.png` (1280 × 800, in that order) |
 | Small promo tile | `store/images/promo-small-440x280.png` |
-| Marquee promo tile | Leave empty (optional) |
+| Marquee promo tile | `store/images/marquee-1400x560.png` (1400 × 560) |
 | Official URL | Leave empty, unless the site's domain is verified in Google Search Console for this developer account |
 | Homepage URL | `https://tabfold.truewidgets.com` (the public site; your own domain if different) |
 | Support URL | `https://tabfold.truewidgets.com` (support email: hello@truewidgets.com) |
