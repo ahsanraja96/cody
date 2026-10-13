@@ -94,11 +94,23 @@ function detail(error: unknown, name: string): number | undefined {
   return error instanceof CommandError ? error.details?.[name] : undefined;
 }
 
+/**
+ * A request that never got an answer. The browser can't tell a dropped connection from a server
+ * that turned the request away (a wrong `ALLOWED_ORIGINS`, say), so "offline" only when it knows
+ * it is.
+ */
+function offlineText(): string {
+  const online = typeof navigator !== 'undefined' && navigator.onLine === true;
+  return online
+    ? 'Couldn’t reach Tabfold’s server. Check your connection, then try again in a moment.'
+    : 'You’re offline. Connect to the internet, then try again.';
+}
+
 /** What to tell people when a Pro request fails, by `ProErrorCode`; otherwise the worker's message. */
 export function proErrorText(error: unknown): string {
   switch (errorCode(error)) {
     case 'offline':
-      return 'You’re offline. Connect to the internet, then try again.';
+      return offlineText();
     case 'server':
       return 'Tabfold’s server didn’t answer. Try again in a moment.';
     case 'ai-failed':
@@ -163,7 +175,7 @@ export function signinErrorText(error: unknown): string {
     case 'send-failed':
       return 'Couldn’t send the code. Check your connection and try again.';
     case 'offline':
-      return 'You’re offline. Connect to the internet, then try again.';
+      return offlineText();
     case 'invalid-email':
       return 'That doesn’t look like an email address.';
     case 'rate-limited':

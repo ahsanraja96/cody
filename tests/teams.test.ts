@@ -277,6 +277,15 @@ describe('the Team section’s words', () => {
       'A team can have up to 100 people, invitations included.',
     );
     expect(teamErrorText(new CommandError('x', 'offline'))).toBe('You’re offline. Connect to the internet, then try again.');
+    // Online, yet no answer (the server turned the request away): don't blame the connection.
+    vi.stubGlobal('navigator', { onLine: true });
+    try {
+      expect(teamErrorText(new CommandError('x', 'offline'))).toBe(
+        'Couldn’t reach Tabfold’s server. Check your connection, then try again in a moment.',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
