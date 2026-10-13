@@ -32,9 +32,9 @@ describe('web/', () => {
 
   it('sends every /s/<id> to s.html, and /privacy and /terms to their pages', () => {
     const vercel = JSON.parse(read('vercel.json'));
-    expect(vercel.rewrites).toEqual([{ source: '/s/:id', destination: '/s.html' }]);
-    // privacy.html is served at /privacy, terms.html at /terms.
+    // With clean URLs, s.html is /s (a rewrite to /s.html finds nothing), privacy.html is /privacy.
     expect(vercel.cleanUrls).toBe(true);
+    expect(vercel.rewrites).toEqual([{ source: '/s/:id', destination: '/s' }]);
   });
 
   it('loads only its own files, by absolute paths (s.html is served at /s/<id>)', () => {

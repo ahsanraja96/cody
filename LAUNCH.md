@@ -1,14 +1,15 @@
 # Launching Tabfold 1.0
 
-The go-live checklist, in order. Each step happens in your own accounts; nothing here has been done
-for you, and no ids or keys are filled in. The detailed set-up is in
-[`server/README.md`](server/README.md) (the server, Stripe, Resend, Anthropic) and
+The go-live checklist, in order. Each step happens in your own accounts; the boxes already ticked
+were done for you through the connectors, and no keys are written here. The detailed set-up is in
+[`server/README.md`](server/README.md) (the server, Stripe, Zoho Mail, Anthropic) and
 [`web/README.md`](web/README.md) (the public site); this list says when to do each part and what to
 check. Tick the boxes as you go.
 
-You need: a domain (below, `tabfold.app`; use yours everywhere it appears), and accounts at
-supabase.com, stripe.com, resend.com, console.anthropic.com, netlify.com and a Google account for
-the Chrome Web Store. Keep every key in a password manager; none of them goes in the repository.
+Tabfold lives under Truewidgets: the site at `https://tabfold.truewidgets.com` (Vercel), payments in
+the Truewidgets Stripe account, email from Truewidgets' Zoho Mail. You also need accounts at
+supabase.com and console.anthropic.com, and a Google account for the Chrome Web Store. Keep every
+key in a password manager; none of them goes in the repository.
 
 ## 1. Fill in the placeholders
 
@@ -17,7 +18,7 @@ The privacy policy and terms have highlighted placeholders. Replace each
 
 | Placeholder | Where | What to put |
 | --- | --- | --- |
-| `[Contact email]` | `web/privacy.html`, `web/terms.html`; the store's Support URL (`store/listing.md`) | An address you read, e.g. `privacy@tabfold.app` (it can be the same for support) |
+| `[Contact email]` | `web/privacy.html`, `web/terms.html`; the store's Support URL (`store/listing.md`) | An address you read, e.g. `hello@truewidgets.com` (it can be the same for support) |
 | `[Effective date]` | `web/privacy.html`, `web/terms.html` | The day you publish them, e.g. 20 October 2026 |
 | `[Country/State for governing law]` | `web/terms.html` | Where your business is, e.g. "England and Wales", "the State of Delaware, USA" |
 | `[Server region]` | `web/privacy.html` | Your Supabase project's region (step 2), e.g. "the EU (Frankfurt)" |
@@ -39,8 +40,8 @@ has a suffix (Ltd, LLC…), add it in both pages.
 
 ## 2. Supabase: the database and the server
 
-Follow `server/README.md` steps 1 to 3, then 8 and 9 after Stripe, Resend and Anthropic (steps 3–5
-here) give you their keys.
+Follow `server/README.md` steps 1 to 3, then 8 and 9 after Stripe, Zoho Mail and Anthropic (steps
+3–5 here) give you their keys.
 
 - [ ] Project created; its **region** written into `[Server region]`.
 - [ ] `cd server && supabase link --project-ref <project id> && supabase db push` applies all five
@@ -51,7 +52,7 @@ here) give you their keys.
 - [ ] Upgrade the project to **Pro** before the first paying user (Free projects pause after a week
   without activity), and keep the **spend cap** on.
 - [ ] Secrets set (server/README.md step 8): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
-  `STRIPE_PORTAL_CONFIGURATION`, `RESEND_API_KEY`, `EMAIL_FROM`, `ANTHROPIC_API_KEY`,
+  `STRIPE_PORTAL_CONFIGURATION`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, `ANTHROPIC_API_KEY`,
   `SHARE_BASE_URL=https://tabfold.truewidgets.com`, optionally `STRIPE_AUTOMATIC_TAX=true`. `ALLOWED_ORIGINS`
   comes in step 8, once the store gives the extension its id. Never set `STRIPE_API_BASE` on the real
   server. `supabase secrets list` shows the names.
@@ -105,14 +106,20 @@ Still to do:
 - [ ] **Settings → Customer emails**: receipts for successful payments and refunds on; Billing's
   revenue recovery emails on.
 
-## 4. Resend (sign-in codes and team invitations)
+## 4. Zoho Mail (sign-in codes and team invitations)
 
-server/README.md step 5.
+server/README.md step 5. Truewidgets' Zoho Mail already sends for truewidgets.com (its SPF and DKIM
+are set up), so there's no domain to verify.
 
-- [ ] **Domains → Add domain** `tabfold.app`; add the DNS records it shows at your registrar;
-  **Verify** turns green.
-- [ ] An API key with **Sending access** only → `RESEND_API_KEY`; `EMAIL_FROM="Tabfold <hello@tabfold.app>"`.
-- [ ] A test code reaches a Gmail and an Outlook inbox, not spam.
+- [ ] Choose the sending mailbox, e.g. `hello@truewidgets.com` → `SMTP_USER`. Optionally an alias
+  for Tabfold (`tabfold@truewidgets.com`) in Zoho Mail's settings.
+- [ ] Zoho Accounts → **Security → App passwords** → generate "Tabfold server" → `SMTP_PASS`.
+- [ ] `EMAIL_FROM="Tabfold <hello@truewidgets.com>"` (the mailbox or its alias, nothing else).
+- [ ] The account is on zoho.eu (you sign in at mail.zoho.eu)? Nothing more: the server uses
+  `smtp.zoho.eu:465`. On zoho.com: `SMTP_HOST=smtp.zoho.com`.
+- [ ] After step 2's deploy, a test code reaches a Gmail and an Outlook inbox, not spam. If it
+  doesn't arrive, the function's log names the step (`535 at AUTH`: wrong app password; `553 at
+  MAIL FROM`: `EMAIL_FROM` isn't the mailbox or its alias; `could not be reached`: the host or port).
 
 ## 5. Anthropic (Pro AI)
 
@@ -122,15 +129,25 @@ server/README.md step 6.
 - [ ] **Settings → Limits**: a monthly spend limit (start around $50; a heavy Pro AI user costs well
   under $1 a month) and an email alert below it.
 
-## 6. The public site on Netlify
+## 6. The public site on Vercel
 
-Follow `web/README.md`.
+Done on 13 October 2026 through the Vercel connector, in Truewidgets' Vercel team:
 
+- [x] Project **tabfold**, deploying the `web` folder of this repository (Root Directory `web`, no
+  build step). Live at `https://tabfold.vercel.app`: the home page, `/privacy`, `/terms` and
+  `/s/<id>` (with `vercel.json`'s headers).
+- [x] Domain `tabfold.truewidgets.com` added to the project.
+
+Still to do:
+
+- [ ] **DNS at GoDaddy** (truewidgets.com's DNS is there): add a **CNAME** record, name `tabfold`,
+  value `cname.vercel-dns.com`. Vercel then issues the HTTPS certificate by itself; the project's
+  **Settings → Domains** turns green.
 - [ ] In `web/config.js`: `API_URL` = `https://<project id>.supabase.co/functions/v1/tabfold`.
-  Leave `EXTENSION_ID` empty and `STORE_URL` as it is until step 9.
-- [ ] Deploy the `web` folder; add the domain `tabfold.app` (**Domain management**); HTTPS is on.
-- [ ] `https://tabfold.truewidgets.com/privacy` and `https://tabfold.truewidgets.com/terms` open, with no placeholder left;
-  the home page's footer links both.
+  Leave `EXTENSION_ID` empty and `STORE_URL` as it is until step 9. Push, and deploy again
+  (`web/README.md`, "Deploy to Vercel").
+- [ ] `https://tabfold.truewidgets.com/privacy` and `/terms` open, with no placeholder left; the home
+  page's footer links both.
 
 ## 7. Build the store zip
 
@@ -191,7 +208,7 @@ After the 1.0 branches are merged and every test passes (`npm run compile`, `npm
 
 - [ ] In `web/config.js`: `EXTENSION_ID` = the id, `STORE_URL` =
   `https://chromewebstore.google.com/detail/<id>` (the address the listing shows). Deploy the site
-  again (drag the folder, or push).
+  again (`web/README.md`, "Deploy to Vercel").
 - [ ] Publish the item if you chose manual publishing.
 
 ## 10. Live smoke test
@@ -225,11 +242,11 @@ Look daily:
 - **Stripe**: **Developers → Webhooks →** the endpoint: every delivery 200 (failed ones retry for 3
   days; fix the cause, then **Resend**); **Payments** for failures and disputes; new subscriptions
   match people on Pro in Supabase.
-- **Resend**: **Emails** for bounces and complaints (a rising bounce rate puts sending at risk);
-  delivery times.
+- **Zoho Mail**: the sending mailbox's inbox for bounces, and that it stays within Zoho's daily
+  sending limit (if it gets close, ZeptoMail works with the same code: server/README.md step 5).
 - **Anthropic**: **Usage** and spend against the limit; rate-limit errors in the server log.
 - **Chrome Web Store**: reviews and the support tab; installs and uninstalls in **Analytics**.
-- **Netlify**: the site is up; bandwidth.
+- **Vercel**: the project **tabfold** is up; its usage.
 
 ## Worth knowing
 
