@@ -42,7 +42,7 @@ FOLD YOUR TABS
 • Shortcuts: Ctrl+Shift+S folds (⌘+Shift+S on a Mac), Alt+Shift+S folds this tab, Alt+Shift+Z snoozes it, Alt+Shift+F opens Tabfold.
 
 ONE LIST, WITH FOLDERS
-• Your folders come first, starred ones at the top, each with an optional one-line note. Everything else sorts itself by kind of site: Dev, Docs, Mail & chat, Social, Video, AI, Shopping, Reading.
+• Your folders come first, starred ones at the top, each with an optional one-line note. Everything else sorts itself by kind of site, such as docs, mail or video.
 • Drag tabs onto a folder, or use Move to. Click a tab to open it; "Open all" opens a folder as a tab group.
 • Snooze a tab until later today, tomorrow, the weekend or a time you pick: it comes back by itself.
 
@@ -63,8 +63,8 @@ KEEP YOUR WINDOWS TIDY
 
 MORE
 • Same list on your other computers through Chrome sync, with no account.
-• Import from OneTab, Toby, Workona, Session Buddy, a Chrome bookmarks folder or a list of links.
-• Export as a web page. Duplicates, crash recovery, light and dark, keyboard and screen-reader friendly.
+• Bring your tabs over from another tab manager's export, a Chrome bookmarks folder or a list of links.
+• Export your list as a web page. Tabfold also finds duplicates, recovers your tabs after a crash, follows light or dark mode, and works with the keyboard and screen readers.
 
 FREE AND PAID
 Free: 500 folded tabs, 3 folders, 3 snoozed tabs at a time and 1 Fold automatically rule, with everything above. No account.
@@ -77,7 +77,10 @@ PRIVACY
 Tabfold never reads what's on your pages: it has no access to websites and runs no scripts in them. On Free, your folded tabs stay on your computer, and your newest ones go to your own Chrome sync (you can turn that off). With a paid plan, your folded tabs' titles and addresses are kept on Tabfold's server to sync your computers. The AI features send only tab titles and sites, never pages, never Incognito tabs. No ads, no analytics, and your data is never sold. Privacy policy: https://tabfold.truewidgets.com/privacy
 ```
 
-Keep the prices in step with `server/scripts/stripe-setup.mjs` and the plans page. If the public site
+Keep the prices in step with `server/scripts/stripe-setup.mjs` and the plans page. Don't name other
+products in the listing (text or images): the first submission was rejected as "keyword spam" for
+naming the tab managers Tabfold imports from, and for long lists of words. The import screen itself
+may name them; the listing may not. If the public site
 isn't at `https://tabfold.truewidgets.com`, change the privacy policy's address in the last line.
 
 ## Other fields

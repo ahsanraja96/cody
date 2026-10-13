@@ -168,7 +168,7 @@ Still to do:
 After the 1.0 branches are merged and every test passes (`npm run compile`, `npm test`,
 `npx wxt build`, `node e2e/smoke.mjs`, `node e2e/folders.mjs`, `npm run e2e:pro`):
 
-- [x] `package.json` says `"version": "1.0.0"` (the manifest takes it from there).
+- [x] `package.json` says `"version": "1.0.1"` (1.0.0 was the first, rejected upload) (the manifest takes it from there).
 - [ ] Optional: the store summary comes from the manifest's `description` in `wxt.config.ts`;
   `store/listing.md` suggests a new one.
 - [x] Built against the live server and site on 13 October 2026 (the manifest checked as below):
@@ -177,14 +177,14 @@ After the 1.0 branches are merged and every test passes (`npm run compile`, `npm
   WXT_TABFOLD_API=https://<project id>.supabase.co/functions/v1/tabfold WXT_SHARE_ORIGIN=https://tabfold.truewidgets.com npm run zip
   ```
 
-  This makes `.output/tabfold-1.0.0-chrome.zip` from `.output/chrome-mv3`.
+  This makes `.output/tabfold-1.0.1-chrome.zip` from `.output/chrome-mv3`.
 - [x] Check the manifest it was made from:
 
   ```sh
   node -e "const m=require(process.argv[1]);console.log({version:m.version,permissions:m.permissions,optional:m.optional_permissions,hosts:m.host_permissions??'none',contentScripts:m.content_scripts??'none',connect:/connect-src ([^;]*)/.exec(m.content_security_policy.extension_pages)[1],site:m.externally_connectable.matches})" ./.output/chrome-mv3/manifest.json
   ```
 
-  Expect version `1.0.0`; permissions exactly `tabs, tabGroups, storage, unlimitedStorage, alarms,
+  Expect version `1.0.1`; permissions exactly `tabs, tabGroups, storage, unlimitedStorage, alarms,
   contextMenus, favicon, system.memory, sidePanel`; optional `bookmarks`; hosts and content scripts
   `none`; `connect` = `'self' https://<project id>.supabase.co`; site `https://tabfold.truewidgets.com/*`. Anything
   else: stop and find out why (the privacy tab in `store/privacy-practices.md` justifies exactly

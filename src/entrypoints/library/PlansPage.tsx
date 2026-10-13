@@ -489,7 +489,7 @@ export function PlansPage({ onBack }: { onBack: () => void }) {
           </Feature>
           <Feature>3 snoozed tabs, 1 auto-fold rule</Feature>
           <Feature>Chrome sync to your other computers</Feature>
-          <Feature>Ctrl+K, duplicates, import from OneTab, Toby, Workona</Feature>
+          <Feature>Ctrl+K, duplicates, import from other tab managers</Feature>
         </PlanCard>
 
         <PlanCard

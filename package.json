@@ -2,7 +2,7 @@
   "name": "tabfold",
   "description": "Save and restore tabs and whole windows, free memory, and find any tab by title, address or keyword.",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
     "dev": "wxt",
