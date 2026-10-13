@@ -90,6 +90,6 @@ isn't at `https://tabfold.truewidgets.com`, change the privacy policy's address 
 | Marquee promo tile | Leave empty (optional) |
 | Official URL | Leave empty, unless the site's domain is verified in Google Search Console for this developer account |
 | Homepage URL | `https://tabfold.truewidgets.com` (the public site; your own domain if different) |
-| Support URL | `https://tabfold.truewidgets.com` or a `mailto:` of `[Contact email]` |
+| Support URL | `https://tabfold.truewidgets.com` (support email: hello@truewidgets.com) |
 | Mature content | No |
 | Privacy policy URL (Privacy tab) | `https://tabfold.truewidgets.com/privacy` |

@@ -11,22 +11,13 @@ the Truewidgets Stripe account, email from Truewidgets' Zoho Mail. You also need
 supabase.com and console.anthropic.com, and a Google account for the Chrome Web Store. Keep every
 key in a password manager; none of them goes in the repository.
 
-## 1. Fill in the placeholders
+## 1. The privacy policy and terms
 
-The privacy policy and terms have highlighted placeholders. Replace each
-`<span class="placeholder">[…]</span>` with plain text (`web/README.md`, "Before you publish").
+Filled in on 13 October 2026: owner "Truewidgets, a division of Loom Factor Ltd", effective date
+13 October 2026, contact hello@truewidgets.com, governing law England and Wales, server region the
+United Kingdom (London).
 
-| Placeholder | Where | What to put |
-| --- | --- | --- |
-| `[Contact email]` | `web/privacy.html`, `web/terms.html`; the store's Support URL (`store/listing.md`) | An address you read, e.g. `hello@truewidgets.com` (it can be the same for support) |
-| `[Effective date]` | `web/privacy.html`, `web/terms.html` | The day you publish them, e.g. 20 October 2026 |
-| `[Country/State for governing law]` | `web/terms.html` | Where your business is, e.g. "England and Wales", "the State of Delaware, USA" |
-| `[Server region]` | `web/privacy.html` | Your Supabase project's region (step 2), e.g. "the EU (Frankfurt)" |
-
-The owner is filled in: "Truewidgets, a division of Loom Factor". If Loom Factor's registered name
-has a suffix (Ltd, LLC…), add it in both pages.
-
-- [ ] The other four filled in; `grep -n 'class="placeholder"' web/*.html` prints nothing.
+- [x] No placeholder left (`grep -n 'class="placeholder"' web/*.html` prints nothing).
 - [ ] Read both pages in full. They're plain-language drafts that match what Tabfold 1.0 does, not
   legal advice: have someone qualified look at them, especially refunds, the EU's 14-day
   withdrawal right for digital services, and the liability limits. They commit you to: telling
@@ -40,30 +31,38 @@ has a suffix (Ltd, LLC…), add it in both pages.
 
 ## 2. Supabase: the database and the server
 
-Follow `server/README.md` steps 1 to 3, then 8 and 9 after Stripe, Zoho Mail and Anthropic (steps
-3–5 here) give you their keys.
+Done on 13 October 2026 through the Supabase connector, in the **Truewidgets** organization:
 
-- [ ] Project created; its **region** written into `[Server region]`.
-- [ ] `cd server && supabase link --project-ref <project id> && supabase db push` applies all five
-  migrations, including `20261013000000_v10.sql` (a shared folder's note, account deletion) and
-  `20261014000000_v10_trials.sql` (one trial per email, clearing ended teams' folders). In
-  **Database → Functions** you should see `tabfold_account_delete` and `tabfold_team_sync_prune`, and
-  in **Table Editor** a `trial_used` table.
+- [x] Project **tabfold** (`wafuqionthouhbcbyjiv`), region London (eu-west-2). Server address:
+  `https://wafuqionthouhbcbyjiv.supabase.co/functions/v1/tabfold`.
+- [x] The first migration's tables. (The connector waits for a confirmation it can't show on
+  anything that deletes, drops or revokes, so the rest goes through the SQL Editor, below.)
+- [x] Function **tabfold** deployed with **Verify JWT** off (it checks device tokens and Stripe's
+  signature itself). Its code imports `server/supabase/functions/tabfold/index.ts` from this
+  repository at a pinned commit on GitHub; to deploy a newer version, change the commit in that one
+  line (Edge Functions → tabfold → Code), or run `supabase functions deploy tabfold --no-verify-jwt`
+  from `server/`. `…/tabfold/me` answers `{"error":"not-signed-in", …}`.
+
+Still to do:
+
+- [ ] **The rest of the database**: SQL Editor → New query → paste all of `tabfold-database.sql`
+  (the five migrations after those tables, in one transaction, plus the migration history so a
+  later `supabase db push` skips them) → **Run**. It was tested on a fresh Postgres: same schema as
+  running the five migrations, only the server's role can call the functions, the public API keys
+  can't read any of the 19 tables. Afterwards **Database → Functions** lists 16 `tabfold_…`
+  functions and **Table Editor** has `trial_used`.
+- [ ] **Secrets** (Edge Functions → Secrets → Add new secret; server/README.md step 8 says what each
+  is): `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, `SHARE_BASE_URL`, `CODE_SECRET`, `STRIPE_SECRET_KEY`,
+  `STRIPE_WEBHOOK_SECRET`, `STRIPE_PORTAL_CONFIGURATION`, `ANTHROPIC_API_KEY`, optionally
+  `STRIPE_AUTOMATIC_TAX=true`. `ALLOWED_ORIGINS` comes in step 8, once the store gives the extension
+  its id. Never set `STRIPE_API_BASE` on the real server.
+- [ ] `CODE_SECRET`: a long random string (64 characters from your password manager's generator),
+  set **once, before the first trial**, and kept in the password manager. It keys the sign-in codes,
+  the rate limits' keys and the trial fingerprints (one trial per email, even after an account is
+  deleted); changing it later lets emails that had the trial start it again. You also need it to
+  delete an account by hand (server/README.md, "What the server keeps").
 - [ ] Upgrade the project to **Pro** before the first paying user (Free projects pause after a week
   without activity), and keep the **spend cap** on.
-- [ ] Secrets set (server/README.md step 8): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
-  `STRIPE_PORTAL_CONFIGURATION`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, `ANTHROPIC_API_KEY`,
-  `SHARE_BASE_URL=https://tabfold.truewidgets.com`, optionally `STRIPE_AUTOMATIC_TAX=true`. `ALLOWED_ORIGINS`
-  comes in step 8, once the store gives the extension its id. Never set `STRIPE_API_BASE` on the real
-  server. `supabase secrets list` shows the names.
-- [ ] `CODE_SECRET`: a long random string (`openssl rand -hex 32`), set **once, before the first
-  trial**, and kept in your password manager. It keys the sign-in codes, the rate limits' keys and
-  the trial fingerprints (one trial per email, even after an account is deleted); changing it later
-  lets emails that had the trial start it again. You also need it to delete an account by hand (server/README.md, "What
-  the server keeps").
-- [ ] `supabase functions deploy tabfold --no-verify-jwt`, then
-  `https://<project id>.supabase.co/functions/v1/tabfold/me` in a browser answers
-  `{"error":"not-signed-in", …}`.
 
 ## 3. Stripe in live mode
 
@@ -92,14 +91,24 @@ Still to do:
 - [ ] **Keep Truewidgets' public details** (Settings → Business → Public details): don't rename
   the account to Tabfold, it would change the name on the other products too. Optionally add
   Tabfold's privacy and terms links to Tabfold's portal settings once the site is live.
-- [ ] **The webhook**, once the Supabase server exists, with the **live** key:
-  `STRIPE_SECRET_KEY=sk_live_… node server/scripts/stripe-setup.mjs --webhook-url https://<project id>.supabase.co/functions/v1/tabfold/stripe/webhook`.
-  It finds the products, prices and portal settings above and only adds the webhook. It prints the
-  `supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_… STRIPE_PORTAL_CONFIGURATION=bpc_…` line: run
-  it, plus `supabase secrets set STRIPE_SECRET_KEY=sk_live_…`.
-- [ ] **Developers → Webhooks**: the endpoint is the address above and listens to
+- [x] **The webhook** (`we_1UQ5ABINR0TE37QMkXEHphuV`), made through the connector: it sends
   `checkout.session.completed`, `checkout.session.async_payment_succeeded` and
-  `customer.subscription.created`, `.updated`, `.deleted`.
+  `customer.subscription.created`, `.updated`, `.deleted` to
+  `https://wafuqionthouhbcbyjiv.supabase.co/functions/v1/tabfold/stripe/webhook`, in the Stripe API
+  version the server is written for (2024-06-20).
+- [ ] Its **signing secret** (Developers → Webhooks → that endpoint → Signing secret → Reveal) →
+  the `STRIPE_WEBHOOK_SECRET` secret in Supabase. `STRIPE_PORTAL_CONFIGURATION` is
+  `bpc_1UQ3JiINR0TE37QMiS1O1D9V`.
+- [ ] **The server's key**: a **restricted key** (Developers → API keys → Create restricted key,
+  named "Tabfold server") rather than the account's secret key, since the account also runs
+  Truewidgets' other products. Permissions: Checkout Sessions **Write**, Customers **Write**,
+  Subscriptions **Write**, Prices **Read**, Products **Read**, Customer portal **Write**; everything
+  else None. It (`rk_live_…`) → `STRIPE_SECRET_KEY`.
+- [ ] **Truewidgets' other webhooks** also receive Tabfold's events (Stripe sends every event to
+  every endpoint that listens for it): `https://api.truewidgets.com/webhooks/stripe` says it ignores
+  other products; check that `https://app.truewidgets.com/stripe/webhook` does too, i.e. it ignores
+  checkouts whose `metadata.app` is `tabfold` and subscriptions to `tabfold-` prices, so a Tabfold
+  purchase doesn't also count as a Truewidgets app purchase.
 - [ ] **Tax**: either set up Stripe Tax (**Tax**: your address, registrations, default tax
   behaviour) and `supabase secrets set STRIPE_AUTOMATIC_TAX=true`, or decide with your accountant
   that you don't need it yet. Stripe Tax collects; registering and filing is up to you.

@@ -85,17 +85,17 @@ describe('web/', () => {
     }
   });
 
-  it('marks every placeholder the owner fills in, and has the ones LAUNCH.md lists', () => {
-    const placeholders = (page: string) => [...read(page).matchAll(/<span class="placeholder">(\[[^\]<]+\])<\/span>/g)].map((m) => m[1]);
-    expect(new Set(placeholders('privacy.html'))).toEqual(new Set(['[Effective date]', '[Server region]', '[Contact email]']));
-    expect(new Set(placeholders('terms.html'))).toEqual(
-      new Set(['[Effective date]', '[Country/State for governing law]', '[Contact email]']),
-    );
+  it('has every placeholder filled in: the owner, the date, the contact, the law and the region', () => {
     for (const page of ['privacy.html', 'terms.html']) {
-      // No square-bracketed text outside a marked placeholder.
-      const unmarked = read(page).replace(/<span class="placeholder">\[[^\]<]+\]<\/span>/g, '');
-      expect(unmarked, page).not.toMatch(/\[[A-Z][^\]]*\]/);
+      const html = read(page);
+      expect(html, page).not.toContain('class="placeholder"');
+      expect(html, page).not.toMatch(/\[[A-Z][^\]]*\]/);
+      expect(html, page).toContain('Truewidgets, a division of Loom Factor Ltd');
+      expect(html, page).toContain('Effective 13 October 2026');
+      expect(html, page).toContain('<a href="mailto:hello@truewidgets.com">hello@truewidgets.com</a>');
     }
+    expect(read('terms.html')).toContain('governed by the laws of England and Wales');
+    expect(read('privacy.html')).toContain('runs on Supabase (supabase.com) in\n    the United Kingdom (London).');
   });
 
   it('shows a shared folder’s note as text, under its name, only when there is one', () => {

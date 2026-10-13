@@ -25,14 +25,13 @@ shows its name, its note (when it has one) and its pages.
 
 Nothing in `config.js` is secret: anyone can read it.
 
-## Before you publish: the privacy policy and terms
+## The privacy policy and terms
 
-`privacy.html` and `terms.html` have placeholders, highlighted on the page, for you to replace with
-your own details (the owner, "Truewidgets, a division of Loom Factor", is filled in): `[Contact email]`, `[Effective date]`,
-`[Country/State for governing law]` (terms) and `[Server region]` (privacy: the region of your
-Supabase project, **Project Settings → General**). Search the two files for `class="placeholder"`,
-replace each `<span class="placeholder">[…]</span>` with plain text, and read both pages through:
-they describe what Tabfold 1.0 does, and they're plain-language drafts, not legal advice.
+`privacy.html` and `terms.html` are filled in for Tabfold 1.0: the owner (Truewidgets, a division
+of Loom Factor Ltd), the effective date (13 October 2026), the contact (hello@truewidgets.com), the
+governing law (England and Wales) and the server's region (the United Kingdom, London). They
+describe what Tabfold 1.0 does; they're plain-language drafts, not legal advice. When something
+changes, update the page and its date.
 
 ## Deploy to Vercel
 
