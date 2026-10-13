@@ -17,13 +17,15 @@ The privacy policy and terms have highlighted placeholders. Replace each
 
 | Placeholder | Where | What to put |
 | --- | --- | --- |
-| `[Company or owner name]` | `web/privacy.html`, `web/terms.html` | Your company's legal name, or your own name if you sell as a person |
 | `[Contact email]` | `web/privacy.html`, `web/terms.html`; the store's Support URL (`store/listing.md`) | An address you read, e.g. `privacy@tabfold.app` (it can be the same for support) |
 | `[Effective date]` | `web/privacy.html`, `web/terms.html` | The day you publish them, e.g. 20 October 2026 |
 | `[Country/State for governing law]` | `web/terms.html` | Where your business is, e.g. "England and Wales", "the State of Delaware, USA" |
 | `[Server region]` | `web/privacy.html` | Your Supabase project's region (step 2), e.g. "the EU (Frankfurt)" |
 
-- [ ] All five filled in; `grep -n 'class="placeholder"' web/*.html` prints nothing.
+The owner is filled in: "Truewidgets, a division of Loom Factor". If Loom Factor's registered name
+has a suffix (Ltd, LLC…), add it in both pages.
+
+- [ ] The other four filled in; `grep -n 'class="placeholder"' web/*.html` prints nothing.
 - [ ] Read both pages in full. They're plain-language drafts that match what Tabfold 1.0 does, not
   legal advice: have someone qualified look at them, especially refunds, the EU's 14-day
   withdrawal right for digital services, and the liability limits. They commit you to: telling

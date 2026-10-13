@@ -29,7 +29,7 @@ Nothing in `config.js` is secret: anyone can read it.
 ## Before you publish: the privacy policy and terms
 
 `privacy.html` and `terms.html` have placeholders, highlighted on the page, for you to replace with
-your own details: `[Company or owner name]`, `[Contact email]`, `[Effective date]`,
+your own details (the owner, "Truewidgets, a division of Loom Factor", is filled in): `[Contact email]`, `[Effective date]`,
 `[Country/State for governing law]` (terms) and `[Server region]` (privacy: the region of your
 Supabase project, **Project Settings → General**). Search the two files for `class="placeholder"`,
 replace each `<span class="placeholder">[…]</span>` with plain text, and read both pages through:
