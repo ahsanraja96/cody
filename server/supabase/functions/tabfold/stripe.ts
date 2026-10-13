@@ -8,8 +8,12 @@ import type { BillingInterval, Subscription } from '../_shared/plan.ts';
  * in the Edge Function, in tests and in plain Node.
  */
 
-/** The API version every request asks for. */
-export const STRIPE_VERSION = '2024-06-20';
+/**
+ * The API version every request asks for. 2025-03-31.basil is the oldest Stripe allows on an
+ * account with Managed Payments (Stripe as the merchant of record), as the Truewidgets account is.
+ * It keeps a subscription's period end on its items, which readSubscription reads.
+ */
+export const STRIPE_VERSION = '2025-03-31.basil';
 
 const PRICE_CACHE_MS = 10 * 60 * 1000;
 /** Webhook signatures older (or newer) than this are refused. */

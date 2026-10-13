@@ -52,11 +52,12 @@ Done on 13 October 2026 through the Supabase connector, in the **Truewidgets** o
 
 Still to do:
 
-- [ ] **Secrets** (Edge Functions → Secrets → Add new secret; server/README.md step 8 says what each
-  is): `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, `SHARE_BASE_URL`, `CODE_SECRET`, `STRIPE_SECRET_KEY`,
-  `STRIPE_WEBHOOK_SECRET`, `STRIPE_PORTAL_CONFIGURATION`, `ANTHROPIC_API_KEY`, optionally
-  `STRIPE_AUTOMATIC_TAX=true`. `ALLOWED_ORIGINS` comes in step 8, once the store gives the extension
-  its id. Never set `STRIPE_API_BASE` on the real server.
+- [x] **Secrets** (Edge Functions → Secrets; server/README.md step 8 says what each is): `SMTP_USER`,
+  `SMTP_PASS`, `EMAIL_FROM`, `SHARE_BASE_URL`, `CODE_SECRET`, `STRIPE_SECRET_KEY` (a restricted
+  key), `STRIPE_WEBHOOK_SECRET`, `STRIPE_PORTAL_CONFIGURATION`, `ANTHROPIC_API_KEY`. A real sign-in
+  code reached hello@truewidgets.com through Zoho on 13 October 2026. `ALLOWED_ORIGINS` comes in
+  step 8, once the store gives the extension its id. Never set `STRIPE_API_BASE` on the real
+  server.
 - [ ] `CODE_SECRET`: a long random string (64 characters from your password manager's generator),
   set **once, before the first trial**, and kept in the password manager. It keys the sign-in codes,
   the rate limits' keys and the trial fingerprints (one trial per email, even after an account is
@@ -95,8 +96,14 @@ Still to do:
 - [x] **The webhook** (`we_1UQ5ABINR0TE37QMkXEHphuV`), made through the connector: it sends
   `checkout.session.completed`, `checkout.session.async_payment_succeeded` and
   `customer.subscription.created`, `.updated`, `.deleted` to
-  `https://wafuqionthouhbcbyjiv.supabase.co/functions/v1/tabfold/stripe/webhook`, in the Stripe API
-  version the server is written for (2024-06-20).
+  `https://wafuqionthouhbcbyjiv.supabase.co/functions/v1/tabfold/stripe/webhook` (made with API
+  version 2024-06-20; that doesn't matter, because the server only takes each event's id and type
+  and reads the checkout or subscription from Stripe itself, in its own version).
+- [x] **Managed Payments**: the Truewidgets account has it on, so Stripe is the merchant of record
+  for Tabfold's sales too: it works out, collects and files sales tax and VAT, and handles fraud
+  and disputes. Stripe only allows API version `2025-03-31.basil` or later with it, which the server
+  now uses. Don't set `STRIPE_AUTOMATIC_TAX` (Managed Payments refuses Stripe Tax settings on a
+  checkout).
 - [ ] Its **signing secret** (Developers → Webhooks → that endpoint → Signing secret → Reveal) →
   the `STRIPE_WEBHOOK_SECRET` secret in Supabase. `STRIPE_PORTAL_CONFIGURATION` is
   `bpc_1UQ3JiINR0TE37QMiS1O1D9V`.
@@ -110,9 +117,6 @@ Still to do:
   other products; check that `https://app.truewidgets.com/stripe/webhook` does too, i.e. it ignores
   checkouts whose `metadata.app` is `tabfold` and subscriptions to `tabfold-` prices, so a Tabfold
   purchase doesn't also count as a Truewidgets app purchase.
-- [ ] **Tax**: either set up Stripe Tax (**Tax**: your address, registrations, default tax
-  behaviour) and `supabase secrets set STRIPE_AUTOMATIC_TAX=true`, or decide with your accountant
-  that you don't need it yet. Stripe Tax collects; registering and filing is up to you.
 - [ ] **Settings → Customer emails**: receipts for successful payments and refunds on; Billing's
   revenue recovery emails on.
 

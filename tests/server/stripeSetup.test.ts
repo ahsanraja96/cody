@@ -99,7 +99,7 @@ describe('stripe-setup.mjs', () => {
     const [endpoint] = [...fake.webhookEndpoints.values()];
     expect(endpoint).toMatchObject({
       url: WEBHOOK,
-      api_version: '2024-06-20',
+      api_version: '2025-03-31.basil',
       enabled_events: [
         'checkout.session.completed',
         'checkout.session.async_payment_succeeded',
@@ -112,7 +112,7 @@ describe('stripe-setup.mjs', () => {
     expect(out).toContain('test mode');
     expect(out).toContain(`supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_from_setup STRIPE_PORTAL_CONFIGURATION=${config!.id}`);
     expect(out).not.toContain(KEY);
-    expect(fake.requests.every((r) => r.stripeVersion === '2024-06-20')).toBe(true);
+    expect(fake.requests.every((r) => r.stripeVersion === '2025-03-31.basil')).toBe(true);
   });
 
   it('changes nothing it doesn’t need to on a second run', async () => {

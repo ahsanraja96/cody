@@ -189,7 +189,7 @@ supabase secrets set SHARE_BASE_URL=https://tabfold.truewidgets.com
 | `STRIPE_SECRET_KEY` | Stripe secret key (`sk_test_…`, later `sk_live_…`) | Checkout, billing |
 | `STRIPE_WEBHOOK_SECRET` | The webhook's signing secret (`whsec_…`), printed by the setup script | Payments showing up |
 | `STRIPE_PORTAL_CONFIGURATION` | Billing portal settings (`bpc_…`), printed by the setup script | Optional: without it Stripe uses its default portal |
-| `STRIPE_AUTOMATIC_TAX` | `true` to add tax at checkout with Stripe Tax | Optional |
+| `STRIPE_AUTOMATIC_TAX` | `true` to add tax at checkout with Stripe Tax. Leave it unset on an account with Managed Payments (Stripe as the merchant of record, as Truewidgets' account is): Stripe handles tax there and refuses this setting | Optional |
 | `SMTP_USER` | The Zoho mailbox that sends, e.g. `hello@truewidgets.com` | Sign-in, trial and invitation emails |
 | `SMTP_PASS` | That mailbox's Zoho app password | Sign-in, trial and invitation emails |
 | `EMAIL_FROM` | The sender, e.g. `Tabfold <hello@truewidgets.com>`: the mailbox or one of its aliases | Sign-in, trial and invitation emails |

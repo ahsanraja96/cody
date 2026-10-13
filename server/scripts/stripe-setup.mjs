@@ -9,7 +9,7 @@
 // Plain Node 20 or later, no packages. STRIPE_API_BASE points it at another Stripe (tests only).
 // It never prints the secret key.
 
-const STRIPE_VERSION = '2024-06-20';
+const STRIPE_VERSION = '2025-03-31.basil';
 
 const PRODUCTS = {
   pro: 'Tabfold Pro',
