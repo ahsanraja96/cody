@@ -58,7 +58,7 @@ Still to do:
   code reached hello@truewidgets.com through Zoho on 13 October 2026. `ALLOWED_ORIGINS` comes in
   step 8, once the store gives the extension its id. Never set `STRIPE_API_BASE` on the real
   server.
-- [ ] `CODE_SECRET`: a long random string (64 characters from your password manager's generator),
+- [x] `CODE_SECRET`: a long random string (64 characters from your password manager's generator),
   set **once, before the first trial**, and kept in the password manager. It keys the sign-in codes,
   the rate limits' keys and the trial fingerprints (one trial per email, even after an account is
   deleted); changing it later lets emails that had the trial start it again. You also need it to
@@ -104,10 +104,10 @@ Still to do:
   and disputes. Stripe only allows API version `2025-03-31.basil` or later with it, which the server
   now uses. Don't set `STRIPE_AUTOMATIC_TAX` (Managed Payments refuses Stripe Tax settings on a
   checkout).
-- [ ] Its **signing secret** (Developers → Webhooks → that endpoint → Signing secret → Reveal) →
+- [x] Its **signing secret** (Developers → Webhooks → that endpoint → Signing secret → Reveal) →
   the `STRIPE_WEBHOOK_SECRET` secret in Supabase. `STRIPE_PORTAL_CONFIGURATION` is
   `bpc_1UQ3JiINR0TE37QMiS1O1D9V`.
-- [ ] **The server's key**: a **restricted key** (Developers → API keys → Create restricted key,
+- [x] **The server's key**: a **restricted key** (Developers → API keys → Create restricted key,
   named "Tabfold server") rather than the account's secret key, since the account also runs
   Truewidgets' other products. Permissions: Checkout Sessions **Write**, Customers **Write**,
   Subscriptions **Write**, Prices **Read**, Products **Read**, Customer portal **Write**; everything
@@ -125,13 +125,14 @@ Still to do:
 server/README.md step 5. Truewidgets' Zoho Mail already sends for truewidgets.com (its SPF and DKIM
 are set up), so there's no domain to verify.
 
-- [ ] Choose the sending mailbox, e.g. `hello@truewidgets.com` → `SMTP_USER`. Optionally an alias
+- [x] Choose the sending mailbox, e.g. `hello@truewidgets.com` → `SMTP_USER`. Optionally an alias
   for Tabfold (`tabfold@truewidgets.com`) in Zoho Mail's settings.
-- [ ] Zoho Accounts → **Security → App passwords** → generate "Tabfold server" → `SMTP_PASS`.
-- [ ] `EMAIL_FROM="Tabfold <hello@truewidgets.com>"` (the mailbox or its alias, nothing else).
-- [ ] The account is on zoho.eu (you sign in at mail.zoho.eu)? Nothing more: the server uses
+- [x] Zoho Accounts → **Security → App passwords** → generate "Tabfold server" → `SMTP_PASS`.
+- [x] `EMAIL_FROM="Tabfold <hello@truewidgets.com>"` (the mailbox or its alias, nothing else).
+- [x] The account is on zoho.eu (you sign in at mail.zoho.eu)? Nothing more: the server uses
   `smtp.zoho.eu:465`. On zoho.com: `SMTP_HOST=smtp.zoho.com`.
-- [ ] After step 2's deploy, a test code reaches a Gmail and an Outlook inbox, not spam. If it
+- [x] A real code reached hello@truewidgets.com (13 October 2026).
+- [ ] A test code reaches a Gmail and an Outlook inbox, not spam. If it
   doesn't arrive, the function's log names the step (`535 at AUTH`: wrong app password; `553 at
   MAIL FROM`: `EMAIL_FROM` isn't the mailbox or its alias; `could not be reached`: the host or port).
 
@@ -139,7 +140,7 @@ are set up), so there's no domain to verify.
 
 server/README.md step 6.
 
-- [ ] An API key for Tabfold → `ANTHROPIC_API_KEY`.
+- [x] An API key for Tabfold → `ANTHROPIC_API_KEY`.
 - [ ] **Settings → Limits**: a monthly spend limit (start around $50; a heavy Pro AI user costs well
   under $1 a month) and an email alert below it.
 
@@ -154,31 +155,30 @@ Done on 13 October 2026 through the Vercel connector, in Truewidgets' Vercel tea
 
 Still to do:
 
-- [ ] **DNS at GoDaddy** (truewidgets.com's DNS is there): add a **CNAME** record, name `tabfold`,
+- [x] **DNS at GoDaddy** (truewidgets.com's DNS is there): a **CNAME** record, name `tabfold`,
   value `cname.vercel-dns.com`. Vercel then issues the HTTPS certificate by itself; the project's
   **Settings → Domains** turns green.
-- [ ] In `web/config.js`: `API_URL` = `https://<project id>.supabase.co/functions/v1/tabfold`.
-  Leave `EXTENSION_ID` empty and `STORE_URL` as it is until step 9. Push, and deploy again
-  (`web/README.md`, "Deploy to Vercel").
-- [ ] `https://tabfold.truewidgets.com/privacy` and `/terms` open, with no placeholder left; the home
-  page's footer links both.
+- [x] In `web/config.js`: `API_URL` = `https://wafuqionthouhbcbyjiv.supabase.co/functions/v1/tabfold`.
+  `EXTENSION_ID` and `STORE_URL` wait for step 9.
+- [x] `https://tabfold.truewidgets.com` (HTTPS), `/privacy` and `/terms` open, with no placeholder
+  left; the home page's footer links both.
 
 ## 7. Build the store zip
 
 After the 1.0 branches are merged and every test passes (`npm run compile`, `npm test`,
 `npx wxt build`, `node e2e/smoke.mjs`, `node e2e/folders.mjs`, `npm run e2e:pro`):
 
-- [ ] `package.json` says `"version": "1.0.0"` (the manifest takes it from there).
+- [x] `package.json` says `"version": "1.0.0"` (the manifest takes it from there).
 - [ ] Optional: the store summary comes from the manifest's `description` in `wxt.config.ts`;
   `store/listing.md` suggests a new one.
-- [ ] Build against the live server and site:
+- [x] Built against the live server and site on 13 October 2026 (the manifest checked as below):
 
   ```sh
   WXT_TABFOLD_API=https://<project id>.supabase.co/functions/v1/tabfold WXT_SHARE_ORIGIN=https://tabfold.truewidgets.com npm run zip
   ```
 
   This makes `.output/tabfold-1.0.0-chrome.zip` from `.output/chrome-mv3`.
-- [ ] Check the manifest it was made from:
+- [x] Check the manifest it was made from:
 
   ```sh
   node -e "const m=require(process.argv[1]);console.log({version:m.version,permissions:m.permissions,optional:m.optional_permissions,hosts:m.host_permissions??'none',contentScripts:m.content_scripts??'none',connect:/connect-src ([^;]*)/.exec(m.content_security_policy.extension_pages)[1],site:m.externally_connectable.matches})" ./.output/chrome-mv3/manifest.json
@@ -190,7 +190,7 @@ After the 1.0 branches are merged and every test passes (`npm run compile`, `npm
   else: stop and find out why (the privacy tab in `store/privacy-practices.md` justifies exactly
   these).
 - [ ] Load `.output/chrome-mv3` unpacked in a fresh Chrome profile and fold a window once.
-- [ ] Store images: `node store/screenshots.mjs` (after the 1.0 screens are merged). It prints what
+- [x] Store images: `node store/screenshots.mjs` (after the 1.0 screens are merged). It prints what
   it saved in `store/images/` and anything it skipped; look at all six images.
 
 ## 8. The Chrome Web Store
@@ -199,7 +199,8 @@ After the 1.0 branches are merged and every test passes (`npm run compile`, `npm
   own Tabfold (2-step verification on), the one-time registration fee, and the contact email
   verified. Answer the **trader** question (selling paid plans makes you a trader in the EU: your
   address and email are then shown on the listing).
-- [ ] **Items → New item**: upload `tabfold-1.0.0-chrome.zip`. The dashboard now shows the
+- [ ] **Items → New item**: upload `tabfold-1.0.0-chrome.zip` (the store build from step 7, made
+  against the live server). The dashboard now shows the
   extension's **id** (32 letters).
 - [ ] With that id, let the store copy talk to the server, and stop allowing any extension:
   `supabase secrets set ALLOWED_ORIGINS=chrome-extension://<id>` (add your development copy's id
