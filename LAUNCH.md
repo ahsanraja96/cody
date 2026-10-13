@@ -35,8 +35,15 @@ Done on 13 October 2026 through the Supabase connector, in the **Truewidgets** o
 
 - [x] Project **tabfold** (`wafuqionthouhbcbyjiv`), region London (eu-west-2). Server address:
   `https://wafuqionthouhbcbyjiv.supabase.co/functions/v1/tabfold`.
-- [x] The first migration's tables. (The connector waits for a confirmation it can't show on
-  anything that deletes, drops or revokes, so the rest goes through the SQL Editor, below.)
+- [x] The database: all five migrations, recorded in the migration history (so a later
+  `supabase db push` skips them). The connector waits for a confirmation it can't show on SQL that
+  deletes, drops or revokes, and the SQL Editor split the file inside a function, so a one-off
+  function (`tabfold-setup`) ran the five files from GitHub at a pinned commit in one transaction,
+  the way `supabase db push` does; it's now an empty stub that answers 410 and can be deleted
+  (Edge Functions → tabfold-setup → Delete). Checked afterwards: 19 tables, all with row level
+  security and none readable with the public keys; 16 `tabfold_…` functions, callable only by the
+  server; `trial_used` there. Supabase's security advisor reports only "RLS enabled, no policy"
+  (intended: only the server reads these tables).
 - [x] Function **tabfold** deployed with **Verify JWT** off (it checks device tokens and Stripe's
   signature itself). Its code imports `server/supabase/functions/tabfold/index.ts` from this
   repository at a pinned commit on GitHub; to deploy a newer version, change the commit in that one
@@ -45,12 +52,6 @@ Done on 13 October 2026 through the Supabase connector, in the **Truewidgets** o
 
 Still to do:
 
-- [ ] **The rest of the database**: SQL Editor → New query → paste all of `tabfold-database.sql`
-  (the five migrations after those tables, in one transaction, plus the migration history so a
-  later `supabase db push` skips them) → **Run**. It was tested on a fresh Postgres: same schema as
-  running the five migrations, only the server's role can call the functions, the public API keys
-  can't read any of the 19 tables. Afterwards **Database → Functions** lists 16 `tabfold_…`
-  functions and **Table Editor** has `trial_used`.
 - [ ] **Secrets** (Edge Functions → Secrets → Add new secret; server/README.md step 8 says what each
   is): `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, `SHARE_BASE_URL`, `CODE_SECRET`, `STRIPE_SECRET_KEY`,
   `STRIPE_WEBHOOK_SECRET`, `STRIPE_PORTAL_CONFIGURATION`, `ANTHROPIC_API_KEY`, optionally
