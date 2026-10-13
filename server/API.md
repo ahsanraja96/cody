@@ -61,8 +61,11 @@ Rules (`planFor` in `_shared/plan.ts`):
    `trial` set, `status`/`interval`/`cancelAt`/`renewsAt` null.
 3. Otherwise Free (`email` still set when signed in).
 
-Stripe Price **lookup keys**: `pro-monthly` ($5), `pro-yearly` ($48), `pro-ai-monthly` ($9),
-`pro-ai-yearly` ($84). `server/scripts/stripe-setup.mjs` creates them.
+Stripe Price **lookup keys**: `tabfold-pro-monthly` ($5), `tabfold-pro-yearly` ($48), `tabfold-pro-ai-monthly` ($9),
+`tabfold-pro-ai-yearly` ($84). `server/scripts/stripe-setup.mjs` creates them. Every Tabfold key starts with
+`tabfold-`, so the Stripe account can sell other products as well: the webhook acts only on checkouts the
+server started (`metadata.app = "tabfold"`) and on subscriptions to Tabfold's prices, and answers 200 to
+everything else without touching it.
 
 ## Errors
 
@@ -243,7 +246,7 @@ reaches the extension.
 
 Two more things a checkout can buy (`POST /checkout`, `tier`):
 
-- **`pro-lifetime`**: one payment (`mode=payment`, price lookup key `pro-lifetime`, $99). Stored in a
+- **`pro-lifetime`**: one payment (`mode=payment`, price lookup key `tabfold-pro-lifetime`, $99). Stored in a
   `purchases` table. The plan then reads `lifetime: true`, and the tier is at least `pro` forever
   (a live Pro AI subscription or the trial still gives `pro-ai`). 409 `already-subscribed` when the
   account already has it.
@@ -254,8 +257,8 @@ Two more things a checkout can buy (`POST /checkout`, `tier`):
   `checkout.session.async_payment_succeeded`. A live subscription doesn't stop it (someone on Pro
   can buy it, then cancel the subscription).
 - **`teams`**: body `{ tier: "teams", interval, seats, teamName }` (seats 1–100, default 3; name ≤ 60
-  characters). A subscription with `quantity = seats` (lookup keys `teams-monthly` $10 a person,
-  `teams-yearly` $96 a person). When it completes, the server makes the team with the payer as
+  characters). A subscription with `quantity = seats` (lookup keys `tabfold-teams-monthly` $10 a person,
+  `tabfold-teams-yearly` $96 a person). When it completes, the server makes the team with the payer as
   its owner. 409 `already-subscribed` when the account already owns a team.
   An account is in one team at most, so the 409 also covers a member of a team whose plan is on.
   A name that is missing or blank is "My team"; a longer one is cut to 60 characters. When the

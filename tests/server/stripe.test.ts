@@ -28,7 +28,7 @@ beforeEach(() => {
 });
 
 const checkoutInput = {
-  lookupKey: 'pro-ai-monthly',
+  lookupKey: 'tabfold-pro-ai-monthly',
   successUrl: 'https://x.test/done?session_id={CHECKOUT_SESSION_ID}',
   cancelUrl: 'https://x.test/cancel',
   automaticTax: false,
@@ -41,20 +41,20 @@ describe('form encoding', () => {
       mode: 'subscription',
       line_items: [{ price: 'price_1', quantity: 1 }],
       subscription_data: { trial_end: 1790000000, metadata: { account: 'a b' } },
-      lookup_keys: ['pro-monthly', 'pro-yearly'],
+      lookup_keys: ['tabfold-pro-monthly', 'tabfold-pro-yearly'],
       allow_promotion_codes: true,
       skipped: null,
       also: undefined,
     });
     expect(decodeURIComponent(encoded).replace(/\+/g, ' ')).toBe(
       'mode=subscription&line_items[0][price]=price_1&line_items[0][quantity]=1&subscription_data[trial_end]=1790000000' +
-        '&subscription_data[metadata][account]=a b&lookup_keys[]=pro-monthly&lookup_keys[]=pro-yearly&allow_promotion_codes=true',
+        '&subscription_data[metadata][account]=a b&lookup_keys[]=tabfold-pro-monthly&lookup_keys[]=tabfold-pro-yearly&allow_promotion_codes=true',
     );
     expect(parseForm(encoded)).toEqual({
       mode: 'subscription',
       line_items: [{ price: 'price_1', quantity: '1' }],
       subscription_data: { trial_end: '1790000000', metadata: { account: 'a b' } },
-      lookup_keys: ['pro-monthly', 'pro-yearly'],
+      lookup_keys: ['tabfold-pro-monthly', 'tabfold-pro-yearly'],
       allow_promotion_codes: 'true',
     });
   });
@@ -79,7 +79,7 @@ describe('createStripe', () => {
     expect(post.stripeVersion).toBe(STRIPE_VERSION);
     expect(post.params).toEqual({
       mode: 'subscription',
-      line_items: [{ price: fake.priceFor('pro-ai-monthly')!.id, quantity: '1' }],
+      line_items: [{ price: fake.priceFor('tabfold-pro-ai-monthly')!.id, quantity: '1' }],
       success_url: checkoutInput.successUrl,
       cancel_url: checkoutInput.cancelUrl,
       client_reference_id: 'acc-1',
@@ -104,8 +104,8 @@ describe('createStripe', () => {
     await stripe.createCheckout(checkoutInput);
     await stripe.createCheckout(checkoutInput);
     expect(lookups()).toHaveLength(1);
-    expect(lookups()[0]!.params).toEqual({ lookup_keys: ['pro-ai-monthly'], active: 'true', limit: '1' });
-    await stripe.createCheckout({ ...checkoutInput, lookupKey: 'pro-yearly' });
+    expect(lookups()[0]!.params).toEqual({ lookup_keys: ['tabfold-pro-ai-monthly'], active: 'true', limit: '1' });
+    await stripe.createCheckout({ ...checkoutInput, lookupKey: 'tabfold-pro-yearly' });
     expect(lookups()).toHaveLength(2);
     clock.now = NOW + 10 * MINUTE;
     await stripe.createCheckout(checkoutInput);
@@ -153,12 +153,12 @@ describe('createStripe', () => {
 
   it('reads a subscription, times in ms', async () => {
     const customer = fake.addCustomer('sam@example.com');
-    const sub = fake.addSubscription({ customer: customer.id, lookupKey: 'pro-ai-yearly', trialEnd: NOW / 1000 + 86400 * 3, cancelAtPeriodEnd: true });
+    const sub = fake.addSubscription({ customer: customer.id, lookupKey: 'tabfold-pro-ai-yearly', trialEnd: NOW / 1000 + 86400 * 3, cancelAtPeriodEnd: true });
     expect(await stripe.getSubscription(sub.id)).toEqual({
       id: sub.id,
       customerId: customer.id,
       status: 'trialing',
-      lookupKey: 'pro-ai-yearly',
+      lookupKey: 'tabfold-pro-ai-yearly',
       interval: 'year',
       currentPeriodEnd: NOW + 3 * 86400 * 1000,
       cancelAt: NOW + 3 * 86400 * 1000,
@@ -177,9 +177,9 @@ describe('createStripe', () => {
       customer: { id: 'cus_1', object: 'customer' },
       status: 'active',
       created: 1_790_000_000,
-      items: { data: [{ current_period_end: 1_792_000_000, price: { lookup_key: 'pro-monthly', recurring: { interval: 'month' } } }] },
+      items: { data: [{ current_period_end: 1_792_000_000, price: { lookup_key: 'tabfold-pro-monthly', recurring: { interval: 'month' } } }] },
     });
-    expect(sub).toMatchObject({ customerId: 'cus_1', currentPeriodEnd: 1_792_000_000_000, lookupKey: 'pro-monthly', interval: 'month' });
+    expect(sub).toMatchObject({ customerId: 'cus_1', currentPeriodEnd: 1_792_000_000_000, lookupKey: 'tabfold-pro-monthly', interval: 'month' });
     expect(readSubscription({ id: 'sub_2', items: { data: [{ price: { recurring: { interval: 'week' } } }] } })).toMatchObject({
       interval: null,
       status: 'incomplete',
@@ -193,7 +193,7 @@ describe('createStripe', () => {
   it('creates a one-time payment session (Pro for life) that makes a customer', async () => {
     const { id } = await stripe.createCheckout({
       ...checkoutInput,
-      lookupKey: 'pro-lifetime',
+      lookupKey: 'tabfold-pro-lifetime',
       mode: 'payment',
       customerEmail: 'sam@example.com',
       // Ignored outside subscriptions.
@@ -203,7 +203,7 @@ describe('createStripe', () => {
     const post = fake.requests.find((r) => r.method === 'POST')!;
     expect(post.params).toEqual({
       mode: 'payment',
-      line_items: [{ price: fake.priceFor('pro-lifetime')!.id, quantity: '1' }],
+      line_items: [{ price: fake.priceFor('tabfold-pro-lifetime')!.id, quantity: '1' }],
       success_url: checkoutInput.successUrl,
       cancel_url: checkoutInput.cancelUrl,
       allow_promotion_codes: 'true',
@@ -223,16 +223,16 @@ describe('createStripe', () => {
     });
     // With an existing customer, Stripe wants no customer_creation.
     const customer = fake.addCustomer('kim@example.com');
-    await stripe.createCheckout({ ...checkoutInput, lookupKey: 'pro-lifetime', mode: 'payment', customer: customer.id });
+    await stripe.createCheckout({ ...checkoutInput, lookupKey: 'tabfold-pro-lifetime', mode: 'payment', customer: customer.id });
     expect(fake.requests.filter((r) => r.method === 'POST').at(-1)!.params.customer_creation).toBeUndefined();
   });
 
   it('asks for a quantity (a Teams plan’s seats), and the subscription has it', async () => {
-    const { id } = await stripe.createCheckout({ ...checkoutInput, lookupKey: 'teams-yearly', quantity: 7 });
-    expect(fake.requests.find((r) => r.method === 'POST')!.params.line_items).toEqual([{ price: fake.priceFor('teams-yearly')!.id, quantity: '7' }]);
+    const { id } = await stripe.createCheckout({ ...checkoutInput, lookupKey: 'tabfold-teams-yearly', quantity: 7 });
+    expect(fake.requests.find((r) => r.method === 'POST')!.params.line_items).toEqual([{ price: fake.priceFor('tabfold-teams-yearly')!.id, quantity: '7' }]);
     const { subscription } = await fake.completeSession(id, { email: 'boss@example.com' });
     expect(await stripe.getSubscription(subscription!.id)).toMatchObject({
-      lookupKey: 'teams-yearly',
+      lookupKey: 'tabfold-teams-yearly',
       interval: 'year',
       quantity: 7,
       itemId: subscription!.items.data[0].id,
@@ -241,7 +241,7 @@ describe('createStripe', () => {
 
   it('changes a subscription item’s quantity, prorated', async () => {
     const customer = fake.addCustomer('boss@example.com');
-    const sub = fake.addSubscription({ customer: customer.id, lookupKey: 'teams-monthly', quantity: 3 });
+    const sub = fake.addSubscription({ customer: customer.id, lookupKey: 'tabfold-teams-monthly', quantity: 3 });
     await stripe.updateQuantity(sub.items.data[0].id, 4);
     const post = fake.requests.find((r) => r.method === 'POST')!;
     expect(post.path).toBe(`/v1/subscription_items/${sub.items.data[0].id}`);

@@ -19,14 +19,16 @@ const PRODUCTS = {
 };
 
 // interval null: one payment. Teams prices are per person: the subscription's quantity is its seats.
+// Lookup keys start with `tabfold-`: the Stripe account may sell other products too (the server
+// only acts on these prices, and on checkouts it started itself).
 const PRICES = [
-  { lookupKey: 'pro-monthly', tier: 'pro', amount: 500, interval: 'month', nickname: 'Pro, monthly' },
-  { lookupKey: 'pro-yearly', tier: 'pro', amount: 4800, interval: 'year', nickname: 'Pro, yearly' },
-  { lookupKey: 'pro-ai-monthly', tier: 'pro-ai', amount: 900, interval: 'month', nickname: 'Pro AI, monthly' },
-  { lookupKey: 'pro-ai-yearly', tier: 'pro-ai', amount: 8400, interval: 'year', nickname: 'Pro AI, yearly' },
-  { lookupKey: 'pro-lifetime', tier: 'pro-lifetime', amount: 9900, interval: null, nickname: 'Pro for life' },
-  { lookupKey: 'teams-monthly', tier: 'teams', amount: 1000, interval: 'month', nickname: 'Teams, monthly, per person' },
-  { lookupKey: 'teams-yearly', tier: 'teams', amount: 9600, interval: 'year', nickname: 'Teams, yearly, per person' },
+  { lookupKey: 'tabfold-pro-monthly', tier: 'pro', amount: 500, interval: 'month', nickname: 'Pro, monthly' },
+  { lookupKey: 'tabfold-pro-yearly', tier: 'pro', amount: 4800, interval: 'year', nickname: 'Pro, yearly' },
+  { lookupKey: 'tabfold-pro-ai-monthly', tier: 'pro-ai', amount: 900, interval: 'month', nickname: 'Pro AI, monthly' },
+  { lookupKey: 'tabfold-pro-ai-yearly', tier: 'pro-ai', amount: 8400, interval: 'year', nickname: 'Pro AI, yearly' },
+  { lookupKey: 'tabfold-pro-lifetime', tier: 'pro-lifetime', amount: 9900, interval: null, nickname: 'Pro for life' },
+  { lookupKey: 'tabfold-teams-monthly', tier: 'teams', amount: 1000, interval: 'month', nickname: 'Teams, monthly, per person' },
+  { lookupKey: 'tabfold-teams-yearly', tier: 'teams', amount: 9600, interval: 'year', nickname: 'Teams, yearly, per person' },
 ];
 
 // People switch between these in the billing portal. A Teams plan's seats change through Tabfold,

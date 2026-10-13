@@ -97,8 +97,8 @@ export const LIFETIME_PRICE = 99;
 /** Teams, US dollars a person (Mx-Plans board). Everyone in the team gets Pro AI. */
 export const TEAMS_PRICES: Record<BillingInterval, number> = { month: 10, year: 96 };
 /** Stripe Price lookup keys for those (server/scripts/stripe-setup.mjs). */
-export const LIFETIME_LOOKUP_KEY = 'pro-lifetime';
-export const TEAMS_LOOKUP_KEYS: Record<BillingInterval, string> = { month: 'teams-monthly', year: 'teams-yearly' };
+export const LIFETIME_LOOKUP_KEY = 'tabfold-pro-lifetime';
+export const TEAMS_LOOKUP_KEYS: Record<BillingInterval, string> = { month: 'tabfold-teams-monthly', year: 'tabfold-teams-yearly' };
 
 export const FREE_PLAN: PlanState = {
   tier: 'free',
@@ -114,8 +114,8 @@ export const FREE_PLAN: PlanState = {
 
 /** Stripe Price lookup keys (server/scripts/stripe-setup.mjs creates them), one per tier and period. */
 export const PRICE_LOOKUP_KEYS: Record<Exclude<Tier, 'free'>, Record<BillingInterval, string>> = {
-  pro: { month: 'pro-monthly', year: 'pro-yearly' },
-  'pro-ai': { month: 'pro-ai-monthly', year: 'pro-ai-yearly' },
+  pro: { month: 'tabfold-pro-monthly', year: 'tabfold-pro-yearly' },
+  'pro-ai': { month: 'tabfold-pro-ai-monthly', year: 'tabfold-pro-ai-yearly' },
 };
 
 /** Prices in US dollars (Pro-Plans board). */

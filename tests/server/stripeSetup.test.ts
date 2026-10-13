@@ -68,17 +68,17 @@ describe('stripe-setup.mjs', () => {
       fake.products.get(p.product)!.name,
     ]);
     expect(prices).toEqual([
-      ['pro-monthly', 500, 'usd', 'month', 'Tabfold Pro'],
-      ['pro-yearly', 4800, 'usd', 'year', 'Tabfold Pro'],
-      ['pro-ai-monthly', 900, 'usd', 'month', 'Tabfold Pro AI'],
-      ['pro-ai-yearly', 8400, 'usd', 'year', 'Tabfold Pro AI'],
-      ['pro-lifetime', 9900, 'usd', 'once', 'Tabfold Pro for life'],
-      ['teams-monthly', 1000, 'usd', 'month', 'Tabfold Teams'],
-      ['teams-yearly', 9600, 'usd', 'year', 'Tabfold Teams'],
+      ['tabfold-pro-monthly', 500, 'usd', 'month', 'Tabfold Pro'],
+      ['tabfold-pro-yearly', 4800, 'usd', 'year', 'Tabfold Pro'],
+      ['tabfold-pro-ai-monthly', 900, 'usd', 'month', 'Tabfold Pro AI'],
+      ['tabfold-pro-ai-yearly', 8400, 'usd', 'year', 'Tabfold Pro AI'],
+      ['tabfold-pro-lifetime', 9900, 'usd', 'once', 'Tabfold Pro for life'],
+      ['tabfold-teams-monthly', 1000, 'usd', 'month', 'Tabfold Teams'],
+      ['tabfold-teams-yearly', 9600, 'usd', 'year', 'Tabfold Teams'],
     ]);
-    expect(fake.priceFor('pro-lifetime')!.type).toBe('one_time');
-    expect(out).toContain('Price pro-lifetime ($99.00 once)');
-    expect(out).toContain('Price teams-yearly ($96.00 a year per person)');
+    expect(fake.priceFor('tabfold-pro-lifetime')!.type).toBe('one_time');
+    expect(out).toContain('Price tabfold-pro-lifetime ($99.00 once)');
+    expect(out).toContain('Price tabfold-teams-yearly ($96.00 a year per person)');
 
     const [config] = [...fake.portalConfigurations.values()];
     expect(config!.features).toMatchObject({
@@ -89,11 +89,11 @@ describe('stripe-setup.mjs', () => {
       subscription_update: { enabled: 'true', default_allowed_updates: ['price'], proration_behavior: 'create_prorations' },
     });
     // Switching plans covers Pro and Pro AI only: a Teams plan's seats change through Tabfold.
-    const pro = fake.priceFor('pro-monthly')!;
-    const ai = fake.priceFor('pro-ai-yearly')!;
+    const pro = fake.priceFor('tabfold-pro-monthly')!;
+    const ai = fake.priceFor('tabfold-pro-ai-yearly')!;
     expect(config!.features.subscription_update.products).toEqual([
-      { product: pro.product, prices: [pro.id, fake.priceFor('pro-yearly')!.id] },
-      { product: ai.product, prices: [fake.priceFor('pro-ai-monthly')!.id, ai.id] },
+      { product: pro.product, prices: [pro.id, fake.priceFor('tabfold-pro-yearly')!.id] },
+      { product: ai.product, prices: [fake.priceFor('tabfold-pro-ai-monthly')!.id, ai.id] },
     ]);
 
     const [endpoint] = [...fake.webhookEndpoints.values()];
@@ -132,10 +132,10 @@ describe('stripe-setup.mjs', () => {
 
   it('adds only the missing prices, to the existing product', async () => {
     await run(['--webhook-url', WEBHOOK]);
-    const aiYearly = fake.priceFor('pro-ai-yearly')!;
+    const aiYearly = fake.priceFor('tabfold-pro-ai-yearly')!;
     aiYearly.active = false;
     await run(['--webhook-url', WEBHOOK]);
-    const replacement = fake.priceFor('pro-ai-yearly')!;
+    const replacement = fake.priceFor('tabfold-pro-ai-yearly')!;
     expect(replacement.id).not.toBe(aiYearly.id);
     expect(replacement.product).toBe(aiYearly.product);
     expect(fake.products.size).toBe(4);
@@ -144,7 +144,7 @@ describe('stripe-setup.mjs', () => {
   it('adds the new plans’ prices to a Stripe set up before them', async () => {
     // As an earlier version of the script left it: Pro and Pro AI only.
     fake.seedPrices();
-    for (const key of ['pro-lifetime', 'teams-monthly', 'teams-yearly']) {
+    for (const key of ['tabfold-pro-lifetime', 'tabfold-teams-monthly', 'tabfold-teams-yearly']) {
       const price = fake.priceFor(key)!;
       fake.prices.delete(price.id);
       if (![...fake.prices.values()].some((p) => p.product === price.product)) fake.products.delete(price.product);
@@ -153,7 +153,7 @@ describe('stripe-setup.mjs', () => {
     const { code } = await run(['--webhook-url', WEBHOOK]);
     expect(code).toBe(0);
     expect([fake.products.size, fake.prices.size]).toEqual([4, 7]);
-    expect(fake.priceFor('teams-monthly')!.recurring).toEqual({ interval: 'month', interval_count: 1 });
+    expect(fake.priceFor('tabfold-teams-monthly')!.recurring).toEqual({ interval: 'month', interval_count: 1 });
   });
 
   it('adds missing events to an existing webhook', async () => {

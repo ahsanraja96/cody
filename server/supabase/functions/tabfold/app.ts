@@ -3,6 +3,7 @@ import {
   hasPro,
   hasProAi,
   isLive,
+  isTabfoldLookupKey,
   LIFETIME_LOOKUP_KEY,
   LOOKUP_KEYS,
   planFor,
@@ -885,6 +886,8 @@ const isPaid = (session: CheckoutInfo) => session.paymentStatus === 'paid' || se
  * couldn't be signed in.
  */
 async function processCheckout(deps: Deps, session: CheckoutInfo): Promise<string | null> {
+  // The Stripe account may sell other products: only checkouts Tabfold started are Tabfold's.
+  if (session.metadata.app !== TABFOLD_APP) return null;
   if (session.status !== 'complete') return null;
   // A one-time payment still on its way: `checkout.session.async_payment_succeeded` comes later.
   if (session.mode === 'payment' && !isPaid(session)) return null;
@@ -1092,6 +1095,9 @@ function readTeamName(value: unknown, required: boolean): string {
   return DEFAULT_TEAM_NAME;
 }
 
+/** `metadata.app` on every checkout Tabfold starts: the webhook acts only on those. */
+const TABFOLD_APP = 'tabfold';
+
 const CHECKOUT_TIERS = ['pro', 'pro-ai', 'pro-lifetime', 'teams'] as const;
 type CheckoutTier = (typeof CHECKOUT_TIERS)[number];
 
@@ -1114,7 +1120,8 @@ async function checkout(req: Request, deps: Deps): Promise<Reply> {
     successUrl: `${base}/checkout/done?session_id={CHECKOUT_SESSION_ID}`,
     cancelUrl: `${base}/checkout/cancel`,
     automaticTax: deps.config.automaticTax,
-    metadata: {},
+    // Marks the checkout as Tabfold's (the Stripe account may sell other products).
+    metadata: { app: TABFOLD_APP },
   };
   // What's bought, for when the completed checkout is processed (only the server sets metadata).
   if (tier === 'pro-lifetime') {
@@ -1194,6 +1201,8 @@ async function stripeEvent(deps: Deps, type: string, object: Record<string, unkn
   } else if (type.startsWith('customer.subscription.')) {
     // Read it again: events can arrive out of order, Stripe's answer now is the truth.
     const subscription = await deps.payments.getSubscription(id);
+    // Another product's subscription in the same Stripe account: not Tabfold's.
+    if (!isTabfoldLookupKey(subscription.lookupKey)) return;
     const account = await deps.store.accountByCustomer(subscription.customerId);
     // No account yet: checkout.session.completed will store it.
     if (account) await deps.store.subscriptionPut(account.id, subscription);

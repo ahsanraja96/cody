@@ -53,13 +53,13 @@ describe('buying Teams', () => {
       metadata: { account: accountId(OWNER_EMAIL), plan: 'teams', teamName: 'Truewidgets team' },
       subscription_data: { trial_end: null },
     });
-    expect(session.line_items).toEqual([{ price: server.stripe.priceFor('teams-monthly')!.id, quantity: 5 }]);
+    expect(session.line_items).toEqual([{ price: server.stripe.priceFor('tabfold-teams-monthly')!.id, quantity: 5 }]);
   });
 
   it('defaults to 3 seats and “My team”, yearly or monthly', async () => {
     const res = await post(keyOf(OWNER), '/checkout', { tier: 'teams', interval: 'year' });
     const session = server.stripe.sessions.get(res.json.sessionId)!;
-    expect(session.line_items).toEqual([{ price: server.stripe.priceFor('teams-yearly')!.id, quantity: 3 }]);
+    expect(session.line_items).toEqual([{ price: server.stripe.priceFor('tabfold-teams-yearly')!.id, quantity: 3 }]);
     expect(session.metadata.teamName).toBe('My team');
   });
 

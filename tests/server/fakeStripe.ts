@@ -36,7 +36,7 @@ export interface FakeStripeOptions {
   webhookUrl?: string;
   /** Signs the events, and is the secret of webhook endpoints made through the API. */
   webhookSecret?: string;
-  /** Start with Tabfold's products and prices (`pro-monthly`, …, `pro-lifetime`, `teams-*`), as the setup script makes them. Default true. */
+  /** Start with Tabfold's products and prices (`tabfold-pro-monthly`, …, `tabfold-pro-lifetime`, `tabfold-teams-*`), as the setup script makes them. Default true. */
   prices?: boolean;
   /** The clock (ms); default Date.now. */
   now?: () => number;
@@ -117,13 +117,13 @@ export interface RunningFakeStripe extends FakeStripe {
 
 /** Tabfold's prices, as server/scripts/stripe-setup.mjs makes them (`interval` null: one payment). */
 export const TABFOLD_PRICES = [
-  { lookupKey: 'pro-monthly', product: 'Tabfold Pro', tier: 'pro', amount: 500, interval: 'month' },
-  { lookupKey: 'pro-yearly', product: 'Tabfold Pro', tier: 'pro', amount: 4800, interval: 'year' },
-  { lookupKey: 'pro-ai-monthly', product: 'Tabfold Pro AI', tier: 'pro-ai', amount: 900, interval: 'month' },
-  { lookupKey: 'pro-ai-yearly', product: 'Tabfold Pro AI', tier: 'pro-ai', amount: 8400, interval: 'year' },
-  { lookupKey: 'pro-lifetime', product: 'Tabfold Pro for life', tier: 'pro-lifetime', amount: 9900, interval: null },
-  { lookupKey: 'teams-monthly', product: 'Tabfold Teams', tier: 'teams', amount: 1000, interval: 'month' },
-  { lookupKey: 'teams-yearly', product: 'Tabfold Teams', tier: 'teams', amount: 9600, interval: 'year' },
+  { lookupKey: 'tabfold-pro-monthly', product: 'Tabfold Pro', tier: 'pro', amount: 500, interval: 'month' },
+  { lookupKey: 'tabfold-pro-yearly', product: 'Tabfold Pro', tier: 'pro', amount: 4800, interval: 'year' },
+  { lookupKey: 'tabfold-pro-ai-monthly', product: 'Tabfold Pro AI', tier: 'pro-ai', amount: 900, interval: 'month' },
+  { lookupKey: 'tabfold-pro-ai-yearly', product: 'Tabfold Pro AI', tier: 'pro-ai', amount: 8400, interval: 'year' },
+  { lookupKey: 'tabfold-pro-lifetime', product: 'Tabfold Pro for life', tier: 'pro-lifetime', amount: 9900, interval: null },
+  { lookupKey: 'tabfold-teams-monthly', product: 'Tabfold Teams', tier: 'teams', amount: 1000, interval: 'month' },
+  { lookupKey: 'tabfold-teams-yearly', product: 'Tabfold Teams', tier: 'teams', amount: 9600, interval: 'year' },
 ] as const;
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;

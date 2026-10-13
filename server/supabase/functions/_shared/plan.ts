@@ -100,16 +100,20 @@ export const AI_RUNS_PER_MONTH = 300;
 export const AI_MAX_TABS = 300;
 export const AI_MAX_TITLE = 200;
 
-/** The four subscription prices (server/scripts/stripe-setup.mjs creates them). */
+/**
+ * The four subscription prices (server/scripts/stripe-setup.mjs creates them). Every Tabfold price's
+ * lookup key starts with `tabfold-`, so the Stripe account can sell other products too: Tabfold
+ * only ever acts on its own prices (`isTabfoldLookupKey`).
+ */
 export const LOOKUP_KEYS = {
-  pro: { month: 'pro-monthly', year: 'pro-yearly' },
-  'pro-ai': { month: 'pro-ai-monthly', year: 'pro-ai-yearly' },
+  pro: { month: 'tabfold-pro-monthly', year: 'tabfold-pro-yearly' },
+  'pro-ai': { month: 'tabfold-pro-ai-monthly', year: 'tabfold-pro-ai-yearly' },
 } as const satisfies Record<Exclude<Tier, 'free'>, Record<BillingInterval, string>>;
 
 /** Pro for life: one payment of $99. */
-export const LIFETIME_LOOKUP_KEY = 'pro-lifetime';
+export const LIFETIME_LOOKUP_KEY = 'tabfold-pro-lifetime';
 /** Teams: per person (the subscription's quantity is the seats). */
-export const TEAMS_LOOKUP_KEYS = { month: 'teams-monthly', year: 'teams-yearly' } as const satisfies Record<BillingInterval, string>;
+export const TEAMS_LOOKUP_KEYS = { month: 'tabfold-teams-monthly', year: 'tabfold-teams-yearly' } as const satisfies Record<BillingInterval, string>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const TRIAL_MS = TRIAL_DAYS * DAY_MS;
@@ -126,15 +130,25 @@ export const hasLifetime = (purchases: Purchase[] | undefined): boolean =>
   !!purchases?.some((purchase) => purchase.lookupKey === LIFETIME_LOOKUP_KEY);
 
 /**
- * A subscription price's tier: `pro-ai-*` → pro-ai, other `pro-*` → pro; anything else (Teams, Pro
+ * A subscription price's tier: `tabfold-pro-ai-*` → pro-ai, other `tabfold-pro-*` → pro; anything else (Teams, Pro
  * for life, other prices) isn't a personal subscription (null).
  */
 export function tierOfLookupKey(lookupKey: string | null | undefined): Exclude<Tier, 'free'> | null {
   if (!lookupKey || lookupKey === LIFETIME_LOOKUP_KEY) return null;
-  if (lookupKey.startsWith('pro-ai-')) return 'pro-ai';
-  if (lookupKey.startsWith('pro-')) return 'pro';
+  if (lookupKey.startsWith('tabfold-pro-ai-')) return 'pro-ai';
+  if (lookupKey.startsWith('tabfold-pro-')) return 'pro';
   return null;
 }
+
+/** Every price lookup key Tabfold sells. */
+export const TABFOLD_LOOKUP_KEYS: ReadonlySet<string> = new Set([
+  ...Object.values(LOOKUP_KEYS).flatMap((keys) => Object.values(keys)),
+  LIFETIME_LOOKUP_KEY,
+  ...Object.values(TEAMS_LOOKUP_KEYS),
+]);
+
+/** Is this one of Tabfold's prices (and not another product sold through the same Stripe account)? */
+export const isTabfoldLookupKey = (lookupKey: string | null | undefined): boolean => !!lookupKey && TABFOLD_LOOKUP_KEYS.has(lookupKey);
 
 /** The live subscription that sets the plan: Pro AI over Pro, then the latest. */
 export function bestSubscription(subscriptions: Subscription[]): Subscription | null {

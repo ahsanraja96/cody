@@ -422,7 +422,7 @@ describe('Start a team, end to end', () => {
       opened: true,
     });
     const sessionId = [...server.stripe.sessions.keys()].at(-1)!;
-    expect(server.stripe.sessions.get(sessionId)!.line_items).toEqual([{ price: server.stripe.priceFor('teams-yearly')!.id, quantity: 4 }]);
+    expect(server.stripe.sessions.get(sessionId)!.line_items).toEqual([{ price: server.stripe.priceFor('tabfold-teams-yearly')!.id, quantity: 4 }]);
     await server.stripe.completeSession(sessionId);
     await server.deliverEvents();
     const plan = data<{ tier: string; team?: unknown }>(await route({ type: 'plan-refresh', force: true }));

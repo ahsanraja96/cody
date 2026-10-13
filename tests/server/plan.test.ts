@@ -25,7 +25,7 @@ const sub = (patch: Partial<Subscription> = {}): Subscription => ({
   id: `sub_${++ids}`,
   customerId: 'cus_1',
   status: 'active',
-  lookupKey: 'pro-monthly',
+  lookupKey: 'tabfold-pro-monthly',
   interval: 'month',
   currentPeriodEnd: NOW + 20 * DAY,
   cancelAt: null,
@@ -76,7 +76,7 @@ describe('planFor', () => {
       renewsAt: NOW + 20 * DAY,
       trial: null,
     });
-    expect(plan({ subscriptions: [sub({ lookupKey: 'pro-ai-yearly', interval: 'year' })] })).toMatchObject({
+    expect(plan({ subscriptions: [sub({ lookupKey: 'tabfold-pro-ai-yearly', interval: 'year' })] })).toMatchObject({
       tier: 'pro-ai',
       interval: 'year',
     });
@@ -84,7 +84,7 @@ describe('planFor', () => {
 
   it('counts trialing as active, renewing when Stripe’s trial ends', () => {
     const trialEnd = NOW + 3 * DAY;
-    expect(plan({ subscriptions: [sub({ status: 'trialing', lookupKey: 'pro-ai-monthly', trialEnd, currentPeriodEnd: trialEnd })] })).toMatchObject({
+    expect(plan({ subscriptions: [sub({ status: 'trialing', lookupKey: 'tabfold-pro-ai-monthly', trialEnd, currentPeriodEnd: trialEnd })] })).toMatchObject({
       tier: 'pro-ai',
       status: 'active',
       renewsAt: trialEnd,
@@ -95,7 +95,7 @@ describe('planFor', () => {
   });
 
   it('keeps the plan while past due', () => {
-    expect(plan({ subscriptions: [sub({ status: 'past_due', lookupKey: 'pro-ai-monthly' })] })).toMatchObject({
+    expect(plan({ subscriptions: [sub({ status: 'past_due', lookupKey: 'tabfold-pro-ai-monthly' })] })).toMatchObject({
       tier: 'pro-ai',
       status: 'past_due',
       renewsAt: NOW + 20 * DAY,
@@ -125,10 +125,10 @@ describe('planFor', () => {
   });
 
   it('picks the best of several: Pro AI over Pro, then the latest', () => {
-    const pro = sub({ lookupKey: 'pro-yearly', interval: 'year', createdAt: NOW - DAY });
-    const ai = sub({ lookupKey: 'pro-ai-monthly', createdAt: NOW - 5 * DAY });
-    const oldAi = sub({ lookupKey: 'pro-ai-monthly', createdAt: NOW - 50 * DAY, cancelAtPeriodEnd: true });
-    const deadAi = sub({ lookupKey: 'pro-ai-yearly', status: 'canceled', createdAt: NOW });
+    const pro = sub({ lookupKey: 'tabfold-pro-yearly', interval: 'year', createdAt: NOW - DAY });
+    const ai = sub({ lookupKey: 'tabfold-pro-ai-monthly', createdAt: NOW - 5 * DAY });
+    const oldAi = sub({ lookupKey: 'tabfold-pro-ai-monthly', createdAt: NOW - 50 * DAY, cancelAtPeriodEnd: true });
+    const deadAi = sub({ lookupKey: 'tabfold-pro-ai-yearly', status: 'canceled', createdAt: NOW });
     expect(bestSubscription([pro, oldAi, ai, deadAi])).toBe(ai);
     expect(plan({ subscriptions: [pro, deadAi] })).toMatchObject({ tier: 'pro', interval: 'year' });
     expect(bestSubscription([sub({ createdAt: 1 }), pro])).toBe(pro);
@@ -179,10 +179,10 @@ describe('planFor', () => {
 
 describe('plan helpers', () => {
   it('reads lookup keys', () => {
-    expect(tierOfLookupKey('pro-monthly')).toBe('pro');
-    expect(tierOfLookupKey('pro-yearly')).toBe('pro');
-    expect(tierOfLookupKey('pro-ai-monthly')).toBe('pro-ai');
-    expect(tierOfLookupKey('pro-ai-yearly')).toBe('pro-ai');
+    expect(tierOfLookupKey('tabfold-pro-monthly')).toBe('pro');
+    expect(tierOfLookupKey('tabfold-pro-yearly')).toBe('pro');
+    expect(tierOfLookupKey('tabfold-pro-ai-monthly')).toBe('pro-ai');
+    expect(tierOfLookupKey('tabfold-pro-ai-yearly')).toBe('pro-ai');
     for (const other of ['', null, undefined, 'team-monthly', 'pro', 'ai-pro-monthly']) expect(tierOfLookupKey(other)).toBeNull();
   });
 
@@ -197,9 +197,9 @@ describe('plan helpers', () => {
 });
 
 describe('planFor: Pro for life and Teams', () => {
-  const lifetime: Purchase = { id: 'cs_1', lookupKey: 'pro-lifetime', customerId: 'cus_1', paymentIntentId: 'pi_1', createdAt: NOW - DAY };
+  const lifetime: Purchase = { id: 'cs_1', lookupKey: 'tabfold-pro-lifetime', customerId: 'cus_1', paymentIntentId: 'pi_1', createdAt: NOW - DAY };
   const teamSub = (patch: Partial<Subscription> = {}) =>
-    sub({ lookupKey: 'teams-yearly', interval: 'year', quantity: 5, itemId: 'si_1', currentPeriodEnd: NOW + 200 * DAY, ...patch });
+    sub({ lookupKey: 'tabfold-teams-yearly', interval: 'year', quantity: 5, itemId: 'si_1', currentPeriodEnd: NOW + 200 * DAY, ...patch });
   const team = (role: TeamRole, subscription: Subscription | null = teamSub()): TeamInput => ({
     id: 'team-1',
     name: 'Truewidgets',
@@ -229,7 +229,7 @@ describe('planFor: Pro for life and Teams', () => {
   });
 
   it('lets a Pro AI subscription on top of Pro for life give Pro AI', () => {
-    expect(plan({ purchases: [lifetime], subscriptions: [sub({ lookupKey: 'pro-ai-monthly' })] })).toMatchObject({
+    expect(plan({ purchases: [lifetime], subscriptions: [sub({ lookupKey: 'tabfold-pro-ai-monthly' })] })).toMatchObject({
       tier: 'pro-ai',
       lifetime: true,
       interval: 'month',
@@ -251,7 +251,7 @@ describe('planFor: Pro for life and Teams', () => {
   });
 
   it('keeps Pro for life when a subscription ends', () => {
-    expect(plan({ purchases: [lifetime], subscriptions: [sub({ lookupKey: 'pro-ai-yearly', status: 'canceled' })] })).toMatchObject({
+    expect(plan({ purchases: [lifetime], subscriptions: [sub({ lookupKey: 'tabfold-pro-ai-yearly', status: 'canceled' })] })).toMatchObject({
       tier: 'pro',
       status: null,
       lifetime: true,
@@ -259,8 +259,8 @@ describe('planFor: Pro for life and Teams', () => {
   });
 
   it('never takes the lifetime price or a team’s for a personal subscription', () => {
-    expect(tierOfLookupKey('pro-lifetime')).toBeNull();
-    expect(tierOfLookupKey('teams-monthly')).toBeNull();
+    expect(tierOfLookupKey('tabfold-pro-lifetime')).toBeNull();
+    expect(tierOfLookupKey('tabfold-teams-monthly')).toBeNull();
     expect(plan({ subscriptions: [teamSub()] })).toMatchObject({ tier: 'free', status: null });
   });
 
@@ -348,6 +348,6 @@ describe('planFor: Pro for life and Teams', () => {
   });
 
   it('names the new prices', () => {
-    expect([LIFETIME_LOOKUP_KEY, TEAMS_LOOKUP_KEYS.month, TEAMS_LOOKUP_KEYS.year]).toEqual(['pro-lifetime', 'teams-monthly', 'teams-yearly']);
+    expect([LIFETIME_LOOKUP_KEY, TEAMS_LOOKUP_KEYS.month, TEAMS_LOOKUP_KEYS.year]).toEqual(['tabfold-pro-lifetime', 'tabfold-teams-monthly', 'tabfold-teams-yearly']);
   });
 });

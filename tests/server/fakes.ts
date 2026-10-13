@@ -23,15 +23,15 @@ interface TestUser {
 /** Accounts every test server starts with, each signed in on its own computer (`keyOf`). */
 export const USERS = {
   free: { email: 'free@example.com' },
-  proMonthly: { email: 'pro@example.com', subscription: { lookupKey: 'pro-monthly' } },
-  proYearly: { email: 'yearly@example.com', subscription: { lookupKey: 'pro-yearly' } },
-  proAiMonthly: { email: 'ai@example.com', subscription: { lookupKey: 'pro-ai-monthly' } },
-  proAiYearly: { email: 'ai-yearly@example.com', subscription: { lookupKey: 'pro-ai-yearly', cancelAtPeriodEnd: true } },
+  proMonthly: { email: 'pro@example.com', subscription: { lookupKey: 'tabfold-pro-monthly' } },
+  proYearly: { email: 'yearly@example.com', subscription: { lookupKey: 'tabfold-pro-yearly' } },
+  proAiMonthly: { email: 'ai@example.com', subscription: { lookupKey: 'tabfold-pro-ai-monthly' } },
+  proAiYearly: { email: 'ai-yearly@example.com', subscription: { lookupKey: 'tabfold-pro-ai-yearly', cancelAtPeriodEnd: true } },
   trialRunning: { email: 'trial@example.com', trialStartedAt: NOW - 2 * DAY },
   trialEnded: { email: 'ended@example.com', trialStartedAt: NOW - 8 * DAY },
-  proDuringTrial: { email: 'both@example.com', trialStartedAt: NOW - 1 * DAY, subscription: { lookupKey: 'pro-monthly' } },
-  cancelled: { email: 'gone@example.com', subscription: { lookupKey: 'pro-monthly', status: 'canceled' } },
-  pastDue: { email: 'late@example.com', subscription: { lookupKey: 'pro-ai-monthly', status: 'past_due' } },
+  proDuringTrial: { email: 'both@example.com', trialStartedAt: NOW - 1 * DAY, subscription: { lookupKey: 'tabfold-pro-monthly' } },
+  cancelled: { email: 'gone@example.com', subscription: { lookupKey: 'tabfold-pro-monthly', status: 'canceled' } },
+  pastDue: { email: 'late@example.com', subscription: { lookupKey: 'tabfold-pro-ai-monthly', status: 'past_due' } },
 } satisfies Record<string, TestUser>;
 
 export type UserName = keyof typeof USERS;

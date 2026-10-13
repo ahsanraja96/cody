@@ -104,11 +104,11 @@ moves and you pay with test cards. You switch to live mode at the end (step 11).
    It creates:
 
    - the products **Tabfold Pro** and **Tabfold Pro AI**, with four prices: $5 a month, $48 a year,
-     $9 a month and $84 a year (their "lookup keys" `pro-monthly`, `pro-yearly`, `pro-ai-monthly`
-     and `pro-ai-yearly` are how the server finds them),
-   - **Tabfold Pro for life**: one payment of $99 (`pro-lifetime`),
-   - **Tabfold Teams**: $10 a person a month or $96 a person a year (`teams-monthly`,
-     `teams-yearly`); a team's subscription has one "seat" per person,
+     $9 a month and $84 a year (their "lookup keys" `tabfold-pro-monthly`, `tabfold-pro-yearly`, `tabfold-pro-ai-monthly`
+     and `tabfold-pro-ai-yearly` are how the server finds them),
+   - **Tabfold Pro for life**: one payment of $99 (`tabfold-pro-lifetime`),
+   - **Tabfold Teams**: $10 a person a month or $96 a person a year (`tabfold-teams-monthly`,
+     `tabfold-teams-yearly`); a team's subscription has one "seat" per person,
    - the **billing portal** settings: invoices, changing card and address, switching between the
      four Pro and Pro AI prices, and cancelling at the end of the paid period. A Teams plan's seats
      change through Tabfold (inviting and removing people), not in the portal,

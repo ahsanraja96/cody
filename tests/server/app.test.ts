@@ -455,15 +455,15 @@ describe('POST /checkout', () => {
       cancel_url: `${PUBLIC_URL}/checkout/cancel`,
       subscription_data: { trial_end: null },
     });
-    expect(session.line_items[0].price).toBe(server.stripe.priceFor('pro-yearly')!.id);
+    expect(session.line_items[0].price).toBe(server.stripe.priceFor('tabfold-pro-yearly')!.id);
     expect(server.store.pending.get(res.json.sessionId)).toMatchObject({ tokenHash: await sha256Hex(laptop), createdAt: NOW });
   });
 
   it.each([
-    ['pro', 'month', 'pro-monthly'],
-    ['pro', 'year', 'pro-yearly'],
-    ['pro-ai', 'month', 'pro-ai-monthly'],
-    ['pro-ai', 'year', 'pro-ai-yearly'],
+    ['pro', 'month', 'tabfold-pro-monthly'],
+    ['pro', 'year', 'tabfold-pro-yearly'],
+    ['pro-ai', 'month', 'tabfold-pro-ai-monthly'],
+    ['pro-ai', 'year', 'tabfold-pro-ai-yearly'],
   ])('%s, %s uses the %s price', async (tier, interval, lookupKey) => {
     const res = await checkout(laptop, tier, interval);
     expect(sessionOf(res).line_items[0].price).toBe(server.stripe.priceFor(lookupKey)!.id);
@@ -548,11 +548,11 @@ describe('POST /checkout', () => {
   });
 
   it('answers 502 when Stripe refuses, and logs why', async () => {
-    server.stripe.priceFor('pro-ai-monthly')!.active = false;
+    server.stripe.priceFor('tabfold-pro-ai-monthly')!.active = false;
     const res = await checkout(laptop);
     expect(res.status).toBe(502);
     expect(res.json.error).toBe('server');
-    expect(server.log).toHaveBeenCalledWith(expect.stringContaining('No active Stripe price has the lookup key pro-ai-monthly'));
+    expect(server.log).toHaveBeenCalledWith(expect.stringContaining('No active Stripe price has the lookup key tabfold-pro-ai-monthly'));
     expect(server.store.pending.size).toBe(0);
   });
 

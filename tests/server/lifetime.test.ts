@@ -30,12 +30,12 @@ describe('POST /checkout for Pro for life', () => {
       customer: null,
       customer_email: 'free@example.com',
       customer_creation: 'always',
-      metadata: { account: account.id, plan: 'pro-lifetime' },
+      metadata: { app: 'tabfold', account: account.id, plan: 'tabfold-pro-lifetime' },
       client_reference_id: account.id,
       subscription_data: { trial_end: null },
       success_url: `${PUBLIC_URL}/checkout/done?session_id={CHECKOUT_SESSION_ID}`,
     });
-    expect(session.line_items).toEqual([{ price: server.stripe.priceFor('pro-lifetime')!.id, quantity: 1 }]);
+    expect(session.line_items).toEqual([{ price: server.stripe.priceFor('tabfold-pro-lifetime')!.id, quantity: 1 }]);
     const post = server.stripe.requests.find((r) => r.method === 'POST' && r.path === '/v1/checkout/sessions')!;
     expect(post.params.subscription_data).toBeUndefined();
   });
@@ -66,10 +66,10 @@ describe('POST /checkout for Pro for life', () => {
   });
 
   it('answers 502 when the price isn’t set up in Stripe', async () => {
-    server.stripe.priceFor('pro-lifetime')!.active = false;
+    server.stripe.priceFor('tabfold-pro-lifetime')!.active = false;
     const res = await checkout(keyOf('free'));
     expect(res.status).toBe(502);
-    expect(server.log).toHaveBeenCalledWith(expect.stringContaining('No active Stripe price has the lookup key pro-lifetime'));
+    expect(server.log).toHaveBeenCalledWith(expect.stringContaining('No active Stripe price has the lookup key tabfold-pro-lifetime'));
   });
 });
 
@@ -89,7 +89,7 @@ describe('paying for Pro for life', () => {
     expect(await purchasesOf('free@example.com')).toEqual([
       {
         id: sessionId,
-        lookupKey: 'pro-lifetime',
+        lookupKey: 'tabfold-pro-lifetime',
         customerId: expect.stringMatching(/^cus_/),
         paymentIntentId: expect.stringMatching(/^pi_/),
         createdAt: NOW,
