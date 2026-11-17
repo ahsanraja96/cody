@@ -2,6 +2,7 @@
 import { canRunAsUser, navigateTo, showLoginPrompt } from '@devvit/web/client';
 
 import type { InitResponse, LeaderboardResponse, Result, Vote, VoteRequest } from '../shared/api.ts';
+import { starRow, starsFor } from './art.ts';
 import { api, journey } from './net.ts';
 import type { TownView } from './town.ts';
 import { clock, countdown, effect, esc, toast } from './util.ts';
@@ -25,15 +26,14 @@ export function showResult(
   const opened = Date.now();
 
   const share = crowd.solved ? Math.round(((crowd.spread[0] ?? 0) / crowd.solved) * 100) : 0;
-  const folk = `${crowd.solved} ${crowd.solved === 1 ? 'villager' : 'villagers'}`;
   const standing =
     crowd.solved < 2
       ? loggedIn
         ? 'You are the first to crack this town.'
         : 'Nobody has cracked this town yet.'
       : loggedIn && result.whispers > 1 && crowd.beat >= 50
-        ? `You beat ${crowd.beat}% of ${folk}.`
-        : `${share}% of ${folk} found the perfect whisper.`;
+        ? `You beat ${crowd.beat}% of ${crowd.solved} players.`
+        : `${share}% of ${crowd.solved} players found the perfect whisper.`;
   const aside = result.cast
     ? 'You have a place in tomorrow’s town.'
     : !loggedIn
@@ -52,7 +52,7 @@ export function showResult(
       <div class="lead">
         <div class="stamp${result.whispers === 1 ? ' gold' : ''}"><b>${result.whispers}</b>${result.whispers === 1 ? 'whisper' : 'whispers'}</div>
         <div>
-          <p class="kicker">${esc(result.title)}${result.seconds ? ` · ${clock(result.seconds)}` : ''}</p>
+          <p class="kicker"><span class="stars">${starRow(starsFor(result.whispers))}</span>${esc(result.title)}${result.seconds ? ` · ${clock(result.seconds)}` : ''}</p>
           <h1>Whole town knows: ${esc(data.rumor.charAt(0).toLowerCase() + data.rumor.slice(1))}</h1>
         </div>
       </div>
@@ -67,7 +67,7 @@ export function showResult(
           <p class="note">${aside}</p>
         </div>
         <div class="col">
-          <h3>How the town did</h3>
+          <h3>Whispers others needed</h3>
           <ol class="bars" aria-label="Whispers needed by other players">
             ${crowd.spread
               .map(
@@ -113,7 +113,7 @@ export function showResult(
     const total = vote.counts.reduce((a, b) => a + b, 0);
     const box = $('#vote');
     box.innerHTML =
-      `<h3>Tomorrow’s rumor: the town decides</h3>` +
+      `<h3>Vote: which rumor should tomorrow’s town spread?</h3>` +
       vote.choices
         .map((choice, i) => {
           const share = total ? Math.round(((vote.counts[i] ?? 0) / total) * 100) : 0;
@@ -149,7 +149,7 @@ export function showResult(
       if (!effect(() => showLoginPrompt())) toast('Open this post on Reddit to log in.');
     });
   } else {
-    primary.textContent = 'Tell the comments';
+    primary.textContent = 'Post my result to the comments';
     primary.addEventListener('click', async (event) => {
       primary.disabled = true;
       try {
@@ -173,7 +173,7 @@ export function showResult(
     const firsts = Object.keys(crowd.first).length > 0;
     card.innerHTML = `
       <div class="hint"><h2>Solved in ${plural(whispers.length, 'whisper')}</h2>
-      <p>The crown marks the perfect whisper.${firsts ? ' Numbers show where others whispered first.' : ''}</p></div>
+      <p>The crown marks the perfect whisper. Red lines show the route your rumor took.${firsts ? ' Numbers show where others whispered first.' : ''}</p></div>
       <button class="go" id="back" type="button">Front page</button>`;
     town.onSelect = () => undefined;
     card.querySelector('#back')?.addEventListener('click', () => (page.hidden = false));

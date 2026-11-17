@@ -91,6 +91,8 @@ export function villagerSvg(tile: TileView, seal: number): string {
       : '<path class="line thin calm" d="M45 45h10"/><ellipse class="gasp" cx="50" cy="46" rx="4.5" ry="5.5"/>';
   return (
     `<svg viewBox="0 0 100 100" aria-hidden="true">` +
+    // Special villagers stand on a pad in their own colour, so a kind reads at a glance.
+    (tile.kind === 'whisperer' ? '' : '<rect class="pad" x="6" y="6" width="88" height="88" rx="22"/>') +
     `<g class="fig"><g transform="translate(50 49) scale(.66) translate(-50 -50)">` +
     `<ellipse class="shade" cx="50" cy="93" rx="30" ry="5"/>` +
     `<path class="body" d="M19 94c0-30 11-45 31-45s31 15 31 45Z"/>` +
@@ -118,6 +120,29 @@ export function treeSvg(look: number): string {
     `</svg>`
   );
 }
+
+/** A small mark for each kind, echoing what that villager carries on the board. */
+export const KIND_GLYPH: Record<Kind, string> = {
+  whisperer: '<path class="g-ink" d="M8 5l10 7-10 7Z"/>',
+  gossip: '<path class="g-ink" d="M12 2l3.5 5h-7ZM12 22l-3.5-5h7ZM2 12l5-3.5v7ZM22 12l-5 3.5v-7Z"/>',
+  crier: '<path class="g-ink" d="M4 5l8 7-8 7ZM13 5l8 7-8 7Z"/>',
+  skeptic: '<circle class="g-line" cx="7.5" cy="12" r="4"/><circle class="g-line" cx="16.5" cy="12" r="4"/>',
+  shy: '<path class="g-line" d="M3 7l9 2 9-2v10l-9 2-9-2ZM12 9v10"/>',
+  penpal: '<path class="g-line" d="M3 6h18v12H3ZM3 6l9 7 9-7"/>',
+};
+
+export const kindGlyph = (kind: Kind): string =>
+  `<svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">${KIND_GLYPH[kind]}</svg>`;
+
+const STAR = 'M12 2.2l3 6.3 6.9.9-5 4.8 1.3 6.9L12 17.7l-6.2 3.4 1.3-6.9-5-4.8 6.9-.9Z';
+
+/** Three stars: all lit for a perfect whisper, one fewer for each extra whisper. */
+export const starRow = (lit: number): string =>
+  [0, 1, 2]
+    .map((i) => `<svg class="star${i < lit ? '' : ' off'}" viewBox="0 0 24 24" aria-hidden="true"><path d="${STAR}"/></svg>`)
+    .join('');
+
+export const starsFor = (whispers: number): number => (whispers <= 1 ? 3 : whispers === 2 ? 2 : 1);
 
 /** The masthead mark: a cupped hand of sound lines. */
 export const LOGO =

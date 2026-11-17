@@ -73,6 +73,12 @@ export function fizzle(): void {
   tone(247, 0.14, 0.3, 'triangle', 0.1);
 }
 
+/** A star slipping away, just after the fizzle. */
+export function starLost(): void {
+  tone(880, 0.42, 0.1, 'sine', 0.07);
+  tone(587, 0.52, 0.2, 'sine', 0.07);
+}
+
 export function bells(): void {
   [0, 4, 7, 12, 7, 12, 16].forEach((semitone, i) => {
     const freq = 392 * 2 ** (semitone / 12);
