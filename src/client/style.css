@@ -284,13 +284,16 @@ svg .pop {
   margin: 4px 0 0;
   --tile: clamp(60px, 19vw, 84px);
 }
+.crowd {
+  align-items: flex-end;
+}
 .crowd .tile {
-  margin: 0 -3px;
+  flex: none;
+  margin: 0 -4px;
 }
-.crowd .tile:nth-child(odd) {
-  transform: translateY(8px);
-}
-.crowd .ptr {
+.crowd .ptr,
+.crowd .pips,
+.crowd .mail {
   display: none;
 }
 @media (max-height: 400px) {
@@ -552,9 +555,10 @@ svg .pop {
 
 .face-img {
   position: absolute;
+  /* Sits exactly on the drawn head (centre 50% / 39%), a touch larger for legibility. */
   left: 50%;
-  top: 43%;
-  width: 54%;
+  top: 39%;
+  width: 38%;
   aspect-ratio: 1;
   translate: -50% -50%;
   border: 2px solid var(--ink);

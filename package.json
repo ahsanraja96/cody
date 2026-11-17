@@ -10,7 +10,7 @@
     "deploy": "npm run check && devvit upload",
     "launch": "npm run check && devvit publish",
     "login": "devvit login",
-    "check": "tsc --noEmit && vitest run",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json && vitest run",
     "test": "vitest run",
     "local": "tsx tools/local.ts"
   },
