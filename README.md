@@ -18,6 +18,45 @@ What makes it a Reddit game:
 - Towns grow through the week: Sunday is a sleepy 5×5, Saturday is a 6×7 uproar.
 - Devvit Journeys events are sent for ready, start, each whisper, and the finish.
 
+## How to play
+
+1. **Open today's post and press Play.** The post shows today's rumor and a small
+   demo of it passing down a row of villagers.
+2. **First time? Two tiny practice towns teach it by playing.** The first
+   shows that a rumor follows the arrows. The second shows that the puzzle is
+   choosing who hears it first. You can skip them, or replay them from the **?** button.
+3. **Tap a villager.** A yellow path shows who they would tell, and the card under
+   the town names them and explains what kind of villager they are.
+4. **Press Whisper.** The rumor runs from villager to villager along the arrows.
+   Everyone who hears it turns red, and the route it took stays drawn on the board.
+5. **Reach the whole town.** If the rumor fizzles out, the villagers who missed it
+   are outlined. Whisper again to one of them and carry on until everyone knows.
+6. **Fewer whispers is better.** One whisper is a perfect solve and earns three
+   stars. A second whisper costs a star, and three or more leaves you with one.
+   Every town has at least one perfect whisper.
+
+After the last villager hears it you get the front page of *The Daily Whisper*:
+your stars, streak and best score, how many whispers other players needed, a vote
+on tomorrow's rumor, the day's top whisperers, and a button that posts your result
+to the comments. **See the town** shows the solved board with a crown on the
+perfect whisper.
+
+### Who's who
+
+Special villagers stand on a coloured pad, and the chips under the town list every
+kind living there today. Tap a chip to see its rule and make those villagers hop.
+
+| Villager | What they do with a rumor |
+| --- | --- |
+| Whisperer | Tells the one neighbour they face. |
+| Gossip | Tells everyone standing next to them. |
+| Town Crier | Shouts down the whole row, as far as the next tree. |
+| Skeptic | Only believes it from two villagers. Your own whisper always convinces. |
+| Pen Pal | Tells the neighbour they face and writes to their pen pal across town. |
+| Bookworm | Hears it, then goes back to the book. Tells no one. |
+
+Trees are just trees, but a town crier cannot shout past one.
+
 ## Run it
 
 Needs Node 24.18+.
