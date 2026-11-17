@@ -1,7 +1,7 @@
 {
-  "name": "psst",
+  "name": "psst-daily",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.0.0",
   "type": "module",
   "license": "BSD-3-Clause",
   "scripts": {
@@ -15,16 +15,16 @@
     "local": "tsx tools/local.ts"
   },
   "dependencies": {
-    "@devvit/analytics": "^0.15.4",
-    "@devvit/web": "^0.15.4",
+    "@devvit/analytics": "0.15.4",
+    "@devvit/web": "0.15.4",
     "express": "^5.3.0"
   },
   "devDependencies": {
-    "@devvit/start": "^0.15.4",
-    "@devvit/test": "^0.15.4",
+    "@devvit/start": "0.15.4",
+    "@devvit/test": "0.15.4",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.6",
-    "devvit": "^0.15.4",
+    "devvit": "0.15.4",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",

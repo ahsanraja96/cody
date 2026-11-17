@@ -62,5 +62,8 @@
   },
   "marketingAssets": {
     "icon": "assets/icon.png"
+  },
+  "dev": {
+    "subreddit": "psst_daily_dev"
   }
 }
